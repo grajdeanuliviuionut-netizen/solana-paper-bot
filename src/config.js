@@ -6,41 +6,33 @@ module.exports = {
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
   startingSol: parseFloat(process.env.STARTING_SOL || '4'),
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '60000', 10),
-  positionSizeSol: 0.32,
+  positionSizeSol: 0.25,
   maxOpen: 5,
   dailyLossLimitSol: 0.2,
   fullStopBalance: 3,
   costRoundtripPct: 1.1,
   strategies: [
     {
-      id: 'flow-only-scalp',
-      name: 'Buy-flow only scalp',
-      universe: { minAgeDays: 0, maxAgeDays: null, minLiquidityUsd: 20000 },
+      id: 'smallcap-flow-scalp',
+      name: 'Small-cap buy-flow scalp',
+      universe: { minAgeDays: 0, maxAgeDays: null, minLiquidityUsd: 20000, maxLiquidityUsd: 800000 },
       entry: [
-        { field: 'buySellRatioH1', op: '>=', value: 1.05 },
-        { field: 'volumeToLiquidity', op: '>=', value: 0.2 }
+        { field: 'buySellRatioH1', op: '>=', value: 1.2 },
+        { field: 'volumeToLiquidity', op: '>=', value: 0.8 },
+        { field: 'm5', op: '>=', value: 0.3 }
       ],
-      exit: { takeProfitPct: 8, stopLossPct: 6, trailAfterPct: 4, trailPct: 3, maxHoldMinutes: 45 }
+      exit: { takeProfitPct: 7, stopLossPct: 4.5, trailAfterPct: 3, trailPct: 2, maxHoldMinutes: 30 }
     },
     {
       id: 'fresh-breakout-v2',
       name: 'Fresh breakout v2',
       universe: { minAgeDays: 0, maxAgeDays: 7, minLiquidityUsd: 25000 },
       entry: [
-        { field: 'h1', op: '>=', value: 2 },
-        { field: 'buySellRatioH1', op: '>=', value: 1.1 }
+        { field: 'h1', op: '>=', value: 4 },
+        { field: 'm5', op: '>=', value: 1 },
+        { field: 'buySellRatioH1', op: '>=', value: 1.2 }
       ],
-      exit: { takeProfitPct: 20, stopLossPct: 10, maxHoldMinutes: 120 }
-    },
-    {
-      id: 'flush-reclaim-v2',
-      name: 'Flush reclaim v2',
-      universe: { minAgeDays: 0, maxAgeDays: 30, minLiquidityUsd: 30000 },
-      entry: [
-        { field: 'dropFromHigh60m', op: '>=', value: 8 },
-        { field: 'm5', op: '>=', value: 0 }
-      ],
-      exit: { takeProfitPct: 10, stopLossPct: 8, maxHoldMinutes: 60 }
+      exit: { takeProfitPct: 18, stopLossPct: 9, maxHoldMinutes: 90 }
     }
   ]
 };
