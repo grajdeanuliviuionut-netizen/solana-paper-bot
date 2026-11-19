@@ -6,7 +6,13 @@ const { generateSignals } = require('./buyAgent');
 const { shouldExit, computePnl } = require('./sellAgent');
 
 let state = loadState();
+if (!state.activity) state.activity = [];
 const app = express();
+
+function addActivity(msg) {
+  state.activity.unshift({ time: new Date().toISOString(), msg });
+  if (state.activity.length > 50) state.activity.pop();
+}
 
 function canOpen() {
   if (state.balance < config.fullStopBalance) return false;
@@ -40,6 +46,7 @@ async function tick() {
         state.trades.unshift(trade);
         if (state.trades.length > 100) state.trades.pop();
         logTrade(trade);
+        addActivity(`EXIT ${pos.symbol} (${pos.strategyName}) ${exit.reason} pnl=${pnl.toFixed(4)} SOL`);
         console.log(`EXIT ${pos.symbol} ${exit.reason} pnl=${pnl.toFixed(4)}`);
       } else {
         stillOpen.push(pos);
@@ -68,11 +75,13 @@ async function tick() {
         };
         state.openPositions.push(pos);
         state.balance -= config.positionSizeSol;
+        addActivity(`ENTRY ${sig.symbol} (${sig.strategyName}) @ ${sig.price}`);
         console.log(`ENTRY ${sig.symbol} ${sig.strategyName} @ ${sig.price}`);
       }
     }
   } catch (e) {
     console.error('Tick error', e.message);
+    addActivity(`Tick error: ${e.message}`);
   }
   saveState(state);
 }
@@ -97,6 +106,9 @@ app.get('/', (req, res) => {
       <td>${new Date(t.closedAt).toLocaleTimeString()}</td>
     </tr>`).join('');
 
+  const activityHtml = (state.activity || []).slice(0, 30).map(a => `
+    <div class="log-line">${new Date(a.time).toLocaleTimeString()} — ${a.msg}</div>`).join('');
+
   res.send(`
     <!DOCTYPE html>
     <html>
@@ -112,6 +124,8 @@ app.get('/', (req, res) => {
         .win { color: #4ade80; }
         .loss { color: #f87171; }
         .balance { font-size: 2em; color: #38bdf8; }
+        .log { background: #1e293b; padding: 12px; border-radius: 8px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.9em; }
+        .log-line { margin: 4px 0; border-bottom: 1px solid #334155; padding-bottom: 4px; }
       </style>
     </head>
     <body>
@@ -128,6 +142,10 @@ app.get('/', (req, res) => {
         <tr><th>Symbol</th><th>Strategy</th><th>Exit</th><th>PnL (SOL)</th><th>Time</th></tr>
         ${closed || '<tr><td colspan="5">None yet</td></tr>'}
       </table>
+      <h2>Activity Log</h2>
+      <div class="log">
+        ${activityHtml || '<div>No activity yet</div>'}
+      </div>
       <p style="color:#64748b">Auto-refreshes every 30s. Paper only.</p>
     </body>
     </html>
