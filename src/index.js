@@ -56,8 +56,11 @@ async function tick() {
 
     // entries
     if (canOpen()) {
-      const signals = generateSignals(pairs);
-      for (const sig of signals.slice(0, 3)) {
+      const { signals, rejections } = generateSignals(pairs);
+      if (rejections.length) {
+        addActivity(`Scanned ${pairs.length} pairs — top rejections: ${rejections.slice(0, 3).join(' | ')}`);
+      }
+      for (const sig of signals.slice(0, 4)) {
         if (!canOpen()) break;
         const already = state.openPositions.some(p => p.pairAddress === sig.pairAddress && p.strategyId === sig.strategyId);
         if (already) continue;
