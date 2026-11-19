@@ -2,34 +2,38 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 
-function ensureDir(filePath) {
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-}
-
 function loadState() {
   try {
     if (fs.existsSync(config.stateFile)) {
-      return JSON.parse(fs.readFileSync(config.stateFile, 'utf8'));
+      const raw = fs.readFileSync(config.stateFile, 'utf8');
+      const state = JSON.parse(raw);
+      if (!state.activity) state.activity = [];
+      if (!state.trades) state.trades = [];
+      if (!state.openPositions) state.openPositions = [];
+      return state;
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error('State load failed, starting fresh', e.message);
+  }
   return {
     balance: config.startingSol,
     openPositions: [],
     trades: [],
-    startedAt: new Date().toISOString(),
+    activity: [],
     lastUpdate: new Date().toISOString()
   };
 }
 
 function saveState(state) {
-  ensureDir(config.stateFile);
   state.lastUpdate = new Date().toISOString();
+  const dir = path.dirname(config.stateFile);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(config.stateFile, JSON.stringify(state, null, 2));
 }
 
 function logTrade(trade) {
-  ensureDir(config.tradesFile);
+  const dir = path.dirname(config.tradesFile);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
   fs.appendFileSync(config.tradesFile, JSON.stringify(trade) + '\n');
 }
 
