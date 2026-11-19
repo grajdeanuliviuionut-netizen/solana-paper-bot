@@ -5,8 +5,16 @@ const { getCandidatePairs } = require('./dataFetcher');
 const { generateSignals } = require('./buyAgent');
 const { shouldExit, computePnl } = require('./sellAgent');
 
-let state = loadState();
-if (!state.activity) state.activity = [];
+// Force fresh state on this restart
+let state = {
+  balance: config.startingSol,
+  openPositions: [],
+  trades: [],
+  activity: [],
+  lastUpdate: new Date().toISOString()
+};
+saveState(state);
+
 const app = express();
 
 function addActivity(msg) {
@@ -23,6 +31,7 @@ function canOpen() {
 async function tick() {
   try {
     const pairs = await getCandidatePairs();
+    addActivity(`Scanned ${pairs.length} pairs`);
     const byAddr = {};
     pairs.forEach(p => byAddr[p.pairAddress] = p);
 
@@ -47,7 +56,6 @@ async function tick() {
         if (state.trades.length > 100) state.trades.pop();
         logTrade(trade);
         addActivity(`EXIT ${pos.symbol} (${pos.strategyName}) ${exit.reason} pnl=${pnl.toFixed(4)} SOL`);
-        console.log(`EXIT ${pos.symbol} ${exit.reason} pnl=${pnl.toFixed(4)}`);
       } else {
         stillOpen.push(pos);
       }
@@ -58,9 +66,9 @@ async function tick() {
     if (canOpen()) {
       const { signals, rejections } = generateSignals(pairs);
       if (rejections.length) {
-        addActivity(`Scanned ${pairs.length} pairs — top rejections: ${rejections.slice(0, 3).join(' | ')}`);
+        addActivity(`Rejections: ${rejections.slice(0, 2).join(' | ')}`);
       }
-      for (const sig of signals.slice(0, 4)) {
+      for (const sig of signals.slice(0, 5)) {
         if (!canOpen()) break;
         const already = state.openPositions.some(p => p.pairAddress === sig.pairAddress && p.strategyId === sig.strategyId);
         if (already) continue;
@@ -79,17 +87,14 @@ async function tick() {
         state.openPositions.push(pos);
         state.balance -= config.positionSizeSol;
         addActivity(`ENTRY ${sig.symbol} (${sig.strategyName}) @ ${sig.price}`);
-        console.log(`ENTRY ${sig.symbol} ${sig.strategyName} @ ${sig.price}`);
       }
     }
   } catch (e) {
-    console.error('Tick error', e.message);
     addActivity(`Tick error: ${e.message}`);
   }
   saveState(state);
 }
 
-// Dashboard
 app.get('/', (req, res) => {
   const open = state.openPositions.map(p => `
     <tr>
