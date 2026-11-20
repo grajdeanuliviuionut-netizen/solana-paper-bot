@@ -1,4 +1,5 @@
 const config = require('./config');
+const fillModel = require('./fillModel');
 
 // Decide what to do with an open position.
 // q = fresh normalized quote of the pinned pair (or null), price = price to use.
@@ -13,6 +14,8 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
   const changePct = ((price - pos.entryPrice) / pos.entryPrice) * 100;
   const remaining = pos.remainingFrac == null ? 1 : pos.remainingFrac;
   const close = reason => ({ action: 'close', reason, sellFrac: remaining, fillPrice: price });
+  // When exits are judged on sell quotes, trails use the high-water mark of the judged price.
+  const hi = pos.judgedHigh != null ? pos.judgedHigh : pos.highest;
 
   if (pos.strategyType === 'ncs') {
     if (priceFresh) {
@@ -25,7 +28,7 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
       if (!pos.tp1Done && changePct <= -ex.stopLossPct) return close('sl');
       if (pos.tp1Done) {
         if (ex.breakevenAfterTp1 && price <= pos.entryPrice) return close('breakeven');
-        if (ex.trailAfterTp1Pct && price <= (pos.highest || price) * (1 - ex.trailAfterTp1Pct / 100)) return close('trail');
+        if (ex.trailAfterTp1Pct && price <= (hi || price) * (1 - ex.trailAfterTp1Pct / 100)) return close('trail');
       }
       const tps = ex.takeProfits || [];
       const last = tps[tps.length - 1];
@@ -44,8 +47,8 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
     if (changePct >= ex.takeProfitPct) return close('tp');
     if (changePct <= -ex.stopLossPct) return close('sl');
     if (ex.trailAfterPct) {
-      const peakPct = (((pos.highest || pos.entryPrice) - pos.entryPrice) / pos.entryPrice) * 100;
-      if (peakPct >= ex.trailAfterPct && price <= (pos.highest || pos.entryPrice) * (1 - (ex.trailPct || 5) / 100)) return close('trail');
+      const peakPct = (((hi || pos.entryPrice) - pos.entryPrice) / pos.entryPrice) * 100;
+      if (peakPct >= ex.trailAfterPct && price <= (hi || pos.entryPrice) * (1 - (ex.trailPct || 5) / 100)) return close('trail');
     }
   }
   if (minsOpen >= (ex.maxHoldMinutes || config.defaultMaxHoldMinutes)) {
@@ -60,6 +63,31 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
   return null;
 }
 
+// Exit judging on what we would actually get. quote = Jupiter sell quote for the position's
+// remaining tokens (sane, or null); otherwise falls back to the depth model (mid minus modeled
+// impact/slippage/fee). Net of the exit tx cost and the remaining share of the entry tx cost.
+// Returns { price, netPct, netSol, execPrice, source }: `price` is the mid-equivalent to feed decide()
+// (entryPrice * (1 + netPct/100)), so every %-trigger (TP/SL/trail/breakeven/time) compares NET PnL.
+function judgeExit(pos, { quote, midPrice, liquidityUsd, solUsd }) {
+  const frac = pos.remainingFrac == null ? 1 : pos.remainingFrac;
+  const basis = pos.sizeSol * frac;
+  let execPrice, source;
+  if (quote && quote.ok && quote.quotedPriceUsd > 0) {
+    execPrice = quote.quotedPriceUsd; source = 'jupiter';
+  } else {
+    if (!(midPrice > 0)) return null;
+    const valueUsd = basis * solUsd * (midPrice / pos.entryFillPrice);
+    execPrice = fillModel.fillExit({ midPrice, valueUsd, liquidityUsd: liquidityUsd || pos.entryLiquidityUsd || 0, reason: 'judge', rng: () => 1 }).price;
+    source = 'model';
+  }
+  const netSol = basis * (execPrice / pos.entryFillPrice - 1) - fillModel.txCostSol(1, 0) - (pos.entryTxCostSol || 0) * frac;
+  const netPct = (netSol / basis) * 100;
+  return { price: pos.entryPrice * (1 + netPct / 100), netPct, netSol, execPrice, source };
+}
+
+const PROFIT_REASONS = new Set(['tp', 'tp1', 'tp2']);
+function isProfitReason(reason) { return PROFIT_REASONS.has(reason); }
+
 // Back-compat wrapper used by PR1 tests.
 function shouldExit(pos, currentPrice, priceFresh = true) {
   const d = decide(pos, currentPrice, priceFresh);
@@ -72,4 +100,4 @@ function legPnlSol(pos, exitFill, sellFrac) {
   return pos.sizeSol * sellFrac * (exitFill / pos.entryFillPrice - 1);
 }
 
-module.exports = { decide, shouldExit, legPnlSol };
+module.exports = { decide, shouldExit, legPnlSol, judgeExit, isProfitReason };

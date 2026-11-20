@@ -4,7 +4,7 @@ const config = require('./config');
 const { loadState, saveState, logTrade, readTrades } = require('./logger');
 const { getCandidatePairs, getPairsByAddress } = require('./dataFetcher');
 const { generateSignals } = require('./buyAgent');
-const { decide, legPnlSol } = require('./sellAgent');
+const { decide, legPnlSol, judgeExit, isProfitReason } = require('./sellAgent');
 const fillModel = require('./fillModel');
 const { fillGapPct } = fillModel;
 const { equityOf, slotStatus, orderCandidates, formatSkips } = require('./slots');
@@ -83,15 +83,21 @@ function canOpenGlobal() {
   return true;
 }
 
+// Returns the booked leg, or null when a take-profit would book a loss (the exit is cancelled and
+// re-judged on the next loop).
 async function sellLeg(pos, d, q, solUsd) {
   const liq = (q && q.liquidityUsd) || pos.entryLiquidityUsd || 0;
   const valueUsd = pos.sizeSol * d.sellFrac * solUsd * (d.fillPrice / pos.entryFillPrice);
   const fill = fillModel.fillExit({ midPrice: d.fillPrice, valueUsd, liquidityUsd: liq, reason: d.reason, m5Pct: q ? q.priceChange.m5 : 0 });
   const tokens = (pos.tokens || 0) * d.sellFrac; // pos.tokens = tokens bought for the full original size
+  const trigger = d.judge && d.judge.source === 'jupiter' ? d.judge : null;
   let sq = null;
-  try {
-    sq = await jup.shadowSellQuote({ mint: pos.mint, decimals: pos.decimals, tokens, solUsd });
-  } catch (e) { sq = { ok: false, error: e.message }; }
+  if (trigger) sq = trigger.quote; // the sell quote that triggered the exit (remaining size; no extra call)
+  else {
+    try {
+      sq = await jup.shadowSellQuote({ mint: pos.mint, decimals: pos.decimals, tokens, solUsd });
+    } catch (e) { sq = { ok: false, error: e.message }; }
+  }
   const shadow = shadowSummary(sq, fill.price);
   if (sq && !sq.ok) {
     pos.exitQuoteFailures = (pos.exitQuoteFailures || 0) + 1;
@@ -101,7 +107,11 @@ async function sellLeg(pos, d, q, solUsd) {
   // (quote also gets the stop/failed-exit delay drift).
   // An insane quote (absurd impact/gap, see src/quoteSanity.js) is ignored: model price is used and logged.
   let fillPrice = fill.price, fillSource = 'depth', exitSanity = null;
-  if (sq && sq.ok && sq.quotedPriceUsd > 0) {
+  if (trigger) {
+    // Exit judged on the Jupiter sell quote: book that quote (stops/failed exits still get delay drift).
+    fillPrice = trigger.execPrice * (1 - (fill.driftPct || 0) / 100);
+    fillSource = 'jupiter-trigger';
+  } else if (sq && sq.ok && sq.quotedPriceUsd > 0) {
     const quotedAdj = sq.quotedPriceUsd * (1 - (fill.driftPct || 0) / 100);
     exitSanity = quoteSanity.checkExit({ sell: sq, quotedAdj, modelPrice: fill.price });
     if (exitSanity.insane) {
@@ -111,11 +121,17 @@ async function sellLeg(pos, d, q, solUsd) {
   }
   const gapPct = sq && sq.ok ? fillGapPct('sell', sq.quotedPriceUsd * (1 - (fill.driftPct || 0) / 100), fill.price) : null;
   const pnl = legPnlSol(pos, fillPrice, d.sellFrac);
+  // A take-profit never books a loss: if the leg is negative after costs, cancel and re-judge next loop.
+  if (isProfitReason(d.reason) && pnl - fill.txCostSol - (pos.entryTxCostSol || 0) * d.sellFrac < 0) {
+    rej.event('tp-cancelled', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, reason: d.reason, fillPrice, fillSource, judgedNetPct: d.judge ? +d.judge.netPct.toFixed(2) : null, legPnlSol: +pnl.toFixed(5) });
+    return null;
+  }
   const leg = {
     time: new Date().toISOString(), reason: d.reason, sellFrac: d.sellFrac, tokens,
     midPrice: d.fillPrice, fillPrice, fillSource, modelPrice: fill.price, impactPct: fill.impactPct, slippagePct: fill.slippagePct,
     feePct: fill.feePct, driftPct: fill.driftPct, stop: fill.stop, failedFirst: fill.failedFirst,
-    txCostSol: fill.txCostSol, pnlSol: pnl, fillGapPct: gapPct, quoteSanity: exitSanity && exitSanity.insane ? exitSanity.reasons : undefined, shadow
+    txCostSol: fill.txCostSol, pnlSol: pnl, fillGapPct: gapPct,
+    judgedOn: d.judge ? d.judge.source : 'mid', judgedNetPct: d.judge ? +d.judge.netPct.toFixed(3) : null, quoteSanity: exitSanity && exitSanity.insane ? exitSanity.reasons : undefined, shadow
   };
   if (fill.failedFirst) rej.event('exit-failed-retried', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, reason: d.reason, driftPct: fill.driftPct });
   pos.legs = pos.legs || [];
@@ -199,6 +215,44 @@ function finalizeTrade(pos, finalReason, fresh) {
   return trade;
 }
 
+// ---- Exit judging on Jupiter sell quotes (strategy exit.judgeOn = 'sell-quote').
+const exitQuoteCache = new Map(); // position id -> { at, sq, remainingFrac }
+const judgeFallbackLogged = new Map(); // position id -> ts of last fallback log
+function judgesOnQuote(pos) {
+  const strat = strategyById(pos.strategyId);
+  return ((strat && strat.exit && strat.exit.judgeOn) || (pos.exit && pos.exit.judgeOn)) === 'sell-quote';
+}
+async function judgeOnQuote(pos, q, mid, solUsd, budget) {
+  const now = Date.now();
+  const frac = pos.remainingFrac == null ? 1 : pos.remainingFrac;
+  let c = exitQuoteCache.get(pos.id);
+  if (c && c.remainingFrac !== frac) c = null; // size changed (partial TP): re-quote
+  const stale = !c || now - c.at >= config.exitQuotes.ttlMs;
+  if (stale && budget.allowed.has(pos.id) && pos.tokens > 0 && Number.isInteger(pos.decimals)) {
+    budget.allowed.delete(pos.id);
+    let sq;
+    try { sq = await jup.shadowSellQuote({ mint: pos.mint, decimals: pos.decimals, tokens: pos.tokens * frac, solUsd }); } catch (e) { sq = { ok: false, error: e.message }; }
+    c = { at: now, sq, remainingFrac: frac };
+    exitQuoteCache.set(pos.id, c);
+  }
+  let quote = c && now - c.at <= config.exitQuotes.maxAgeMs ? c.sq : null;
+  let why = !c ? 'no-quote-yet' : !quote ? 'quote-too-old' : !quote.ok ? (quote.noRoute ? 'no-route' : `quote-failed ${quote.error || ''}`.trim()) : null;
+  if (quote && quote.ok) {
+    // Same sanity bounds as the fill path: an absurd quote is not used for judging either.
+    const liq = (q && q.liquidityUsd) || pos.entryLiquidityUsd || 0;
+    const model = fillModel.fillExit({ midPrice: mid, valueUsd: pos.sizeSol * frac * solUsd * (mid / pos.entryFillPrice), liquidityUsd: liq, reason: 'judge', rng: () => 1 }).price;
+    const chk = quoteSanity.checkExit({ sell: quote, quotedAdj: quote.quotedPriceUsd, modelPrice: model });
+    if (chk.insane) { why = `quote-insane ${chk.reasons.join(',')}`; quote = null; }
+  } else quote = null;
+  const judge = judgeExit(pos, { quote, midPrice: mid, liquidityUsd: q ? q.liquidityUsd : null, solUsd });
+  if (judge) judge.quote = quote;
+  if (judge && judge.source === 'model' && now - (judgeFallbackLogged.get(pos.id) || 0) > 5 * 60000) {
+    judgeFallbackLogged.set(pos.id, now);
+    rej.event('exit-judge-fallback', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, why, mid, modelExecPrice: judge.execPrice, netPct: +judge.netPct.toFixed(2) });
+  }
+  return judge;
+}
+
 async function processExits(solUsd) {
   const sh = shadow.ensure(state);
   if (!state.openPositions.length && !sh.open.length) return 0;
@@ -210,6 +264,11 @@ async function processExits(solUsd) {
     console.error('[exit] quote fetch failed', e.message);
   }
   try { shadow.processExits(state, quotes, solUsd); } catch (e) { console.error('[shadow] exit error', e.message); }
+  // Jupiter sell quotes for exit judging: at most maxPerLoop calls, stalest positions first.
+  const quoteAt = id => (exitQuoteCache.get(id) || {}).at || 0;
+  const quoteBudget = { allowed: new Set(state.openPositions.filter(judgesOnQuote)
+    .filter(p => Date.now() - quoteAt(p.id) >= config.exitQuotes.ttlMs)
+    .sort((a, b) => quoteAt(a.id) - quoteAt(b.id)).slice(0, config.exitQuotes.maxPerLoop).map(p => p.id)) };
   let exits = 0;
   const stillOpen = [];
   for (const pos of state.openPositions) {
@@ -235,19 +294,31 @@ async function processExits(solUsd) {
         pos.pairQuoteFailures = (pos.pairQuoteFailures || 0) + 1;
         rej.event('exit-quote-failed', { source: 'dexscreener-pair', mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, failures: pos.pairQuoteFailures });
       }
-      const price = fresh ? q.priceUsd : (pos.lastPrice || pos.entryPrice);
-      let d = decide(pos, price, fresh, fresh ? q : null);
+      const mid = fresh ? q.priceUsd : (pos.lastPrice || pos.entryPrice);
+      let price = mid, judgeFresh = fresh, judge = null;
+      if (judgesOnQuote(pos)) {
+        judge = await judgeOnQuote(pos, fresh ? q : null, mid, solUsd, quoteBudget);
+        if (judge) {
+          price = judge.price;
+          judgeFresh = fresh || judge.source === 'jupiter';
+          if (judgeFresh) pos.judgedHigh = Math.max(pos.judgedHigh || 0, price);
+          pos.lastJudge = { at: new Date().toISOString(), source: judge.source, netPct: +judge.netPct.toFixed(3), execPrice: judge.execPrice, mid };
+        }
+      }
+      let d = decide(pos, price, judgeFresh, fresh ? q : null);
+      if (d) { d.judge = judge; d.judgedPrice = d.fillPrice; d.fillPrice = mid; }
 
       // NCS emergency: RugCheck flips (authority re-enabled / danger). Cached 5 min.
       if (!d && pos.strategyType === 'ncs' && fresh) {
         const strat = strategyById(pos.strategyId);
         const rc = await rugGate.checkToken({ mint: pos.mint, symbol: pos.symbol, pairAddress: pos.pairAddress, dexLiquidityUsd: q.liquidityUsd, extra: strat && strat.extraRug });
         if (rc.reasons.some(r => /mint-authority|freeze-authority|rugcheck-danger|rugged/.test(r))) {
-          d = { action: 'close', reason: 'emergency-rug', sellFrac: pos.remainingFrac == null ? 1 : pos.remainingFrac, fillPrice: price };
+          d = { action: 'close', reason: 'emergency-rug', sellFrac: pos.remainingFrac == null ? 1 : pos.remainingFrac, fillPrice: mid };
         }
       }
       if (!d) { stillOpen.push(pos); continue; }
-      await sellLeg(pos, d, fresh ? q : null, solUsd);
+      const leg = await sellLeg(pos, d, fresh ? q : null, solUsd);
+      if (!leg) { stillOpen.push(pos); continue; }
       if (d.action === 'partial') {
         pos.tp1Done = true;
         addActivity(`PARTIAL ${pos.symbol} (${pos.strategyId}) ${d.reason} ${Math.round(d.sellFrac * 100)}%`);
@@ -265,6 +336,7 @@ async function processExits(solUsd) {
     }
   }
   state.openPositions = stillOpen;
+  for (const id of exitQuoteCache.keys()) if (!stillOpen.some(p => p.id === id)) { exitQuoteCache.delete(id); judgeFallbackLogged.delete(id); }
   return exits;
 }
 
@@ -277,7 +349,8 @@ function noteSkip(rec, opts) {
 
 // Model fill + Jupiter buy quote + reverse (token -> SOL) quote at the expected size, then the
 // quote-sanity rules. Worse-of only ever sees a quote that passed sanity.
-async function quoteAndCheck({ sig, q, rug, sizeSol, solUsd }) {
+async function quoteAndCheck({ sig, q, rug, sizeSol, solUsd, strat }) {
+  const qsCfg = config.quoteSanityFor(strat || sig.strategy);
   const decimals = rug.facts.decimals;
   const jupTok = denylist.cachedToken(sig.mint);
   const fill = fillModel.fillEntry({ midPrice: q.priceUsd, sizeSol, solUsd, liquidityUsd: q.liquidityUsd });
@@ -285,16 +358,16 @@ async function quoteAndCheck({ sig, q, rug, sizeSol, solUsd }) {
   try {
     sq = await jup.shadowBuyQuote({ mint: sig.mint, decimals, sizeSol, solUsd });
   } catch (e) { sq = { ok: false, error: e.message }; }
-  if (sq && sq.ok && config.quoteSanity.requireReverseRoute) {
+  if (sq && sq.ok && (qsCfg.requireReverseRoute || qsCfg.maxRoundTripLossPct != null)) {
     try {
       rev = await jup.sellRawQuote({ mint: sig.mint, raw: sq.rawOut, decimals, solUsd });
     } catch (e) { rev = { ok: false, error: e.message }; }
   }
-  const sanity = quoteSanity.checkEntry({ buy: sq, reverse: rev, modelPrice: fill.price, decimals, jupDecimals: jupTok ? jupTok.decimals : null });
+  const sanity = quoteSanity.checkEntry({ buy: sq, reverse: rev, modelPrice: fill.price, decimals, jupDecimals: jupTok ? jupTok.decimals : null, sizeSol }, qsCfg);
   const entryShadow = shadowSummary(sq, fill.price);
   if (entryShadow) {
     entryShadow.reverse = rev ? { ok: !!rev.ok, noRoute: !!rev.noRoute, error: rev.error || null, priceImpactPct: rev.priceImpactPct != null ? rev.priceImpactPct : null, quotedPriceUsd: rev.quotedPriceUsd || null } : null;
-    entryShadow.sanity = { pass: sanity.pass, reasons: sanity.reasons };
+    entryShadow.sanity = { pass: sanity.pass, reasons: sanity.reasons, maxQuoteGapPct: qsCfg.maxQuoteGapPct, roundTripLossPct: sanity.roundTripLossPct != null ? +sanity.roundTripLossPct.toFixed(3) : null };
   }
   const entryFillGapPct = sq && sq.ok ? fillGapPct('buy', sq.quotedPriceUsd, fill.price) : null;
   let entryFill = fill.price, entryFillSource = 'depth';
@@ -319,13 +392,13 @@ function sizeFor(strat, sig, q, solUsd) {
 
 function quoteSanitySkip(strat, sig, q, qc) {
   const rec = {
-    strategyId: strat.id, reason: quoteSanity.REASON, detail: qc.sanity.reasons.join('; '), mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol,
+    strategyId: strat.id, reason: quoteSanity.reasonLabel(qc.sanity.reasons), detail: qc.sanity.reasons.join('; '), mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol,
     midPriceUsd: q.priceUsd, modelPriceUsd: qc.fill.price, quotedPriceUsd: qc.sq && qc.sq.quotedPriceUsd || null,
     priceImpactPct: qc.sq && qc.sq.priceImpactPct != null ? qc.sq.priceImpactPct : null, gapPct: qc.sanity.gapPct,
-    reverseOk: qc.rev ? !!qc.rev.ok : null, shadow: shadow.isShadow(strat) || undefined
+    reverseOk: qc.rev ? !!qc.rev.ok : null, roundTripLossPct: qc.sanity.roundTripLossPct, shadow: shadow.isShadow(strat) || undefined
   };
   noteSkip(rec);
-  console.log(`[quoteSanity] REJECT ${sig.symbol} ${sig.mint} pair=${sig.pairAddress} (${strat.id}${rec.shadow ? ' shadow' : ''}) ${rec.detail} mid=${q.priceUsd} model=${qc.fill.price.toPrecision(6)} jup=${rec.quotedPriceUsd ? Number(rec.quotedPriceUsd).toPrecision(6) : 'n/a'}`);
+  console.log(`[${rec.reason}] REJECT ${sig.symbol} ${sig.mint} pair=${sig.pairAddress} (${strat.id}${rec.shadow ? ' shadow' : ''}) ${rec.detail} mid=${q.priceUsd} model=${qc.fill.price.toPrecision(6)} jup=${rec.quotedPriceUsd ? Number(rec.quotedPriceUsd).toPrecision(6) : 'n/a'}`);
   return rec;
 }
 
@@ -352,7 +425,7 @@ async function processShadowEntries(signals, quotes, solUsd, budget) {
     }
     const sizeSol = sizeFor(strat, sig, q, solUsd);
     if (!sizeSol) continue;
-    const qc = await quoteAndCheck({ sig, q, rug, sizeSol, solUsd });
+    const qc = await quoteAndCheck({ sig, q, rug, sizeSol, solUsd, strat });
     if (!qc.sanity.pass) {
       const rec = quoteSanitySkip(strat, sig, q, qc);
       shadow.reject(state, rec);
@@ -446,7 +519,7 @@ async function processEntries(signals, solUsd) {
     }
     const sizeSol = sizeFor(strat, sig, q, solUsd);
     if (!sizeSol) { rej.count(strat.id, 'exposure-cap'); continue; }
-    const qc = await quoteAndCheck({ sig, q, rug, sizeSol, solUsd });
+    const qc = await quoteAndCheck({ sig, q, rug, sizeSol, solUsd, strat });
     const { fill, sq, entryShadow, entryFillGapPct, entryFill, entryFillSource } = qc;
     if (sq && !sq.ok) rej.event('entry-quote-failed', { source: 'jupiter', mint: sig.mint, strategyId: strat.id, noRoute: !!sq.noRoute, error: sq.error });
     // Hard reject: absurd/unroutable quote (see src/quoteSanity.js).
@@ -567,6 +640,28 @@ async function exitTick() {
   }
 }
 
+const NCS_STOP_RE = /^(sl|emergency)/;
+function expectancyOf(list, strategyId) {
+  const n = list.length;
+  if (!n) return { trades: 0 };
+  const isNcs = (strategyById(strategyId) || {}).type === 'ncs';
+  const actualSol = list.reduce((a, t) => a + (t.pnlSol || 0), 0) / n;
+  const actualPct = list.reduce((a, t) => a + (t.pnlPct || 0), 0) / n;
+  const out = { trades: n, winRate: +(list.filter(t => t.pnlSol > 0).length / n).toFixed(3), actualSolPerTrade: +actualSol.toFixed(5), actualPctPerTrade: +actualPct.toFixed(2) };
+  if (isNcs) {
+    const stops = list.filter(t => NCS_STOP_RE.test(t.exitReason || ''));
+    const rp = t => (NCS_STOP_RE.test(t.exitReason || '') ? config.ncsRealisticStopPct : (t.pnlPct || 0));
+    const rs = t => (NCS_STOP_RE.test(t.exitReason || '') ? (t.sizeSol || 0) * config.ncsRealisticStopPct / 100 : (t.pnlSol || 0));
+    Object.assign(out, {
+      stopAssumedPct: config.ncsRealisticStopPct, stops: stops.length,
+      actualAvgStopPct: stops.length ? +(stops.reduce((a, t) => a + (t.pnlPct || 0), 0) / stops.length).toFixed(2) : null,
+      realisticSolPerTrade: +(list.reduce((a, t) => a + rs(t), 0) / n).toFixed(5),
+      realisticPctPerTrade: +(list.reduce((a, t) => a + rp(t), 0) / n).toFixed(2)
+    });
+  }
+  return out;
+}
+
 function summarize(trades) {
   const byStrategy = {};
   for (const s of config.strategies) {
@@ -580,6 +675,12 @@ function summarize(trades) {
     if (t.pnlSol > 0) s.wins++;
     s.pnlSol += t.pnlSol;
     s.best = s.best == null ? t.pnlSol : Math.max(s.best, t.pnlSol);
+  }
+  // Expectancy per trade: actual, and "realistic" where NCS stop-outs are re-priced at
+  // config.ncsRealisticStopPct (-25%: observed stop fills gap well past the -12% stop).
+  const mine = (id, sameHash) => trades.filter(t => t.strategyId === id && (!sameHash || t.configHash === config.strategyHashes[id]));
+  for (const [id, s] of Object.entries(byStrategy)) {
+    s.expectancy = { currentHash: expectancyOf(mine(id, true), id), session: expectancyOf(mine(id, false), id) };
   }
   for (const s of Object.values(byStrategy)) {
     s.winRate = s.trades ? s.wins / s.trades : 0;
@@ -649,8 +750,8 @@ app.get('/api/rejections', (req, res) => {
   res.json({ build: config.buildId, ...rej.snapshot(),
     slotFullSkips: rej.skips.filter(k => k.reason === 'slot-full skip').slice(0, limit),
     tokenizedEquity: rej.skips.filter(k => k.reason === denylist.REASON).slice(0, limit),
-    quoteSanity: rej.skips.filter(k => k.reason === quoteSanity.REASON).slice(0, limit),
-    quoteSanityLimits: config.quoteSanity,
+    quoteSanity: rej.skips.filter(k => String(k.reason).startsWith(quoteSanity.REASON)).slice(0, limit),
+    quoteSanityLimits: Object.assign({}, config.quoteSanity, { perStrategy: Object.fromEntries(config.strategies.map(st => [st.id, config.quoteSanityFor(st)])) }),
     nearMisses: rej.nearMisses.slice(0, parseInt(req.query.limit || '100', 10)) });
 });
 

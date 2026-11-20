@@ -71,8 +71,9 @@ const strategies = [
       { field: 'volumeToLiquidity', op: '>=', value: 0.03 },
       { field: 'm5', op: '>=', value: -2 }
     ],
-    exit: { takeProfitPct: 6, stopLossPct: 5, trailAfterPct: 3, trailPct: 2, maxHoldMinutes: 25 },
-    sizeSol: 0.2,
+    exit: { takeProfitPct: 6, stopLossPct: 5, trailAfterPct: 3, trailPct: 2, maxHoldMinutes: 25, judgeOn: 'sell-quote' },
+    quoteSanity: { maxQuoteGapPct: 5 }, // same tight gap cap as momentum-entry (+ global 3% round-trip gate)
+    sizeSol: 0.1, // re-enabled 2026-11-20 12:29 at half size (was 0.2)
     maxOpen: 6
   },
   {
@@ -86,7 +87,9 @@ const strategies = [
     ],
     // Time stop at maxHoldMinutes exits only when the position is under water (mid PnL < 0%);
     // otherwise a timeTrailPct trailing stop arms at max hold (high-water mark from that moment).
-    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40, timeStopOnlyIfLoss: true, timeTrailPct: 5 },
+    // judgeOn 'sell-quote': TP/SL/trail/time triggers use the Jupiter sell quote at position size, net of tx costs.
+    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40, timeStopOnlyIfLoss: true, timeTrailPct: 5, judgeOn: 'sell-quote' },
+    quoteSanity: { maxQuoteGapPct: 5 }, // entry |Jupiter vs model| cap for this strategy (global default 15)
     sizeSol: 0.2,
     maxOpen: 6
   },
@@ -126,8 +129,11 @@ const strategies = [
       trailAfterTp1Pct: 15, breakevenAfterTp1: true,
       timeStop: { ifNotAbovePct: 5, afterMin: 15 },
       maxHoldMinutes: 30,
-      emergency: { liqDropFromEntryPct: 30, zeroSellsMinBuysM5: 10 }
+      emergency: { liqDropFromEntryPct: 30, zeroSellsMinBuysM5: 10 },
+      judgeOn: 'sell-quote' // SL/TP1/TP2/trail/breakeven/time judged on the Jupiter sell quote, net of tx costs
     },
+    quoteSanity: { maxQuoteGapPct: 8 },
+    // Tier A = base size (2% of equity), tier B = half of that (universe.tiers.*.sizeMult).
     sizing: { basePctOfEquity: 2.0, maxPctOfPoolLiquidity: 1.0, maxTotalExposurePct: 10 },
     maxOpen: 5,
     reentryCooldownMinutes: 30,
@@ -143,7 +149,21 @@ const quoteSanity = {
   requireReverseRoute: process.env.QUOTE_REQUIRE_REVERSE !== '0', // entry: token->SOL quote must route
   maxExitPriceImpactPct: num('MAX_EXIT_PRICE_IMPACT_PCT', 50), // exit: above this the quote is "insane" -> model price
   maxExitQuoteGapPct: num('MAX_EXIT_QUOTE_GAP_PCT', 50),
-  maxReverseImpactPct: num('MAX_REVERSE_IMPACT_PCT', 3)       // entry: token->SOL quote impact at size above this = reject
+  maxReverseImpactPct: num('MAX_REVERSE_IMPACT_PCT', 3),      // entry: token->SOL quote impact at size above this = reject
+  // entry: buy at size then sell exactly those tokens back; losing more than this (fees + impact both
+  // ways) = reject as quoteSanity:roundtrip
+  maxRoundTripLossPct: num('MAX_ROUNDTRIP_LOSS_PCT', 3)
+};
+// Per-strategy overrides (strategy.quoteSanity, e.g. maxQuoteGapPct) on top of the global rules.
+function quoteSanityFor(strat) {
+  return Object.assign({}, quoteSanity, (strat && strat.quoteSanity) || {});
+}
+
+// Exit judging on Jupiter sell quotes (open positions are quoted on the ~10s exit loop).
+const exitQuotes = {
+  ttlMs: num('EXIT_QUOTE_TTL_MS', 9000),          // reuse a position's sell quote for this long
+  maxPerLoop: num('EXIT_QUOTES_PER_LOOP', 5),     // Jupiter calls per exit loop (oldest quote first)
+  maxAgeMs: num('EXIT_QUOTE_MAX_AGE_MS', 30000)   // older than this -> model fallback for judging
 };
 
 // ---- Operational per-strategy settings (pause / shadow / slots / priority). Kept OUT of the
@@ -151,8 +171,10 @@ const quoteSanity = {
 // entry/exit/sizing rules, so they must not reset the 50-trade go-live counts.
 // Lower priority number = served first for free slots. tierMaxOpen caps a tier inside the strategy.
 const strategyOps = {
-  // Paused 2026-11-20 11:40 (1W/8L since 10:25, -0.285 SOL after costs): no new entries, shadow only.
-  'aggressive-flow': { enabled: false, shadow: true, priority: 9 },
+  // Re-enabled 2026-11-20 12:29 at half size behind the tighter quote filters (was shadow-only 11:40-12:29).
+  // Policy: no strategy is paused or shadowed; sizes and filters are tuned while it trades. The shadow
+  // code path stays for future use (set enabled:false, shadow:true).
+  'aggressive-flow': { enabled: true, priority: 3 },
   'momentum-entry': { enabled: true, maxOpen: 8, priority: 1 },
   // NCS: spec sizing.max_concurrent_positions = 5 is kept; free slots go to tier A first (priority),
   // tier B is served after momentum-entry and tier A.
@@ -162,7 +184,7 @@ const strategyOps = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr2.2-quote-sanity-shadow-2026-11-20',
+  buildId: 'pr2.3-sell-quote-exits-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
@@ -189,6 +211,9 @@ const config = {
   fills,
   rugGate,
   quoteSanity,
+  quoteSanityFor,
+  exitQuotes,
+  ncsRealisticStopPct: num('NCS_REALISTIC_STOP_PCT', -25), // /api/trades expectancy: NCS stop-outs re-priced at this
   strategyOps,
   strategies
 };

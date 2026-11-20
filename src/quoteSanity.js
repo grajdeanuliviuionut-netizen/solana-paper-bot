@@ -16,14 +16,16 @@ function gapPct(quoted, model) {
 // buy: shadowBuyQuote result; reverse: sellRawQuote result for buy.rawOut (or null if not taken);
 // modelPrice: depth-model entry fill (USD/token); decimals: RugCheck decimals; jupDecimals: Jupiter
 // token-list decimals (optional cross-check).
-// Returns { pass, reasons: [..], gapPct, impactPct, reverseImpactPct }.
-function checkEntry({ buy, reverse, modelPrice, decimals, jupDecimals }, cfg = config.quoteSanity) {
+// sizeSol: SOL spent by the buy (for the round-trip check: buy at size, sell those tokens back).
+// cfg: config.quoteSanityFor(strategy) (per-strategy gap caps) or the global rules.
+// Returns { pass, reasons: [..], gapPct, impactPct, reverseImpactPct, roundTripLossPct }.
+function checkEntry({ buy, reverse, modelPrice, decimals, jupDecimals, sizeSol }, cfg = config.quoteSanity) {
   const reasons = [];
   if (!Number.isInteger(decimals)) reasons.push('decimals-missing');
   else if (Number.isInteger(jupDecimals) && jupDecimals !== decimals) reasons.push(`decimals-mismatch rugcheck=${decimals} jupiter=${jupDecimals}`);
   if (!buy || !buy.ok) {
     reasons.push(buy && buy.mismatch ? `quote-mismatch ${buy.error}` : buy && buy.noRoute ? 'no-route' : `no-quote ${(buy && buy.error) || ''}`.trim());
-    return { pass: false, reasons, gapPct: null, impactPct: null, reverseImpactPct: null };
+    return { pass: false, reasons, gapPct: null, impactPct: null, reverseImpactPct: null, roundTripLossPct: null };
   }
   const impact = buy.priceImpactPct;
   if (impact == null || !Number.isFinite(impact)) reasons.push('impact-missing');
@@ -31,7 +33,7 @@ function checkEntry({ buy, reverse, modelPrice, decimals, jupDecimals }, cfg = c
   const g = gapPct(buy.quotedPriceUsd, modelPrice);
   if (g == null) reasons.push('gap-uncomputable');
   else if (Math.abs(g) > cfg.maxQuoteGapPct) reasons.push(`gap ${g.toFixed(2)}%>${cfg.maxQuoteGapPct}%`);
-  let revImpact = null;
+  let revImpact = null, rtLoss = null;
   if (cfg.requireReverseRoute) {
     if (!reverse) reasons.push('reverse-not-checked');
     else if (!reverse.ok) reasons.push(reverse.noRoute ? 'reverse-no-route' : `reverse-failed ${reverse.error || ''}`.trim());
@@ -39,9 +41,16 @@ function checkEntry({ buy, reverse, modelPrice, decimals, jupDecimals }, cfg = c
       revImpact = reverse.priceImpactPct;
       const revMax = cfg.maxReverseImpactPct != null ? cfg.maxReverseImpactPct : cfg.maxPriceImpactPct;
       if (revImpact != null && revImpact > revMax) reasons.push(`reverse-impact ${revImpact.toFixed(2)}%>${revMax}%`);
+      if (cfg.maxRoundTripLossPct != null && sizeSol > 0) {
+        if (!(reverse.solOut > 0)) reasons.push('roundtrip-no-proceeds');
+        else {
+          rtLoss = (1 - reverse.solOut / sizeSol) * 100;
+          if (rtLoss > cfg.maxRoundTripLossPct) reasons.push(`roundtrip ${rtLoss.toFixed(2)}%>${cfg.maxRoundTripLossPct}%`);
+        }
+      }
     }
   }
-  return { pass: reasons.length === 0, reasons, gapPct: g, impactPct: impact, reverseImpactPct: revImpact };
+  return { pass: reasons.length === 0, reasons, gapPct: g, impactPct: impact, reverseImpactPct: revImpact, roundTripLossPct: rtLoss };
 }
 
 // Exit: decide whether a (successful) sell quote is usable for worse-of. quotedAdj = quoted price
@@ -57,4 +66,9 @@ function checkExit({ sell, quotedAdj, modelPrice }, cfg = config.quoteSanity) {
   return { usable: reasons.length === 0, insane: reasons.length > 0, reasons, gapPct: g };
 }
 
-module.exports = { checkEntry, checkExit, gapPct, REASON: 'quoteSanity' };
+// Rejection label: quoteSanity:roundtrip when the round-trip rule fired, else quoteSanity.
+function reasonLabel(reasons) {
+  return (reasons || []).some(r => /^roundtrip/.test(r)) ? 'quoteSanity:roundtrip' : 'quoteSanity';
+}
+
+module.exports = { checkEntry, checkExit, gapPct, reasonLabel, REASON: 'quoteSanity' };

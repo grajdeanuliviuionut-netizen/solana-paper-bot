@@ -205,7 +205,7 @@ test('denylist: buyAgent rejects tokenized equity as its own reason, counts it, 
 test('denylist is a universe filter: not in any strategy config hash', () => {
   const ncsStrat = config.strategies.find(x => x.type === 'ncs');
   assert.ok(!JSON.stringify(ncsStrat).includes('TTWofw'));
-  assert.strictEqual(config.strategyHashes['aggressive-flow'], 'f3e0a8a6ee6a');
+  for (const st of config.strategies) assert.ok(!JSON.stringify(st).includes('TTWofw'), st.id);
 });
 
 // ---------- slot-full skips ----------
@@ -276,7 +276,7 @@ async function entryCheck(routes, opts = {}) {
   jup.setHttp(fakeJup(routes));
   const buy = await jup.shadowBuyQuote({ mint: RUDY, decimals: 6, sizeSol: 0.2, solUsd: SOL_USD });
   const reverse = buy.ok ? await jup.sellRawQuote({ mint: RUDY, raw: buy.rawOut, decimals: 6, solUsd: SOL_USD }) : null;
-  return { buy, reverse, res: qs.checkEntry({ buy, reverse, modelPrice: RUDY_MODEL, decimals: 6, jupDecimals: opts.jupDecimals }) };
+  return { buy, reverse, res: qs.checkEntry({ buy, reverse, modelPrice: RUDY_MODEL, decimals: 6, jupDecimals: opts.jupDecimals, sizeSol: opts.sizeSol }, opts.cfg) };
 }
 const goodRoutes = () => ({
   [`${SOL}>${RUDY}`]: amt => body(SOL, RUDY, amt, goodTokensRaw, 0.004),
@@ -348,7 +348,20 @@ test('exit: insane sell quote falls back to model; sane one is usable', () => {
 
 // ---------- aggressive-flow paused (shadow) + slot priorities ----------
 const shadow = require('../src/shadow');
-test('aggressive-flow: disabled, opens no real entries, logs + tracks shadow entries without touching balance', () => {
+test('no strategy is paused/shadowed; aggressive-flow trades at half size (0.1) behind 5% gap cap + 3% round trip', () => {
+  for (const st of config.strategies) assert.ok(!shadow.isDisabled(st) && !shadow.isShadow(st), st.id);
+  const af = config.strategies.find(s => s.id === 'aggressive-flow');
+  assert.strictEqual(af.sizeSol, 0.1);
+  const cfg = config.quoteSanityFor(af);
+  assert.strictEqual(cfg.maxQuoteGapPct, 5); assert.strictEqual(cfg.maxRoundTripLossPct, 3);
+  const p = Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 20000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 1, h1: 3, h6: 0, h24: 0 } });
+  const split = shadow.splitSignals(generateSignals([p]).signals);
+  assert.ok(split.real.some(sg => sg.strategyId === 'aggressive-flow')); assert.strictEqual(split.shadow.length, 0);
+});
+test('shadow code path (kept for future use): a shadowed strategy opens no real entries, tracks shadow ones without touching balance', () => {
+  const saved = config.strategyOps['aggressive-flow'];
+  config.strategyOps['aggressive-flow'] = { enabled: false, shadow: true, priority: 9 };
+  try {
   const af = config.strategies.find(s => s.id === 'aggressive-flow');
   const mom = config.strategies.find(s => s.id === 'momentum-entry');
   assert.ok(shadow.isDisabled(af) && shadow.isShadow(af));
@@ -374,6 +387,7 @@ test('aggressive-flow: disabled, opens no real entries, logs + tracks shadow ent
   assert.ok(!shadow.canOpen(st, af, sig.mint)); // cooldown after exit
   assert.strictEqual(shadow.summary(st)['aggressive-flow'].trades, 1);
   assert.ok(pos.id.startsWith('sh-'));
+  } finally { config.strategyOps['aggressive-flow'] = saved; }
 });
 test('free slots: momentum-entry up to 8; NCS stays at spec max 5 with tier A served first', () => {
   const { orderCandidates } = require('../src/slots');
@@ -401,9 +415,9 @@ test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawd
   assert.strictEqual(slotStatus({ balance: 1.2, openPositions: six }, mom, config).reason, 'balance-stop');
   assert.strictEqual(slotStatus({ balance: 0.1, openPositions: Array.from({ length: 9 }, () => ({ strategyId: 'x', sizeSol: 0.3 })) }, mom, config).scope, 'cash');
 });
-test('config hashes: aggressive-flow + momentum unchanged; NCS changed only by the spec gate fixes', () => {
+test('config hashes: all three changed (sell-quote exits + per-strategy gap caps; aggressive-flow also half size)', () => {
   assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': 'f3e0a8a6ee6a', 'momentum-entry': '6d674dfaaf7c', ncs_fresh_momentum_v1: 'fda96c6c4b63'
+    'aggressive-flow': '278ccee0216f', 'momentum-entry': '97ccf25bbf1e', ncs_fresh_momentum_v1: '41e98d37e5f6'
   });
 });
 
@@ -474,6 +488,63 @@ test('momentum-entry time stop: exits at max hold only if PnL < 0, else arms a t
   const q = mk(); decide(q, 1.02, true, null, late);
   assert.strictEqual(decide(q, 0.995, true, null, late + 10000).reason, 'time'); // dropped under 0%
   assert.strictEqual(decide(mk(), 1.02, true, null, t0 + 30 * 60000), null); // before max hold: unchanged
+});
+
+// ---------- PR2.3: per-strategy gap caps, round trip, exits judged on the sell quote ----------
+const stratById = id => config.strategies.find(s => s.id === id);
+test('per-strategy quote gap caps: momentum-entry 5%, aggressive-flow 5%, NCS 8%, default 15%', async () => {
+  assert.strictEqual(config.quoteSanityFor(stratById('momentum-entry')).maxQuoteGapPct, 5);
+  assert.strictEqual(config.quoteSanityFor(stratById('ncs_fresh_momentum_v1')).maxQuoteGapPct, 8);
+  assert.strictEqual(config.quoteSanityFor(stratById('aggressive-flow')).maxQuoteGapPct, 5);
+  assert.strictEqual(config.quoteSanityFor(null).maxQuoteGapPct, 15); // global default (no override)
+  // Quote ~6.6% worse than model (LOOSY-like): momentum rejects, NCS passes; ~11%: both reject, default passes.
+  const at = f => { const r = goodRoutes(); r[`${SOL}>${RUDY}`] = amt => body(SOL, RUDY, amt, Math.round(goodTokensRaw / f), 0.01); return r; };
+  const mom = config.quoteSanityFor(stratById('momentum-entry')), ncsC = config.quoteSanityFor(stratById('ncs_fresh_momentum_v1'));
+  const r1m = (await entryCheck(at(1.055), { cfg: mom })).res, r1n = (await entryCheck(at(1.055), { cfg: ncsC })).res;
+  assert.strictEqual(r1m.pass, false); assert.ok(r1m.reasons[0].startsWith('gap ') && r1m.reasons[0].endsWith('>5%'), r1m.reasons[0]);
+  assert.ok(r1n.pass, r1n.reasons.join(';'));
+  const r2n = (await entryCheck(at(1.10), { cfg: ncsC })).res;
+  assert.ok(r2n.reasons[0].endsWith('>8%'), r2n.reasons[0]);
+  assert.ok((await entryCheck(at(1.10))).res.pass);
+});
+test('round trip: buy at size then sell those tokens back; > 3% loss rejects as quoteSanity:roundtrip', async () => {
+  const cfg = config.quoteSanityFor(stratById('momentum-entry'));
+  assert.strictEqual(cfg.maxRoundTripLossPct, 3);
+  const ok = (await entryCheck(goodRoutes(), { cfg, sizeSol: 0.2 })).res; // 0.197 back = 1.5% loss
+  assert.ok(ok.pass, ok.reasons.join(';')); near(ok.roundTripLossPct, 1.5, 1e-9);
+  const r = goodRoutes(); r[`${RUDY}>${SOL}`] = amt => body(RUDY, SOL, amt, 192000000, 0.01); // 0.192 back = 4% loss, impact 1%
+  const bad = (await entryCheck(r, { cfg, sizeSol: 0.2 })).res;
+  assert.deepStrictEqual(bad.reasons, ['roundtrip 4.00%>3%']);
+  assert.strictEqual(qs.reasonLabel(bad.reasons), 'quoteSanity:roundtrip');
+  assert.strictEqual(qs.reasonLabel(['impact 6.00%>5%']), 'quoteSanity');
+});
+test('exits judged on the sell quote: TP does not trigger while the quote is below TP; a quote-backed TP is net positive', () => {
+  const { judgeExit, isProfitReason } = require('../src/sellAgent');
+  const t0 = Date.now() - 5 * 60000;
+  const pos = { strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(t0).toISOString(), entryPrice: 1, entryFillPrice: 1.03,
+    entryTxCostSol: fm.txCostSol(1), sizeSol: 0.2, remainingFrac: 1, highest: 1.12, exit: stratById('momentum-entry').exit };
+  // Mid is +12% (old rule: TP at +10%), but Jupiter would only pay 1.10/token: net ~+6%, below TP -> no exit.
+  const j1 = judgeExit(pos, { quote: { ok: true, quotedPriceUsd: 1.10 }, midPrice: 1.12, liquidityUsd: 100000, solUsd: 72 });
+  assert.strictEqual(j1.source, 'jupiter');
+  assert.ok(j1.netPct > 0 && j1.netPct < 10, String(j1.netPct));
+  assert.strictEqual(decide(pos, j1.price, true, null), null);
+  // Quote 1.15/token: net >= 10% -> TP fires, and its booked PnL (fill = quote) is positive after costs.
+  const j2 = judgeExit(pos, { quote: { ok: true, quotedPriceUsd: 1.15 }, midPrice: 1.16, liquidityUsd: 100000, solUsd: 72 });
+  const d = decide(pos, j2.price, true, null);
+  assert.strictEqual(d.reason, 'tp'); assert.ok(isProfitReason(d.reason));
+  const legNet = legPnlSol(pos, j2.execPrice, d.sellFrac) - fm.txCostSol(1) - pos.entryTxCostSol;
+  assert.ok(legNet > 0, String(legNet)); near(legNet, j2.netSol, 1e-12);
+  // No quote: model fallback (mid minus modeled impact/slippage/fee), never more optimistic than mid.
+  const j3 = judgeExit(pos, { quote: null, midPrice: 1.12, liquidityUsd: 100000, solUsd: 72 });
+  assert.strictEqual(j3.source, 'model'); assert.ok(j3.execPrice < 1.12);
+  // SL is judged on the quote too: mid only -3% but quote -8% net -> stop.
+  const j4 = judgeExit(pos, { quote: { ok: true, quotedPriceUsd: 0.96 }, midPrice: 0.97, liquidityUsd: 100000, solUsd: 72 });
+  assert.strictEqual(decide(pos, j4.price, true, null).reason, 'sl');
+});
+test('NCS sizing: tier A = base size (sizeMult 1), tier B = half (0.5)', () => {
+  const ncs = stratById('ncs_fresh_momentum_v1');
+  assert.strictEqual(ncs.universe.tiers.A.sizeMult, 1.0);
+  assert.strictEqual(ncs.universe.tiers.B.sizeMult, 0.5);
 });
 
 (async () => {
