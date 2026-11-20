@@ -26,6 +26,11 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
         return close('emergency-nosells');
       }
       if (!pos.tp1Done && changePct <= -ex.stopLossPct) return close('sl');
+      // Profit lock before TP1: once the judged net peak reached lockAfterPct, exit at lockAtPct.
+      if (!pos.tp1Done && ex.lockAfterPct) {
+        const peakPct = (((hi || price) - pos.entryPrice) / pos.entryPrice) * 100;
+        if (peakPct >= ex.lockAfterPct && changePct <= (ex.lockAtPct || 0)) return close('lock');
+      }
       if (pos.tp1Done) {
         if (ex.breakevenAfterTp1 && price <= pos.entryPrice) return close('breakeven');
         if (ex.trailAfterTp1Pct && price <= (hi || price) * (1 - ex.trailAfterTp1Pct / 100)) return close('trail');
@@ -54,6 +59,12 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
     if (ex.trailAfterPct) {
       const peakPct = (((hi || pos.entryPrice) - pos.entryPrice) / pos.entryPrice) * 100;
       if (peakPct >= ex.trailAfterPct && price <= (hi || pos.entryPrice) * (1 - (ex.trailPct || 5) / 100)) return close('trail');
+    }
+    // Stall exit: after stallAfterMin, a trade that never got above stallMaxPeakPct and is down
+    // stallLossPct is cut instead of bleeding to the full stop.
+    if (ex.stallAfterMin && minsOpen >= ex.stallAfterMin) {
+      const peakPct = (((hi || pos.entryPrice) - pos.entryPrice) / pos.entryPrice) * 100;
+      if (peakPct < (ex.stallMaxPeakPct != null ? ex.stallMaxPeakPct : 1) && changePct <= -ex.stallLossPct) return close('stall');
     }
   }
   if (minsOpen >= (ex.maxHoldMinutes || config.defaultMaxHoldMinutes)) {

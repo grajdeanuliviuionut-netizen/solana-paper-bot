@@ -281,6 +281,10 @@ function finalizeTrade(pos, finalReason, fresh) {
     txCostsSol: txCosts,
     pnlSol: pnl,
     pnlPct: (pnl / pos.sizeSol) * 100,
+    // MFE / MAE on the judged (sell-quote, net of costs) PnL while open.
+    mfeNetPct: pos.judgedHigh ? +((pos.judgedHigh / pos.entryPrice - 1) * 100).toFixed(2) : null,
+    maeNetPct: pos.judgedLow ? +((pos.judgedLow / pos.entryPrice - 1) * 100).toFixed(2) : null,
+    heldSec: Math.round((Date.now() - Date.parse(pos.entryTime)) / 1000),
     fillModel: pos.live ? 'live' : 'depth-v1',
     mode: pos.live ? 'live' : 'paper',
     live: pos.live || null
@@ -401,7 +405,7 @@ async function processExits(solUsd) {
         if (judge) {
           price = judge.price;
           judgeFresh = fresh || judge.source === 'jupiter';
-          if (judgeFresh) pos.judgedHigh = Math.max(pos.judgedHigh || 0, price);
+          if (judgeFresh) { pos.judgedHigh = Math.max(pos.judgedHigh || 0, price); pos.judgedLow = Math.min(pos.judgedLow || price, price); }
           pos.lastJudge = { at: new Date().toISOString(), source: judge.source, netPct: +judge.netPct.toFixed(3), execPrice: judge.execPrice, mid };
         }
       }
