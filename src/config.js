@@ -77,7 +77,8 @@ const strategies = [
       // Batch2 (13:57, RA freeze exception): AF was 2/16, -0.061 SOL since 12:32. Only the top half of
       // passes by volume/liquidity: 0.52 = median volumeH1/liquidityUsd of the 16 AF entries since 12:32
       // (/api/trades?all=1 entryGates; was 0.03).
-      { field: 'volumeToLiquidity', op: '>=', value: 0.52 },
+      // 14:05 RA follow-up: 0.52 -> 0.15 (median of the live AF-pass snapshot at 13:58, n=16).
+      { field: 'volumeToLiquidity', op: '>=', value: 0.15 },
       { field: 'm5', op: '>=', value: -2 },
       // m5 buys > sells (DEX Screener txns.m5; missing data fails closed) and h1 > 0.
       { field: 'buysGtSellsM5', op: '>=', value: 1 },

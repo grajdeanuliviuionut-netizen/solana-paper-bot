@@ -424,7 +424,7 @@ test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawd
 });
 test('config hashes: all three changed (sell-quote exits + per-strategy gap caps; aggressive-flow also half size)', () => {
   assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': '8b334effdbfb', 'momentum-entry': 'fc3fd9a29a5c', ncs_fresh_momentum_v1: '694b165387f0'
+    'aggressive-flow': '5dd9e2a53dff', 'momentum-entry': 'fc3fd9a29a5c', ncs_fresh_momentum_v1: '694b165387f0'
   });
 });
 
@@ -710,14 +710,15 @@ test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1
   assert.strictEqual(ncsS.exit.trailAfterTp1Pct, 10);
 });
 
-test('batch2: AF 0.05 SOL, v/l >= 0.52, m5 buys > sells (fail closed), h1 > 0; NCS grace + fill stop, tier B half; allocator', () => {
+test('batch2: AF 0.05 SOL, v/l >= 0.15 (14:05), m5 buys > sells (fail closed), h1 > 0; NCS grace + fill stop, tier B half; allocator', () => {
   const { pickBumpVictim } = require('../src/slots');
   assert.strictEqual(config.strategyHashes['momentum-entry'], 'fc3fd9a29a5c');
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
   assert.strictEqual(af.sizeSol, 0.05);
   const P = () => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 120000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 0, h1: 1, h6: 0, h24: 0 } });
   assert.deepStrictEqual(evaluate(P(), af).fails, []);
-  let p = P(); p.volumeH1 = 100000; assert.ok(evaluate(p, af).fails.includes('volumeToLiquidity>=0.52')); // 0.5 < 0.52
+  let p = P(); p.volumeH1 = 28000; assert.ok(evaluate(p, af).fails.includes('volumeToLiquidity>=0.15')); // 0.14 < 0.15
+  p = P(); p.volumeH1 = 30000; assert.deepStrictEqual(evaluate(p, af).fails, []); // 0.15 passes
   p = P(); p.txnsM5 = { buys: 20, sells: 20 }; assert.ok(evaluate(p, af).fails.includes('buysGtSellsM5>=1'));
   p = P(); p.txnsM5 = undefined; assert.ok(evaluate(p, af).fails.includes('buysGtSellsM5>=1'));       // missing -> fail closed
   p = P(); p.txnsM5 = { buys: '30', sells: null }; assert.ok(evaluate(p, af).fails.includes('buysGtSellsM5>=1'));
