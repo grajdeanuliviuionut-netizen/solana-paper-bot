@@ -558,6 +558,10 @@ async function processShadowEntries(signals, quotes, solUsd, budget) {
     const strat = sig.strategy;
     if (!shadow.canOpen(state, strat, sig.mint)) continue;
     if ((shadowRugFail.get(sig.mint) || 0) > Date.now()) continue; // failed the rug gate recently
+    // PR5.1: same entry gating as the live strategy it mirrors, read-only: the mint guard is only
+    // CHECKED (never written) and the scan up-tick confirmation applies.
+    if (mintGuard.check(state, sig.mint, config.mintGuard)) { rej.count(strat.id, 'shadow-mint-guard'); continue; }
+    if (strat.entryConfirm && strat.entryConfirm.upTicks && !entryConfirm.upTickCheck(sig.pairAddress, strat.entryConfirm.upTicks).ok) { rej.count(strat.id, 'uptick-confirm'); continue; }
     const q = quotes[sig.pairAddress];
     if (!q || q.mint !== sig.mint || !(q.priceUsd > 0)) continue;
     const eq = await denylist.check({ mint: sig.mint, symbol: sig.symbol, name: sig.name });

@@ -184,6 +184,19 @@ const strategies = [
     riskGuards: { dailyLossHaltPct: 8, consecutiveLosses: 5, pauseMinutes: 30 }
   }
 ];
+// PR5.1 (RA 17:12) SHADOW variant: identical to momentum-entry (same exits incl. breakeven lock, early
+// fail, 12m max hold, sell-quote judging; same size and up-tick confirm) plus buySellRatioH1 >= 1.3
+// (today's momentum winners median 1.45 vs losers 1.01). strategyOps keeps it enabled:false /
+// shadow:true -> no paper positions, no allocator slots, no mint-guard writes. Its own configHash;
+// momentum-entry's object is untouched (deep copy).
+{
+  const mom = strategies.find(s => s.id === 'momentum-entry');
+  const v = JSON.parse(JSON.stringify(mom));
+  v.id = 'momentum-h1ratio';
+  v.name = 'Momentum entry + h1 buy/sell ratio >= 1.3 (shadow)';
+  v.entry.push({ field: 'buySellRatioH1', op: '>=', value: 1.3 });
+  strategies.push(v);
+}
 
 // ---- Quote sanity (entry hard-reject + exit fallback). Not part of any configHash (like the rug
 // gate's fail-closed plumbing / the denylist, it filters broken or drained pools, not strategy edge).
@@ -229,6 +242,8 @@ const strategyOps = {
   // Batch2: momentum's allocator cap 8 -> 12 (bounded by the global cap): at 13:39-13:40 momentum was skipped
   // at its own 8/8 while the book had 11/12 open. Outside the configHash.
   'momentum-entry': { enabled: true, maxOpen: 12, priority: 1 },
+  // PR5.1 shadow-only variant (logs to data/shadow.jsonl, /api/shadow).
+  'momentum-h1ratio': { enabled: false, shadow: true, maxOpen: 12, priority: 9 },
   // NCS: spec sizing.max_concurrent_positions = 5 is kept; free slots go to tier A first (priority),
   // tier B is served after momentum-entry and tier A.
   ncs_fresh_momentum_v1: { enabled: true, tierPriority: { A: 1, B: 2 }, priority: 1, maxOpen: 2 }
@@ -264,7 +279,7 @@ const mintGuard = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr5-loser-cut-2026-11-20',
+  buildId: 'pr5.1-shadow-h1ratio-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',

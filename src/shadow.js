@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const config = require('./config');
 const fillModel = require('./fillModel');
-const { decide, legPnlSol } = require('./sellAgent');
+const { decide, legPnlSol, judgeExit } = require('./sellAgent');
 
 const DATA_DIR = process.env.STATE_FILE ? path.dirname(process.env.STATE_FILE) : './data';
 const SHADOW_FILE = process.env.SHADOW_FILE || path.join(DATA_DIR, 'shadow.jsonl');
@@ -114,23 +114,34 @@ function processExits(state, quotes, solUsd, now = Date.now(), rng = Math.random
       pos.lastPrice = q.priceUsd;
       if (q.priceUsd > (pos.highest || 0)) pos.highest = q.priceUsd;
     }
-    const price = fresh ? q.priceUsd : (pos.lastPrice || pos.entryPrice);
+    const mid = fresh ? q.priceUsd : (pos.lastPrice || pos.entryPrice);
+    const liq = (q && q.liquidityUsd) || pos.entryLiquidityUsd || 0;
+    // PR5.1: strategies judged on the sell quote are judged NET in shadow too (same triggers as the
+    // live path: breakeven lock / early fail / TP / SL compare net PnL; judgedHigh = net peak). Shadow
+    // uses the depth model for the sell side (no per-tick Jupiter sell quote; minimal implementation).
+    const strat = config.strategies.find(s => s.id === pos.strategyId) || {};
+    let price = mid;
+    if (fresh && strat.exit && strat.exit.judgeOn === 'sell-quote' && solUsd > 0) {
+      const j = judgeExit(pos, { quote: null, midPrice: mid, liquidityUsd: liq, solUsd });
+      if (j) { price = j.price; pos.judgedHigh = Math.max(pos.judgedHigh || 0, j.price); pos.lastJudge = { netPct: +j.netPct.toFixed(2), source: j.source }; }
+    } else if (!fresh && pos.lastJudge) {
+      price = pos.entryPrice * (1 + pos.lastJudge.netPct / 100);
+    }
     const d = decide(pos, price, fresh, fresh ? q : null, now);
     if (!d) { still.push(pos); continue; }
-    const liq = (q && q.liquidityUsd) || pos.entryLiquidityUsd || 0;
-    const valueUsd = pos.sizeSol * d.sellFrac * solUsd * (d.fillPrice / pos.entryFillPrice);
-    const fill = fillModel.fillExit({ midPrice: d.fillPrice, valueUsd, liquidityUsd: liq, reason: d.reason, m5Pct: q ? q.priceChange.m5 : 0, rng });
+    const valueUsd = pos.sizeSol * d.sellFrac * solUsd * (mid / pos.entryFillPrice);
+    const fill = fillModel.fillExit({ midPrice: mid, valueUsd, liquidityUsd: liq, reason: d.reason, m5Pct: q && q.priceChange ? q.priceChange.m5 : 0, rng });
     const pnl = legPnlSol(pos, fill.price, d.sellFrac);
-    pos.legs.push({ time: new Date(now).toISOString(), reason: d.reason, sellFrac: d.sellFrac, midPrice: d.fillPrice, fillPrice: fill.price, txCostSol: fill.txCostSol, pnlSol: pnl });
+    pos.legs.push({ time: new Date(now).toISOString(), reason: d.reason, sellFrac: d.sellFrac, midPrice: mid, judgedPrice: d.fillPrice, fillPrice: fill.price, txCostSol: fill.txCostSol, pnlSol: pnl });
     pos.remainingFrac = Math.max(0, pos.remainingFrac - d.sellFrac);
     if (d.action === 'partial') pos.tp1Done = true;
     if (d.action === 'close' || pos.remainingFrac <= 1e-9) {
       const legPnl = pos.legs.reduce((a, l) => a + l.pnlSol, 0);
       const costs = (pos.entryTxCostSol || 0) + pos.legs.reduce((a, l) => a + l.txCostSol, 0);
-      const trade = { ...pos, exitReason: d.reason, exitPrice: d.fillPrice, closedAt: new Date(now).toISOString(), pnlSol: legPnl - costs, pnlPct: ((legPnl - costs) / pos.sizeSol) * 100 };
+      const trade = { ...pos, exitReason: d.reason, exitPrice: mid, closedAt: new Date(now).toISOString(), heldSec: Math.round((now - Date.parse(pos.entryTime)) / 1000),
+        mfeNetPct: pos.judgedHigh ? +((pos.judgedHigh / pos.entryPrice - 1) * 100).toFixed(2) : null, pnlSol: legPnl - costs, pnlPct: ((legPnl - costs) / pos.sizeSol) * 100 };
       sh.closed.unshift(trade);
       if (sh.closed.length > 200) sh.closed.pop();
-      const strat = config.strategies.find(s => s.id === pos.strategyId) || {};
       sh.cooldowns[`${pos.strategyId}:${pos.mint}`] = now + (strat.reentryCooldownMinutes || config.reentryCooldownMinutes || 10) * 60000;
       append({ type: 'shadow-exit', time: trade.closedAt, ...trade });
       console.log(`[shadow] EXIT ${pos.symbol} ${pos.mint} (${pos.strategyId}) ${d.reason} hypothetical pnl=${trade.pnlSol.toFixed(4)} SOL`);
