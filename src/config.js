@@ -80,9 +80,9 @@ const strategies = [
       // 14:05 RA follow-up: 0.52 -> 0.15 (median of the live AF-pass snapshot at 13:58, n=16).
       { field: 'volumeToLiquidity', op: '>=', value: 0.15 },
       { field: 'm5', op: '>=', value: -2 },
-      // m5 buys > sells (DEX Screener txns.m5; missing data fails closed) and h1 > 0.
-      { field: 'buysGtSellsM5', op: '>=', value: 1 },
-      { field: 'h1', op: '>', value: 0 }
+      // m5 buys > sells (DEX Screener txns.m5; missing data fails closed). h1 > 0 removed 16:04 (RA:
+      // zero entries since 15:00; h1>0 was the top AF filter reject).
+      { field: 'buysGtSellsM5', op: '>=', value: 1 }
     ],
     // Batch1 (post-6pm): since 12:32 at 0.1 SOL, TP6 was never reached (best MFE +5.1% mid), trails armed at
     // +3 exited ~0%, and stop-outs had MFE <= 0 and bled for 13-17 min before -5.7%. Lower TP, tighter
@@ -99,8 +99,9 @@ const strategies = [
     type: 'simple',
     universe: { minAgeDays: 0, maxAgeDays: 14, minLiquidityUsd: 50000 },
     entry: [
-      { field: 'h1', op: '>=', value: 2 },
-      { field: 'm5', op: '>=', value: 0.5 }
+      // 16:04 RA (zero entries since 15:00): h1 2 -> 1.5, m5 0.5 -> 0.3.
+      { field: 'h1', op: '>=', value: 1.5 },
+      { field: 'm5', op: '>=', value: 0.3 }
     ],
     // Time stop at maxHoldMinutes exits only when the position is under water (mid PnL < 0%);
     // otherwise a timeTrailPct trailing stop arms at max hold (high-water mark from that moment).
@@ -235,7 +236,10 @@ const mintGuard = {
   // Exit reasons counted as stop-losses: SL, hard stop (incl. entry-grace hard stop and the
   // awaiting-quote hard stop), stall, and the emergency (rug / liquidity / no-sells) exits.
   stopReasons: ['sl', 'hard-stop', 'stall', 'emergency-liq', 'emergency-nosells', 'emergency-rug'],
-  maxEntriesPerDay: num('MINT_MAX_ENTRIES_PER_DAY', 2), // per mint per London day, across strategies
+  // 16:04 RA: the 2-entries/day cap blocked every candidate after 15:00. Now: at most 2 LOSING trades
+  // (net pnlSol after costs < 0) per mint per London day, across strategies; a mint whose last closed
+  // trade was a winner may re-enter (still subject to the stop cooldown).
+  maxLossesPerDay: num('MINT_MAX_LOSSES_PER_DAY', 2),
   brokenGapPct: 50,                                     // quote vs model gap that marks a broken quote
   // Known broken-quote mints (also found from trades/events/shadow history at startup).
   seedBrokenMints: [
@@ -246,7 +250,7 @@ const mintGuard = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr4-mint-guards-momentum-2026-11-20',
+  buildId: 'pr4.1-loss-cap-entry-loosen-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',

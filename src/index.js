@@ -315,7 +315,7 @@ function finalizeTrade(pos, finalReason, fresh) {
   if (state.trades.length > 100) state.trades.pop();
   logTrade(trade);
   state.cooldowns[pos.mint] = Date.now() + ((strategyById(pos.strategyId) || {}).reentryCooldownMinutes || config.reentryCooldownMinutes) * 60000;
-  mintGuard.recordExit(state, { mint: pos.mint, reason: finalReason, symbol: pos.symbol, strategyId: pos.strategyId }, config.mintGuard);
+  mintGuard.recordExit(state, { mint: pos.mint, reason: finalReason, symbol: pos.symbol, strategyId: pos.strategyId, pnlSol: pnl }, config.mintGuard);
   const g = guardFor(pos.strategyId);
   g.dayPnlSol += pnl;
   if (finalReason !== 'bumped') g.consecLosses = pnl < 0 ? g.consecLosses + 1 : 0; // a bump is an allocator decision, not a strategy loss streak

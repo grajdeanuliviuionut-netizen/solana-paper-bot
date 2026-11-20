@@ -1,6 +1,7 @@
 // Per-mint entry guards shared by ALL strategies (outside every configHash):
 //  - stop cooldown: no re-entry on a mint for config.mintGuard.stopCooldownMin after a stop-type exit
-//  - daily cap: at most config.mintGuard.maxEntriesPerDay entries per mint per London day
+//  - daily loss cap: at most config.mintGuard.maxLossesPerDay LOSING trades (net pnlSol < 0) per mint per
+//    London day; a mint whose last closed trade was a winner may re-enter (subject to the stop cooldown)
 //  - broken-quote denylist: a mint whose Jupiter quote was ever absurd (gap > brokenGapPct, no
 //    reverse/sell route, NaN or zero output) is denied for good. Persisted in state.
 // Seeded at startup from trades.jsonl / events.jsonl / shadow.jsonl so today's history counts.
@@ -12,7 +13,9 @@ function londonDay(ts) { return dayFmt.format(new Date(ts)); }
 function ensure(state) {
   state.mintGuard = state.mintGuard || {};
   state.mintGuard.stops = state.mintGuard.stops || {};     // mint -> { until, reason, symbol, at, strategyId }
-  state.mintGuard.entries = state.mintGuard.entries || {}; // londonDay -> { mint: count }
+  state.mintGuard.entries = state.mintGuard.entries || {}; // londonDay -> { mint: count } (informational)
+  state.mintGuard.losses = state.mintGuard.losses || {};   // londonDay -> { mint: losing trades }
+  state.mintGuard.last = state.mintGuard.last || {};       // mint -> { win, pnlSol, at, reason }
   state.brokenQuoteMints = state.brokenQuoteMints || {};   // mint -> { symbol, reason, at, source }
   return state.mintGuard;
 }
@@ -24,12 +27,25 @@ function recordEntry(state, mint, ts = Date.now()) {
   const day = londonDay(ts);
   g.entries[day] = g.entries[day] || {};
   g.entries[day][mint] = (g.entries[day][mint] || 0) + 1;
-  for (const d of Object.keys(g.entries)) if (d < londonDay(ts - 2 * 86400000)) delete g.entries[d];
+  pruneDays(g.entries, ts);
 }
+function pruneDays(obj, ts) { for (const d of Object.keys(obj)) if (d < londonDay(ts - 2 * 86400000)) delete obj[d]; }
 
-function recordExit(state, { mint, reason, symbol, strategyId }, cfg, ts = Date.now()) {
-  if (!isStopReason(reason, cfg)) return false;
+function recordExit(state, { mint, reason, symbol, strategyId, pnlSol }, cfg, ts = Date.now()) {
+  if (!mint) return false; // old trade rows without a mint
   const g = ensure(state);
+  if (pnlSol != null && Number.isFinite(Number(pnlSol))) {
+    const loss = Number(pnlSol) < 0;
+    const prev = g.last[mint];
+    if (!prev || Date.parse(prev.at) <= ts) g.last[mint] = { win: !loss, pnlSol: +Number(pnlSol).toFixed(6), reason, at: new Date(ts).toISOString() };
+    if (loss) {
+      const day = londonDay(ts);
+      g.losses[day] = g.losses[day] || {};
+      g.losses[day][mint] = (g.losses[day][mint] || 0) + 1;
+      pruneDays(g.losses, ts);
+    }
+  }
+  if (!isStopReason(reason, cfg)) return false;
   const until = ts + cfg.stopCooldownMin * 60000;
   if (!g.stops[mint] || g.stops[mint].until < until) g.stops[mint] = { until, reason, symbol, strategyId, at: new Date(ts).toISOString() };
   return true;
@@ -42,8 +58,9 @@ function check(state, mint, cfg, now = Date.now()) {
   if (b) return { reason: 'broken-quote-denylist', detail: `${b.symbol || ''} ${b.reason}`.trim() };
   const s = g.stops[mint];
   if (s && s.until > now) return { reason: 'cooldown', detail: `mint stop cooldown: ${s.reason} (${s.strategyId || ''}) until ${new Date(s.until).toISOString()}` };
-  const n = (g.entries[londonDay(now)] || {})[mint] || 0;
-  if (n >= cfg.maxEntriesPerDay) return { reason: 'mint-daily-cap', detail: `${n}/${cfg.maxEntriesPerDay} entries today (London)` };
+  const n = (g.losses[londonDay(now)] || {})[mint] || 0;
+  const last = g.last[mint];
+  if (n >= cfg.maxLossesPerDay && !(last && last.win)) return { reason: 'mint-daily-cap', detail: `${n}/${cfg.maxLossesPerDay} losing trades today (London), last ${last ? last.reason + ' ' + last.pnlSol : '?'}` };
   return null;
 }
 
@@ -84,15 +101,17 @@ function seed(state, { trades = [], events = [], shadowRows = [], openPositions 
   const today = londonDay(now);
   const counts = {};
   const seenIds = new Set();
+  g.losses = {}; g.last = {}; // rebuilt from the trade log (source of truth); live exits re-add on top
+  const sorted = trades.slice().sort((a, b) => Date.parse(a.closedAt || a.exitTime || 0) - Date.parse(b.closedAt || b.exitTime || 0));
   const countEntry = (id, mint, entryTime) => {
     if (!mint || !entryTime || (id && seenIds.has(id))) return;
     if (id) seenIds.add(id);
     if (londonDay(Date.parse(entryTime)) === today) counts[mint] = (counts[mint] || 0) + 1;
   };
-  for (const t of trades) {
+  for (const t of sorted) {
     countEntry(t.id, t.mint, t.entryTime);
     const closed = Date.parse(t.closedAt || t.exitTime);
-    if (Number.isFinite(closed)) recordExit(state, { mint: t.mint, reason: t.exitReason, symbol: t.symbol, strategyId: t.strategyId }, cfg, closed);
+    if (Number.isFinite(closed)) recordExit(state, { mint: t.mint, reason: t.exitReason, symbol: t.symbol, strategyId: t.strategyId, pnlSol: t.pnlSol }, cfg, closed);
     const bad = Math.abs(t.entryFillGapPct || 0) > cfg.brokenGapPct ? `entry gap ${Number(t.entryFillGapPct).toFixed(1)}%`
       : Math.abs(t.exitFillGapPct || 0) > cfg.brokenGapPct ? `exit gap ${Number(t.exitFillGapPct).toFixed(1)}%`
       : (t.entryShadow && t.entryShadow.ok && !(t.entryShadow.quotedPriceUsd > 0)) ? 'entry quote zero/NaN' : null;
@@ -121,11 +140,13 @@ function summary(state, cfg, now = Date.now()) {
   const g = ensure(state);
   const stops = Object.entries(g.stops).filter(([, s]) => s.until > now);
   const today = g.entries[londonDay(now)] || {};
-  const capped = Object.entries(today).filter(([, n]) => n >= cfg.maxEntriesPerDay);
+  const losses = g.losses[londonDay(now)] || {};
+  const capped = Object.entries(losses).filter(([m, n]) => n >= cfg.maxLossesPerDay && !(g.last[m] && g.last[m].win));
   return {
-    rules: { stopCooldownMin: cfg.stopCooldownMin, stopReasons: cfg.stopReasons, maxEntriesPerDay: cfg.maxEntriesPerDay, day: londonDay(now), dayTimeZone: 'Europe/London', brokenGapPct: cfg.brokenGapPct },
+    rules: { stopCooldownMin: cfg.stopCooldownMin, stopReasons: cfg.stopReasons, maxLossesPerDay: cfg.maxLossesPerDay, lossDefinition: 'net pnlSol after costs < 0; last closed trade a winner -> may re-enter', day: londonDay(now), dayTimeZone: 'Europe/London', brokenGapPct: cfg.brokenGapPct },
     inCooldown: stops.map(([mint, s]) => ({ mint, symbol: s.symbol, reason: s.reason, strategyId: s.strategyId, until: new Date(s.until).toISOString() })),
-    dailyCapped: capped.map(([mint, n]) => ({ mint, entries: n })),
+    dailyCapped: capped.map(([mint, n]) => ({ mint, losses: n, last: g.last[mint] })),
+    losingMintsToday: Object.keys(losses).length,
     entriesToday: Object.keys(today).length,
     brokenQuoteMints: Object.entries(state.brokenQuoteMints).map(([mint, b]) => ({ mint, ...b }))
   };

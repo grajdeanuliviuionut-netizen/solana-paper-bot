@@ -424,7 +424,7 @@ test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawd
 });
 test('config hashes: all three changed (sell-quote exits + per-strategy gap caps; aggressive-flow also half size)', () => {
   assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': '5dd9e2a53dff', 'momentum-entry': 'dbaccdabd831', ncs_fresh_momentum_v1: '694b165387f0'
+    'aggressive-flow': '340064b403e0', 'momentum-entry': '4add15a57dca', ncs_fresh_momentum_v1: '694b165387f0'
   });
 });
 
@@ -626,7 +626,7 @@ test('slot allocator: cap 12 when cash covers it, AF max 4, NCS max 2, 5 slots r
   const { maxOpenFor, reservedFor, pickBumpVictim } = require('../src/slots');
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
   // Allocator lives outside every configHash: momentum-entry must stay fc3fd9a29a5c.
-  assert.strictEqual(config.strategyHashes['momentum-entry'], 'dbaccdabd831'); // 98074ad momentum change (PR4)
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '4add15a57dca'); // PR4.1 (h1 1.5, m5 0.3)
   assert.strictEqual(config.opsFor('aggressive-flow').maxOpen, 4); assert.strictEqual(config.opsFor(ncsS.id).maxOpen, 2);
   const now = Date.now();
   const P = (id, ageSec = 600, netPct = 0, extra = {}) => ({ strategyId: id, sizeSol: id === 'aggressive-flow' ? 0.1 : 0.2, remainingFrac: 1, entryTime: new Date(now - ageSec * 1000).toISOString(), lastJudge: { netPct }, ...extra });
@@ -681,7 +681,7 @@ test('allocator: momentum-entry claims a mint both strategies passed; a capped A
 });
 
 test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1 15; momentum hash unchanged', () => {
-  assert.strictEqual(config.strategyHashes['momentum-entry'], 'dbaccdabd831'); // 98074ad momentum change (PR4)
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '4add15a57dca'); // PR4.1 (h1 1.5, m5 0.3)
   const now = Date.now();
   const af = stratById('aggressive-flow');
   const P = (minsAgo, extra = {}) => ({ strategyId: 'aggressive-flow', strategyType: 'simple', entryTime: new Date(now - minsAgo * 60000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.1, remainingFrac: 1, highest: 1, exit: af.exit, ...extra });
@@ -713,7 +713,7 @@ test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1
 
 test('batch2: AF 0.05 SOL, v/l >= 0.15 (14:05), m5 buys > sells (fail closed), h1 > 0; NCS grace + fill stop, tier B half; allocator', () => {
   const { pickBumpVictim } = require('../src/slots');
-  assert.strictEqual(config.strategyHashes['momentum-entry'], 'dbaccdabd831'); // 98074ad momentum change (PR4)
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '4add15a57dca'); // PR4.1 (h1 1.5, m5 0.3)
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
   assert.strictEqual(af.sizeSol, 0.05);
   const P = () => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 120000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 0, h1: 1, h6: 0, h24: 0 } });
@@ -723,8 +723,10 @@ test('batch2: AF 0.05 SOL, v/l >= 0.15 (14:05), m5 buys > sells (fail closed), h
   p = P(); p.txnsM5 = { buys: 20, sells: 20 }; assert.ok(evaluate(p, af).fails.includes('buysGtSellsM5>=1'));
   p = P(); p.txnsM5 = undefined; assert.ok(evaluate(p, af).fails.includes('buysGtSellsM5>=1'));       // missing -> fail closed
   p = P(); p.txnsM5 = { buys: '30', sells: null }; assert.ok(evaluate(p, af).fails.includes('buysGtSellsM5>=1'));
-  p = P(); p.priceChange.h1 = 0; assert.ok(evaluate(p, af).fails.includes('h1>0'));
-  p = P(); p.priceChange.h1 = undefined; assert.ok(evaluate(p, af).fails.includes('h1>0'));            // missing -> fail closed
+  // 16:04: AF h1>0 rule removed -> a flat or negative h1 no longer blocks.
+  p = P(); p.priceChange.h1 = 0; assert.deepStrictEqual(evaluate(p, af).fails, []);
+  p = P(); p.priceChange.h1 = -3; assert.deepStrictEqual(evaluate(p, af).fails, []);
+  assert.ok(!af.entry.some(r => r.field === 'h1'));
   assert.strictEqual(af.exit.stallAfterMin, 6); // stall exit kept
   // NCS: Raja-like -14% (vs the paper fill) 9s after entry is held in grace; -16% -> hard stop; emergency still fires.
   const now = Date.now();
@@ -760,6 +762,16 @@ test('batch2: AF 0.05 SOL, v/l >= 0.15 (14:05), m5 buys > sells (fail closed), h
 });
 
 
+test('PR4.1 momentum entry loosened (h1 >= 1.5, m5 >= 0.3), exits unchanged', () => {
+  const mom = stratById('momentum-entry');
+  assert.deepStrictEqual(mom.entry.map(r => `${r.field}${r.op}${r.value}`), ['h1>=1.5', 'm5>=0.3']);
+  const P = (h1, m5) => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 120000, priceChange: { m5, h1, h6: 0, h24: 0 } });
+  assert.deepStrictEqual(evaluate(P(1.6, 0.35), mom).fails.filter(f => /h1|m5/.test(f)), []);
+  assert.ok(evaluate(P(1.4, 0.35), mom).fails.includes('h1>=1.5'));
+  assert.ok(evaluate(P(1.6, 0.25), mom).fails.includes('m5>=0.3'));
+  assert.strictEqual(mom.exit.maxHoldMinutes, 25); assert.strictEqual(mom.exit.graceSec, 30); assert.strictEqual(mom.sizeSol, 0.2);
+});
+
 test('PR4 momentum (98074ad): max hold 25 min, 30s grace with a 10% hard stop', () => {
   const ex = stratById('momentum-entry').exit;
   assert.strictEqual(ex.maxHoldMinutes, 25); assert.strictEqual(ex.graceSec, 30); assert.strictEqual(ex.hardStopPct, 10);
@@ -775,10 +787,10 @@ test('PR4 momentum (98074ad): max hold 25 min, 30s grace with a 10% hard stop', 
   assert.strictEqual(stratById('aggressive-flow').exit.graceSec, 60); assert.strictEqual(stratById('ncs_fresh_momentum_v1').exit.hardStopPct, 15);
 });
 
-test('PR4 mint guard: 2h stop cooldown (all strategies), 2 entries per mint per London day, outside the hashes', () => {
+test('PR4.1 mint guard: 2h stop cooldown (all strategies), max 2 LOSING trades per mint per London day, outside the hashes', () => {
   const mg = require('../src/mintGuard');
   const cfg = config.mintGuard;
-  assert.strictEqual(cfg.stopCooldownMin, 120); assert.strictEqual(cfg.maxEntriesPerDay, 2);
+  assert.strictEqual(cfg.stopCooldownMin, 120); assert.strictEqual(cfg.maxLossesPerDay, 2); assert.strictEqual(cfg.maxEntriesPerDay, undefined);
   for (const r of ['sl', 'hard-stop', 'stall', 'emergency-rug']) assert.ok(mg.isStopReason(r, cfg), r);
   for (const r of ['tp', 'trail', 'time', 'bumped', 'lock', 'breakeven']) assert.ok(!mg.isStopReason(r, cfg), r);
   const st = { openPositions: [] };
@@ -789,27 +801,46 @@ test('PR4 mint guard: 2h stop cooldown (all strategies), 2 entries per mint per 
   mg.recordExit(st, { mint: 'M1', reason: 'stall', symbol: 'SHIT', strategyId: 'aggressive-flow' }, cfg, t);
   assert.strictEqual(mg.check(st, 'M1', cfg, t + 119 * 60000).reason, 'cooldown');      // blocks every strategy
   assert.strictEqual(mg.check(st, 'M1', cfg, t + 121 * 60000), null);
-  // Daily cap across strategies, London day boundaries (UTC+0 in November; BST in summer).
-  mg.recordEntry(st, 'M2', t); mg.recordEntry(st, 'M2', t + 60000);
+  // Entries alone never cap any more (the 15:00-16:00 zero-entry cause).
+  for (let i = 0; i < 5; i++) mg.recordEntry(st, 'M2', t + i);
+  assert.strictEqual(mg.check(st, 'M2', cfg, t + 120000), null);
+  // Two losing trades (net after costs) across strategies -> capped for the London day; non-stop losses count too.
+  mg.recordExit(st, { mint: 'M2', reason: 'time', strategyId: 'momentum-entry', pnlSol: -0.004 }, cfg, t + 1000);
+  assert.strictEqual(mg.check(st, 'M2', cfg, t + 2000), null);
+  mg.recordExit(st, { mint: 'M2', reason: 'lock', strategyId: 'ncs_fresh_momentum_v1', pnlSol: -0.001 }, cfg, t + 3000);
   assert.strictEqual(mg.check(st, 'M2', cfg, t + 120000).reason, 'mint-daily-cap');
-  assert.strictEqual(mg.check(st, 'M2', cfg, Date.parse('2026-11-21T00:00:01Z')), null);
+  assert.strictEqual(mg.check(st, 'M2', cfg, Date.parse('2026-11-21T00:00:01Z')), null); // new London day
+  // A winner as the last closed trade lifts the cap (cooldown still applies separately).
+  mg.recordExit(st, { mint: 'M2', reason: 'tp', strategyId: 'momentum-entry', pnlSol: 0.01 }, cfg, t + 4000);
+  assert.strictEqual(mg.check(st, 'M2', cfg, t + 120000), null);
+  mg.recordExit(st, { mint: 'M2', reason: 'time', strategyId: 'momentum-entry', pnlSol: -0.002 }, cfg, t + 5000);
+  assert.strictEqual(mg.check(st, 'M2', cfg, t + 120000).reason, 'mint-daily-cap'); // 3 losses, last a loser
+  // Winning trade on a fresh mint never caps; a winning stop-type exit (e.g. sl after slippage +) still cools down.
+  mg.recordExit(st, { mint: 'M3', reason: 'tp', pnlSol: 0.02 }, cfg, t); mg.recordExit(st, { mint: 'M3', reason: 'trail', pnlSol: 0.01 }, cfg, t + 1);
+  assert.strictEqual(mg.check(st, 'M3', cfg, t + 2), null);
   assert.strictEqual(mg.londonDay(Date.parse('2026-07-01T23:30:00Z')), '2026-07-02');
   assert.strictEqual(mg.londonDay(Date.parse('2026-11-20T23:30:00Z')), '2026-11-20');
   const s = mg.summary(st, cfg, t + 120000);
-  assert.strictEqual(s.inCooldown.length, 1); assert.strictEqual(s.dailyCapped.length, 1);
+  assert.strictEqual(s.inCooldown.length, 1); assert.strictEqual(s.dailyCapped.length, 1); assert.strictEqual(s.dailyCapped[0].losses, 3);
   // Not part of any strategy hash.
-  assert.ok(!JSON.stringify(config.strategies).includes('maxEntriesPerDay'));
+  assert.ok(!JSON.stringify(config.strategies).includes('maxLossesPerDay'));
 });
 
-test('PR4 mint guard seeding from trades.jsonl + open positions is idempotent (today counts, restarts do not double count)', () => {
+test('PR4.1 mint guard seeding from trades.jsonl (losing trades today, last result, cooldowns) is idempotent', () => {
   const mg = require('../src/mintGuard');
   const cfg = config.mintGuard;
   const now = Date.parse('2026-11-20T15:10:00Z');
   const trades = [
-    { id: 'a', mint: 'SHIT1', symbol: 'SHIT', strategyId: 'momentum-entry', entryTime: '2026-11-20T13:00:00Z', closedAt: '2026-11-20T13:20:00Z', exitReason: 'sl' },
-    { id: 'b', mint: 'SHIT1', symbol: 'SHIT', strategyId: 'momentum-entry', entryTime: '2026-11-20T14:00:00Z', closedAt: '2026-11-20T14:05:00Z', exitReason: 'hard-stop' },
-    { id: 'c', mint: 'OLD1', strategyId: 'aggressive-flow', entryTime: '2026-11-19T10:00:00Z', closedAt: '2026-11-19T10:05:00Z', exitReason: 'sl' },
-    { id: 'd', mint: 'TP1', strategyId: 'aggressive-flow', entryTime: '2026-11-20T15:00:00Z', closedAt: '2026-11-20T15:05:00Z', exitReason: 'tp' }
+    { id: 'b', mint: 'SHIT1', symbol: 'SHIT', strategyId: 'momentum-entry', entryTime: '2026-11-20T14:00:00Z', closedAt: '2026-11-20T14:05:00Z', exitReason: 'hard-stop', pnlSol: -0.02 },
+    { id: 'a', mint: 'SHIT1', symbol: 'SHIT', strategyId: 'momentum-entry', entryTime: '2026-11-20T13:00:00Z', closedAt: '2026-11-20T13:20:00Z', exitReason: 'sl', pnlSol: -0.012 },
+    { id: 'c', mint: 'OLD1', strategyId: 'aggressive-flow', entryTime: '2026-11-19T10:00:00Z', closedAt: '2026-11-19T10:05:00Z', exitReason: 'sl', pnlSol: -0.01 },
+    { id: 'c2', mint: 'OLD1', strategyId: 'aggressive-flow', entryTime: '2026-11-19T11:00:00Z', closedAt: '2026-11-19T11:05:00Z', exitReason: 'time', pnlSol: -0.01 },
+    { id: 'd', mint: 'TP1', strategyId: 'aggressive-flow', entryTime: '2026-11-20T15:00:00Z', closedAt: '2026-11-20T15:05:00Z', exitReason: 'tp', pnlSol: 0.004 },
+    { id: 'l1', mint: 'LOSS2', strategyId: 'momentum-entry', entryTime: '2026-11-20T10:00:00Z', closedAt: '2026-11-20T10:10:00Z', exitReason: 'time', pnlSol: -0.003 },
+    { id: 'l2', mint: 'LOSS2', strategyId: 'aggressive-flow', entryTime: '2026-11-20T11:00:00Z', closedAt: '2026-11-20T11:10:00Z', exitReason: 'lock', pnlSol: -0.001 },
+    { id: 'w1', mint: 'WIN2', strategyId: 'momentum-entry', entryTime: '2026-11-20T09:00:00Z', closedAt: '2026-11-20T09:10:00Z', exitReason: 'time', pnlSol: -0.003 },
+    { id: 'w2', mint: 'WIN2', strategyId: 'momentum-entry', entryTime: '2026-11-20T09:20:00Z', closedAt: '2026-11-20T09:30:00Z', exitReason: 'time', pnlSol: -0.003 },
+    { id: 'w3', mint: 'WIN2', strategyId: 'momentum-entry', entryTime: '2026-11-20T09:40:00Z', closedAt: '2026-11-20T09:50:00Z', exitReason: 'tp', pnlSol: 0.02 }
   ];
   const st = { openPositions: [{ id: 'e', mint: 'TP1', entryTime: '2026-11-20T15:06:00Z' }] };
   for (let i = 0; i < 2; i++) {
@@ -818,10 +849,15 @@ test('PR4 mint guard seeding from trades.jsonl + open positions is idempotent (t
     assert.strictEqual(st.mintGuard.entries['2026-11-20'].SHIT1, 2);
     assert.strictEqual(st.mintGuard.entries['2026-11-20'].TP1, 2);
     assert.strictEqual(st.mintGuard.entries['2026-11-20'].OLD1, undefined);
+    assert.strictEqual(st.mintGuard.losses['2026-11-20'].SHIT1, 2); // re-seeding does not double count
+    assert.strictEqual(st.mintGuard.losses['2026-11-20'].LOSS2, 2);
   }
   assert.strictEqual(mg.check(st, 'SHIT1', cfg, now).reason, 'cooldown');
-  assert.strictEqual(mg.check(st, 'TP1', cfg, now).reason, 'mint-daily-cap');
-  assert.strictEqual(mg.check(st, 'OLD1', cfg, now), null);
+  assert.strictEqual(mg.check(st, 'SHIT1', cfg, now + 3 * 3600000).reason, 'mint-daily-cap'); // after the cooldown: 2 losses today
+  assert.strictEqual(mg.check(st, 'TP1', cfg, now), null);   // 2 entries, last a winner -> free
+  assert.strictEqual(mg.check(st, 'LOSS2', cfg, now).reason, 'mint-daily-cap');
+  assert.strictEqual(mg.check(st, 'WIN2', cfg, now), null);  // 2 losses then a TP -> may re-enter
+  assert.strictEqual(mg.check(st, 'OLD1', cfg, now), null);  // yesterday's losses don't count
 });
 
 test('PR4 broken-quote denylist: gap > 50%, no reverse route, NaN/zero output; seeded from trades/events/shadow; permanent', () => {
