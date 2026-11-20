@@ -25,6 +25,14 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
       if (q && q.txnsM5 && em.zeroSellsMinBuysM5 && (q.txnsM5.sells || 0) === 0 && (q.txnsM5.buys || 0) >= em.zeroSellsMinBuysM5) {
         return close('emergency-nosells');
       }
+    }
+    // Entry grace (as AF): only the hard stop from the entry fill (judged sell-quote PnL) can fire;
+    // emergency exits above stay active.
+    if (ex.graceSec > 0 && minsOpen * 60 < ex.graceSec) {
+      if (priceFresh && ex.hardStopPct > 0 && changePct <= -ex.hardStopPct) return close('hard-stop');
+      return null;
+    }
+    if (priceFresh) {
       if (!pos.tp1Done && changePct <= -ex.stopLossPct) return close('sl');
       // Profit lock before TP1: once the judged net peak reached lockAfterPct, exit at lockAtPct.
       if (!pos.tp1Done && ex.lockAfterPct) {

@@ -141,7 +141,8 @@ test('legacy strategies keep $50k floor and exclude JUP/Bonk by mint', () => {
 
 // ---------- exits ----------
 const now = Date.now();
-const ncsPos = (over = {}) => ({ strategyType: 'ncs', exit: ncs.exit, entryPrice: 1, entryFillPrice: 1.01, sizeSol: 0.1, entryTime: new Date(now).toISOString(), highest: 1, remainingFrac: 1, entryLiquidityUsd: 20000, ...over });
+const ncsPos = (over = {}) => ({ strategyType: 'ncs', exit: ncs.exit, entryPrice: 1, entryFillPrice: 1.01, sizeSol: 0.1, entryTime: new Date(now - 61000).toISOString(), // past the 60s grace (batch2)
+  highest: 1, remainingFrac: 1, entryLiquidityUsd: 20000, ...over });
 test('NCS exits: tp1 partial 50%, tp2, sl, breakeven + trail after tp1, time stops, emergency', () => {
   let d = decide(ncsPos(), 1.26, true, null, now); assert.strictEqual(d.action, 'partial'); near(d.sellFrac, 0.5);
   d = decide(ncsPos({ tp1Done: true, remainingFrac: 0.5, highest: 1.6 }), 1.61, true, null, now); assert.strictEqual(d.reason, 'tp2'); near(d.sellFrac, 0.5);
@@ -351,10 +352,10 @@ const shadow = require('../src/shadow');
 test('no strategy is paused/shadowed; aggressive-flow trades at half size (0.1) behind 3% gap cap (batch1) + 3% round trip', () => {
   for (const st of config.strategies) assert.ok(!shadow.isDisabled(st) && !shadow.isShadow(st), st.id);
   const af = config.strategies.find(s => s.id === 'aggressive-flow');
-  assert.strictEqual(af.sizeSol, 0.1);
+  assert.strictEqual(af.sizeSol, 0.05); // batch2
   const cfg = config.quoteSanityFor(af);
   assert.strictEqual(cfg.maxQuoteGapPct, 3); assert.strictEqual(cfg.maxRoundTripLossPct, 3);
-  const p = Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 20000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 1, h1: 3, h6: 0, h24: 0 } });
+  const p = Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 200000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 1, h1: 3, h6: 0, h24: 0 } });
   const split = shadow.splitSignals(generateSignals([p]).signals);
   assert.ok(split.real.some(sg => sg.strategyId === 'aggressive-flow')); assert.strictEqual(split.shadow.length, 0);
 });
@@ -366,7 +367,7 @@ test('shadow code path (kept for future use): a shadowed strategy opens no real 
   const mom = config.strategies.find(s => s.id === 'momentum-entry');
   assert.ok(shadow.isDisabled(af) && shadow.isShadow(af));
   assert.ok(!shadow.isDisabled(mom));
-  const p = Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 20000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 1, h1: 3, h6: 0, h24: 0 } });
+  const p = Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 200000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 1, h1: 3, h6: 0, h24: 0 } });
   const { signals } = generateSignals([p]);
   assert.ok(signals.some(sg => sg.strategyId === 'aggressive-flow'), 'aggressive-flow still scans');
   const split = shadow.splitSignals(signals);
@@ -395,7 +396,9 @@ test('free slots: momentum-entry up to 8; NCS capped at 2 by the allocator (spec
   const pos = (id, tier) => ({ strategyId: id, tier, sizeSol: 0.05 });
   const seven = Array.from({ length: 7 }, () => pos('momentum-entry'));
   assert.strictEqual(slotStatus({ balance: 4, openPositions: seven }, mom, config), null);
-  assert.strictEqual(slotStatus({ balance: 4, openPositions: seven.concat([pos('momentum-entry')]) }, mom, config).max, 8);
+  // batch2: momentum's allocator cap is 12 (bounded by the global cap), not 8.
+  assert.strictEqual(slotStatus({ balance: 4, openPositions: seven.concat([pos('momentum-entry')]) }, mom, config), null);
+  assert.strictEqual(slotStatus({ balance: 4, openPositions: Array.from({ length: 12 }, () => pos('momentum-entry')) }, mom, config).scope, 'global');
   const twoA = Array.from({ length: 2 }, () => pos(ncs.id, 'A'));
   assert.strictEqual(slotStatus({ balance: 4, openPositions: twoA }, ncs, config, 'A').max, 2);
   assert.strictEqual(ncs.maxOpen, 5);
@@ -421,7 +424,7 @@ test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawd
 });
 test('config hashes: all three changed (sell-quote exits + per-strategy gap caps; aggressive-flow also half size)', () => {
   assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': '26ad0c25a969', 'momentum-entry': 'fc3fd9a29a5c', ncs_fresh_momentum_v1: '519d1125f74c'
+    'aggressive-flow': '8b334effdbfb', 'momentum-entry': 'fc3fd9a29a5c', ncs_fresh_momentum_v1: '694b165387f0'
   });
 });
 
@@ -573,8 +576,8 @@ test('entry grace (aggressive-flow + momentum-entry): first 60s only a -15% hard
     // After 60s the normal SL applies to the same -5.9% (measured from the fill, not mid: mid here is flat).
     assert.strictEqual(decide(pos, j.price, true, null, now + 52000).reason, 'sl');
   }
-  // NCS is unchanged (no grace).
-  assert.strictEqual(stratById('ncs_fresh_momentum_v1').exit.graceSec, undefined);
+  // batch2: NCS uses the same 60s grace / 15% hard stop.
+  assert.strictEqual(stratById('ncs_fresh_momentum_v1').exit.graceSec, 60);
 });
 
 test('after a restart (no sell quote yet) SL/trail/TP wait for a real quote; hard stop / emergency may fire on the model', () => {
@@ -705,6 +708,53 @@ test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1
   const tp1 = decide(N({ judgedHigh: 1.16 }), 1.16, true, null, now);
   assert.strictEqual(tp1.reason, 'tp1'); assert.strictEqual(tp1.sellFrac, 0.5);
   assert.strictEqual(ncsS.exit.trailAfterTp1Pct, 10);
+});
+
+test('batch2: AF 0.05 SOL, v/l >= 0.52, m5 buys > sells (fail closed), h1 > 0; NCS grace + fill stop, tier B half; allocator', () => {
+  const { pickBumpVictim } = require('../src/slots');
+  assert.strictEqual(config.strategyHashes['momentum-entry'], 'fc3fd9a29a5c');
+  const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
+  assert.strictEqual(af.sizeSol, 0.05);
+  const P = () => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 120000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 0, h1: 1, h6: 0, h24: 0 } });
+  assert.deepStrictEqual(evaluate(P(), af).fails, []);
+  let p = P(); p.volumeH1 = 100000; assert.ok(evaluate(p, af).fails.includes('volumeToLiquidity>=0.52')); // 0.5 < 0.52
+  p = P(); p.txnsM5 = { buys: 20, sells: 20 }; assert.ok(evaluate(p, af).fails.includes('buysGtSellsM5>=1'));
+  p = P(); p.txnsM5 = undefined; assert.ok(evaluate(p, af).fails.includes('buysGtSellsM5>=1'));       // missing -> fail closed
+  p = P(); p.txnsM5 = { buys: '30', sells: null }; assert.ok(evaluate(p, af).fails.includes('buysGtSellsM5>=1'));
+  p = P(); p.priceChange.h1 = 0; assert.ok(evaluate(p, af).fails.includes('h1>0'));
+  p = P(); p.priceChange.h1 = undefined; assert.ok(evaluate(p, af).fails.includes('h1>0'));            // missing -> fail closed
+  assert.strictEqual(af.exit.stallAfterMin, 6); // stall exit kept
+  // NCS: Raja-like -14% (vs the paper fill) 9s after entry is held in grace; -16% -> hard stop; emergency still fires.
+  const now = Date.now();
+  const N = (secAgo, extra = {}) => ({ strategyId: ncsS.id, strategyType: 'ncs', exit: ncsS.exit, entryTime: new Date(now - secAgo * 1000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.033, remainingFrac: 1, highest: 1, entryLiquidityUsd: 20000, ...extra });
+  assert.strictEqual(ncsS.exit.graceSec, 60); assert.strictEqual(ncsS.exit.hardStopPct, 15); assert.strictEqual(ncsS.exit.stopFrom, 'fill');
+  assert.strictEqual(decide(N(9), 0.86, true, null, now), null);
+  assert.strictEqual(decide(N(9), 0.84, true, null, now).reason, 'hard-stop');
+  assert.strictEqual(decide(N(9), 1, true, { liquidityUsd: 13000, txnsM5: { buys: 5, sells: 5 } }, now).reason, 'emergency-liq');
+  assert.strictEqual(decide(N(61), 0.87, true, null, now).reason, 'sl');
+  // Stop is measured from the paper fill: judged net PnL vs entryFillPrice (not mid).
+  const { judgeExit } = require('../src/sellAgent');
+  const pos = N(61, { entryFillPrice: 1.05, entryTxCostSol: 0 });
+  const j = judgeExit(pos, { quote: { ok: true, quotedPriceUsd: 1.05 * 0.87 }, midPrice: 1.0, liquidityUsd: 20000, solUsd: 72 });
+  assert.strictEqual(decide(pos, j.price, true, null, now).reason, 'sl'); // mid flat, fill-based -13% -> sl
+  // Tier B half size.
+  assert.strictEqual(ncsS.universe.tiers.B.sizeMult, 0.5); assert.strictEqual(ncsS.universe.tiers.A.sizeMult, 1.0);
+  // Allocator: with 0 momentum open, AF fills to 4 and NCS to 2 (own caps, not the reserve); total <= 12.
+  const O = (id, n, ageSec = 600) => Array.from({ length: n }, () => ({ strategyId: id, sizeSol: 0.05, remainingFrac: 1, entryTime: new Date(now - ageSec * 1000).toISOString(), lastJudge: { netPct: -1 } }));
+  assert.strictEqual(slotStatus({ balance: 2.3, openPositions: O('aggressive-flow', 3) }, af, config), null);
+  assert.strictEqual(slotStatus({ balance: 2.3, openPositions: O('aggressive-flow', 3).concat(O(ncsS.id, 1)) }, ncsS, config, 'A'), null);
+  const st = slotStatus({ balance: 2.3, openPositions: O('aggressive-flow', 4).concat(O(ncsS.id, 2)) }, af, config);
+  assert.strictEqual(st.scope, 'strategy'); assert.strictEqual(st.open, 4); assert.strictEqual(st.max, 4); // per-strategy counts (6/12 total open)
+  // Momentum (the 13:39 case): 8 momentum + 3 others = 11/12 -> momentum may enter (was skipped at its own 8/8).
+  assert.strictEqual(slotStatus({ balance: 2.3, openPositions: O('momentum-entry', 8).concat(O('aggressive-flow', 3)) }, mom, config), null);
+  // 12/12 (8 momentum + 4 AF): momentum is globally full but can bump the weakest AF.
+  const full = O('momentum-entry', 8).concat(O('aggressive-flow', 4));
+  assert.strictEqual(slotStatus({ balance: 2.3, openPositions: full }, mom, config).scope, 'global');
+  const v = pickBumpVictim({ openPositions: full }, config, 'momentum-entry', now);
+  assert.ok(v && v.strategyId === 'aggressive-flow');
+  assert.strictEqual(slotStatus({ balance: 2.3, openPositions: full.filter(x => x !== v) }, mom, config), null);
+  // Global cap still holds for everyone.
+  assert.strictEqual(slotStatus({ balance: 3, openPositions: O('momentum-entry', 12) }, mom, config).scope, 'global');
 });
 
 (async () => {

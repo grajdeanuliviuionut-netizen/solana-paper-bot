@@ -74,8 +74,14 @@ const strategies = [
     universe: { minAgeDays: 0, maxAgeDays: null, minLiquidityUsd: 50000, maxLiquidityUsd: 1000000 },
     entry: [
       { field: 'buySellRatioM5', op: '>=', value: 0.8 },
-      { field: 'volumeToLiquidity', op: '>=', value: 0.03 },
-      { field: 'm5', op: '>=', value: -2 }
+      // Batch2 (13:57, RA freeze exception): AF was 2/16, -0.061 SOL since 12:32. Only the top half of
+      // passes by volume/liquidity: 0.52 = median volumeH1/liquidityUsd of the 16 AF entries since 12:32
+      // (/api/trades?all=1 entryGates; was 0.03).
+      { field: 'volumeToLiquidity', op: '>=', value: 0.52 },
+      { field: 'm5', op: '>=', value: -2 },
+      // m5 buys > sells (DEX Screener txns.m5; missing data fails closed) and h1 > 0.
+      { field: 'buysGtSellsM5', op: '>=', value: 1 },
+      { field: 'h1', op: '>', value: 0 }
     ],
     // Batch1 (post-6pm): since 12:32 at 0.1 SOL, TP6 was never reached (best MFE +5.1% mid), trails armed at
     // +3 exited ~0%, and stop-outs had MFE <= 0 and bled for 13-17 min before -5.7%. Lower TP, tighter
@@ -83,7 +89,7 @@ const strategies = [
     exit: { takeProfitPct: 4, stopLossPct: 5, trailAfterPct: 2.5, trailPct: 1.25, maxHoldMinutes: 25, judgeOn: 'sell-quote',
       stallAfterMin: 6, stallMaxPeakPct: 1, stallLossPct: 2.5, ...entryGrace },
     quoteSanity: { maxQuoteGapPct: 3 }, // batch1: observed entry gaps since 12:32 within -2.1..+1.4%; 3% cap (+ global 3% round trip)
-    sizeSol: 0.1, // re-enabled 2026-11-20 12:29 at half size (was 0.2)
+    sizeSol: 0.05, // batch2 13:57: 0.1 -> 0.05 (re-enabled 12:29 at 0.1, was 0.2)
     maxOpen: 6
   },
   {
@@ -144,7 +150,11 @@ const strategies = [
       timeStop: { ifNotAbovePct: 5, afterMin: 15 },
       maxHoldMinutes: 30,
       emergency: { liqDropFromEntryPct: 30, zeroSellsMinBuysM5: 10 },
-      judgeOn: 'sell-quote' // SL/TP1/TP2/trail/breakeven/time judged on the Jupiter sell quote, net of tx costs
+      judgeOn: 'sell-quote', // SL/TP1/TP2/trail/breakeven/time judged on the Jupiter sell quote, net of tx costs
+      // Batch2 (13:57): 0/3 on 519d1125 with stops at 9-27s. Stop measured from the actual paper fill
+      // (judged sell-quote PnL vs entryFillPrice) and, as for AF, the first 60s only a -15% hard stop
+      // (emergency rug/liquidity exits stay active).
+      stopFrom: 'fill', ...entryGrace
     },
     quoteSanity: { maxQuoteGapPct: 8 },
     // Tier A = base size (2% of equity), tier B = half of that (universe.tiers.*.sizeMult).
@@ -196,7 +206,9 @@ const strategyOps = {
   // reserve of 5 slots (allocator below). Over-cap positions are not force-closed; they only block
   // new entries of that strategy.
   'aggressive-flow': { enabled: true, priority: 3, maxOpen: 4 },
-  'momentum-entry': { enabled: true, maxOpen: 8, priority: 1 },
+  // Batch2: momentum's allocator cap 8 -> 12 (bounded by the global cap): at 13:39-13:40 momentum was skipped
+  // at its own 8/8 while the book had 11/12 open. Outside the configHash.
+  'momentum-entry': { enabled: true, maxOpen: 12, priority: 1 },
   // NCS: spec sizing.max_concurrent_positions = 5 is kept; free slots go to tier A first (priority),
   // tier B is served after momentum-entry and tier A.
   ncs_fresh_momentum_v1: { enabled: true, tierPriority: { A: 1, B: 2 }, priority: 1, maxOpen: 2 }
@@ -215,7 +227,7 @@ const allocator = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'tune-batch1-af-ncs-fullstop-2026-11-20',
+  buildId: 'tune-batch2-af-ncs-allocator-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',

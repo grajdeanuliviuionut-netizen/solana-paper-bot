@@ -9,12 +9,17 @@ function ratio(t) {
 
 function getFieldValue(pair, field) {
   switch (field) {
-    case 'h1': return pair.priceChange.h1;
+    case 'h1': return pair.priceChange && Number.isFinite(pair.priceChange.h1) ? pair.priceChange.h1 : NaN; // NaN fails every comparison
     case 'm5': return pair.priceChange.m5;
     case 'h6': return pair.priceChange.h6;
     case 'h24': return pair.priceChange.h24;
     case 'buySellRatioH1': return ratio(pair.txns);
     case 'buySellRatioM5': return ratio(pair.txnsM5);
+    // 1 when the m5 txn counts are present and buys > sells; missing/non-numeric data fails closed (0).
+    case 'buysGtSellsM5': {
+      const t = pair.txnsM5;
+      return t && Number.isFinite(t.buys) && Number.isFinite(t.sells) && t.buys > t.sells ? 1 : 0;
+    }
     case 'buysH1': return pair.txns.buys || 0;
     case 'sellsH1': return pair.txns.sells || 0;
     case 'volumeToLiquidity': return pair.volumeH1 / (pair.liquidityUsd || 1);
