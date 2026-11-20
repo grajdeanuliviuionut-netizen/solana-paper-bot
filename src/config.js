@@ -105,7 +105,11 @@ const strategies = [
     // Time stop at maxHoldMinutes exits only when the position is under water (mid PnL < 0%);
     // otherwise a timeTrailPct trailing stop arms at max hold (high-water mark from that moment).
     // judgeOn 'sell-quote': TP/SL/trail/time triggers use the Jupiter sell quote at position size, net of tx costs.
-    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40, timeStopOnlyIfLoss: true, timeTrailPct: 5, judgeOn: 'sell-quote', ...entryGrace },
+    // From branch commit 98074ad (merged 15:07, RA lifted the momentum freeze): 10 of 25 session trades
+    // hit the 40-min time exit at avg -3.3% while every TP came within 21 min -> max hold 25. Huss fell
+    // through the 6% stop during the 60s grace (-9.05% at 69s) -> grace 30s with a 10% hard stop.
+    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 25, timeStopOnlyIfLoss: true, timeTrailPct: 5, judgeOn: 'sell-quote', ...entryGrace,
+      graceSec: num('MOMENTUM_GRACE_SEC', 30), hardStopPct: num('MOMENTUM_HARD_STOP_PCT', 10) },
     quoteSanity: { maxQuoteGapPct: 5 }, // entry |Jupiter vs model| cap for this strategy (global default 15)
     sizeSol: 0.2,
     maxOpen: 6
@@ -225,10 +229,24 @@ const allocator = {
   // (exit reason 'bumped'), never one still inside its entry grace.
   bump: { for: ['momentum-entry'], victims: ['aggressive-flow'], minAgeSec: entryGrace.graceSec, maxPerTick: 2 }
 };
+// ---- Per-mint guards for ALL strategies (outside every configHash). See src/mintGuard.js.
+const mintGuard = {
+  stopCooldownMin: num('MINT_STOP_COOLDOWN_MIN', 120),  // no re-entry for 2h after a stop-type exit
+  // Exit reasons counted as stop-losses: SL, hard stop (incl. entry-grace hard stop and the
+  // awaiting-quote hard stop), stall, and the emergency (rug / liquidity / no-sells) exits.
+  stopReasons: ['sl', 'hard-stop', 'stall', 'emergency-liq', 'emergency-nosells', 'emergency-rug'],
+  maxEntriesPerDay: num('MINT_MAX_ENTRIES_PER_DAY', 2), // per mint per London day, across strategies
+  brokenGapPct: 50,                                     // quote vs model gap that marks a broken quote
+  // Known broken-quote mints (also found from trades/events/shadow history at startup).
+  seedBrokenMints: [
+    { mint: 'HmBGdetVsQTRHh2wCa4HykUpKA7NJ1B8S16tUpYiWeaZ', symbol: 'RUDY', reason: '11:29 drained pool: 99.99999% impact, quote 7.97e9% vs model' },
+    { mint: 'GjFvarRNRrq5tL6K2qdY7Xv2ZEbVrstqjW1BW4hMpump', symbol: 'RUDY', reason: 'RA 15:07: broken/absurd quote history' }
+  ]
+};
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'tune-batch2-af-ncs-allocator-2026-11-20',
+  buildId: 'pr4-mint-guards-momentum-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
@@ -257,6 +275,7 @@ const config = {
   quoteSanity,
   quoteSanityFor,
   exitQuotes,
+  mintGuard,
   allocator,
   entryGrace,
   ncsRealisticStopPct: num('NCS_REALISTIC_STOP_PCT', -25), // /api/trades expectancy: NCS stop-outs re-priced at this

@@ -18,6 +18,7 @@ const rugGate = require('./rugGate');
 const memory = require('./marketMemory');
 const rej = require('./rejections');
 const denylist = require('./denylist');
+const mintGuard = require('./mintGuard');
 const { initLive } = require('./live/executor');
 
 // Never let one bad promise or exception kill the process / scan loop.
@@ -28,6 +29,23 @@ process.on('uncaughtException', err => { console.error('[uncaughtException] exit
 let state = loadState(config.startingSol, config.buildId);
 state.cooldowns = state.cooldowns || {};
 state.guards = state.guards || {};
+// Per-mint guards (stop cooldown, daily cap, broken-quote denylist), seeded from the logs so today's history counts.
+{
+  const path = require('path');
+  const dataDir = path.dirname(config.stateFile);
+  const ms = mintGuard.seed(state, {
+    trades: mintGuard.readJsonl(config.tradesFile),
+    events: mintGuard.readJsonl(process.env.EVENTS_FILE || path.join(dataDir, 'events.jsonl')),
+    shadowRows: mintGuard.readJsonl(process.env.SHADOW_FILE || path.join(dataDir, 'shadow.jsonl')),
+    openPositions: state.openPositions
+  }, config.mintGuard);
+  console.log(`[mint-guard] seeded: inCooldown=${ms.inCooldown.length} dailyCapped=${ms.dailyCapped.length} entriesToday=${ms.entriesToday} brokenQuoteMints=${ms.brokenQuoteMints.length} (${ms.brokenQuoteMints.map(b => `${b.symbol}:${b.mint.slice(0, 6)}`).join(', ')})`);
+}
+function markBroken(rec, reason) {
+  if (mintGuard.addBroken(state, { mint: rec.mint, symbol: rec.symbol, reason, source: 'live' })) {
+    rej.event('broken-quote-denied', { mint: rec.mint, symbol: rec.symbol, strategyId: rec.strategyId, brokenReason: reason });
+  }
+}
 // Live-mode risk state survives restarts AND build resets (kill switch stays on until cleared).
 const liveStateFile = require('path').join(require('path').dirname(config.stateFile), 'live-state.json');
 function loadLiveState() {
@@ -187,6 +205,7 @@ async function sellLeg(pos, d, q, solUsd) {
   if (sq && !sq.ok) {
     pos.exitQuoteFailures = (pos.exitQuoteFailures || 0) + 1;
     rej.event('exit-quote-failed', { source: 'jupiter', mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, reason: d.reason, noRoute: !!sq.noRoute, error: sq.error });
+    if (sq.noRoute) markBroken(pos, 'sell no-route');
   }
   // Conservative fill: the worse of the depth model and the real Jupiter quote at the same size
   // (quote also gets the stop/failed-exit delay drift).
@@ -202,6 +221,8 @@ async function sellLeg(pos, d, q, solUsd) {
     if (exitSanity.insane) {
       fillSource = 'depth-quote-insane';
       rej.event('exit-quote-insane', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, reason: d.reason, reasons: exitSanity.reasons, quotedPriceUsd: sq.quotedPriceUsd, modelPriceUsd: fill.price, priceImpactPct: sq.priceImpactPct });
+      const broken = mintGuard.brokenFromExitSanity(exitSanity, config.mintGuard);
+      if (broken) markBroken(pos, broken);
     } else if (config.fills.useWorseOfQuote && quotedAdj < fillPrice) { fillPrice = quotedAdj; fillSource = 'jupiter'; }
   }
   const gapPct = sq && sq.ok ? fillGapPct('sell', sq.quotedPriceUsd * (1 - (fill.driftPct || 0) / 100), fill.price) : null;
@@ -294,6 +315,7 @@ function finalizeTrade(pos, finalReason, fresh) {
   if (state.trades.length > 100) state.trades.pop();
   logTrade(trade);
   state.cooldowns[pos.mint] = Date.now() + ((strategyById(pos.strategyId) || {}).reentryCooldownMinutes || config.reentryCooldownMinutes) * 60000;
+  mintGuard.recordExit(state, { mint: pos.mint, reason: finalReason, symbol: pos.symbol, strategyId: pos.strategyId }, config.mintGuard);
   const g = guardFor(pos.strategyId);
   g.dayPnlSol += pnl;
   if (finalReason !== 'bumped') g.consecLosses = pnl < 0 ? g.consecLosses + 1 : 0; // a bump is an allocator decision, not a strategy loss streak
@@ -338,7 +360,11 @@ async function judgeOnQuote(pos, q, mid, solUsd, budget) {
     const liq = (q && q.liquidityUsd) || pos.entryLiquidityUsd || 0;
     const model = fillModel.fillExit({ midPrice: mid, valueUsd: pos.sizeSol * frac * solUsd * (mid / pos.entryFillPrice), liquidityUsd: liq, reason: 'judge', rng: () => 1 }).price;
     const chk = quoteSanity.checkExit({ sell: quote, quotedAdj: quote.quotedPriceUsd, modelPrice: model });
-    if (chk.insane) { why = `quote-insane ${chk.reasons.join(',')}`; quote = null; }
+    if (chk.insane) {
+      why = `quote-insane ${chk.reasons.join(',')}`; quote = null;
+      const broken = mintGuard.brokenFromExitSanity(chk, config.mintGuard);
+      if (broken) markBroken(pos, broken);
+    }
   } else quote = null;
   let w = quoteWait.get(pos.id);
   if (!w) { w = { since: now, got: false }; quoteWait.set(pos.id, w); }
@@ -516,6 +542,8 @@ function quoteSanitySkip(strat, sig, q, qc) {
     reverseOk: qc.rev ? !!qc.rev.ok : null, roundTripLossPct: qc.sanity.roundTripLossPct, shadow: shadow.isShadow(strat) || undefined
   };
   noteSkip(rec);
+  const broken = mintGuard.brokenFromEntrySanity({ gapPct: qc.sanity.gapPct, reasons: qc.sanity.reasons, quotedPriceUsd: qc.sq && qc.sq.ok ? qc.sq.quotedPriceUsd : null }, config.mintGuard);
+  if (broken) markBroken(rec, broken);
   console.log(`[${rec.reason}] REJECT ${sig.symbol} ${sig.mint} pair=${sig.pairAddress} (${strat.id}${rec.shadow ? ' shadow' : ''}) ${rec.detail} mid=${q.priceUsd} model=${qc.fill.price.toPrecision(6)} jup=${rec.quotedPriceUsd ? Number(rec.quotedPriceUsd).toPrecision(6) : 'n/a'}`);
   return rec;
 }
@@ -606,6 +634,8 @@ async function processEntries(signals, solUsd) {
   // and then hit its cap, starving momentum-entry.
   for (const sig of orderCandidates(split.real, config)) {
     if (openMints.has(sig.mint) || seen.has(sig.mint)) continue;
+    const mg = mintGuard.check(state, sig.mint, config.mintGuard);
+    if (mg) { noteSkip({ strategyId: sig.strategyId, reason: mg.reason, detail: mg.detail, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol }); continue; }
     if (state.cooldowns[sig.mint]) { rej.count(sig.strategyId, 'cooldown'); continue; }
     const blocked = strategyBlocked(sig.strategy);
     if (blocked) { rej.count(sig.strategyId, blocked); continue; }
@@ -744,6 +774,7 @@ async function processEntries(signals, solUsd) {
       live
     };
     state.openPositions.push(pos);
+    mintGuard.recordEntry(state, sig.mint);
     if (!live) state.balance -= sizeSol + fill.txCostSol; // live positions don't touch the paper balance
     openMints.add(sig.mint);
     entries++;
@@ -940,6 +971,8 @@ app.get('/api/rejections', (req, res) => {
     tokenizedEquity: rej.skips.filter(k => k.reason === denylist.REASON).slice(0, limit),
     quoteSanity: rej.skips.filter(k => String(k.reason).startsWith(quoteSanity.REASON)).slice(0, limit),
     quoteSanityLimits: Object.assign({}, config.quoteSanity, { perStrategy: Object.fromEntries(config.strategies.map(st => [st.id, config.quoteSanityFor(st)])) }),
+    mintGuard: mintGuard.summary(state, config.mintGuard),
+    mintGuardSkips: rej.skips.filter(k => ['cooldown', 'mint-daily-cap', 'broken-quote-denylist'].includes(k.reason)).slice(0, limit),
     nearMisses: rej.nearMisses.slice(0, parseInt(req.query.limit || '100', 10)) });
 });
 
@@ -1004,7 +1037,7 @@ app.get('/api/live', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, build: config.buildId, mode: liveStatus.mode, ticks: tickCount, lastScan: lastScanSummary, lastUpdate: state.lastUpdate, balance: state.balance, equity: +equityOf(state).toFixed(6), fullStopBalance: config.fullStopBalance, fullStopBasis: 'equity', openPositions: state.openPositions.length, accountSince: state.startedAt || null, buildHistory: (state.buildHistory || []).slice(-5), configHashes: config.strategyHashes, strategies: strategyModes(), allocator: allocatorStatus(), shadowOpen: shadow.ensure(state).open.length, exitCheck: { everyMs: config.exitCheckMs, runs: exitChecks, last: lastExitCheckAt } });
+  res.json({ ok: true, build: config.buildId, mode: liveStatus.mode, ticks: tickCount, lastScan: lastScanSummary, lastUpdate: state.lastUpdate, balance: state.balance, equity: +equityOf(state).toFixed(6), fullStopBalance: config.fullStopBalance, fullStopBasis: 'equity', openPositions: state.openPositions.length, accountSince: state.startedAt || null, buildHistory: (state.buildHistory || []).slice(-5), configHashes: config.strategyHashes, strategies: strategyModes(), allocator: allocatorStatus(), mintGuard: mintGuard.summary(state, config.mintGuard), shadowOpen: shadow.ensure(state).open.length, exitCheck: { everyMs: config.exitCheckMs, runs: exitChecks, last: lastExitCheckAt } });
 });
 
 app.get('/', (req, res) => {
