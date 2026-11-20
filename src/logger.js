@@ -26,20 +26,24 @@ function freshState(startingSol, buildId) {
   };
 }
 
-// Loads persisted state. If it was written by a different build, starts fresh (the
-// append-only trade log is kept) so results are counted from this build onward.
+// Loads persisted state. Balance, open positions and history carry over across deploys
+// (a new buildId no longer resets the paper account). Go-live counts are per strategy
+// configHash, so they reset only when that strategy's parameters change.
+// Set RESET_STATE=1 to deliberately start a fresh paper account.
 function loadState(startingSol = 4, buildId = null) {
   ensureDir();
   try {
-    if (fs.existsSync(STATE_FILE)) {
+    if (process.env.RESET_STATE !== '1' && fs.existsSync(STATE_FILE)) {
       const state = JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
       if (buildId && state.build !== buildId) {
-        console.log(`State from build ${state.build || 'legacy'} -> starting fresh for ${buildId}`);
-        return freshState(startingSol, buildId);
+        console.log(`State from build ${state.build || 'legacy'} carried over to ${buildId} (balance=${Number(state.balance).toFixed(4)} open=${(state.openPositions || []).length})`);
+        state.buildHistory = (state.buildHistory || []).concat([{ build: buildId, at: new Date().toISOString(), from: state.build || null }]).slice(-20);
+        state.build = buildId;
       }
       if (!state.activity) state.activity = [];
       if (!state.trades) state.trades = [];
       if (!state.openPositions) state.openPositions = [];
+      if (!state.startedAt) state.startedAt = new Date().toISOString();
       if (typeof state.balance !== 'number') state.balance = startingSol;
       return state;
     }

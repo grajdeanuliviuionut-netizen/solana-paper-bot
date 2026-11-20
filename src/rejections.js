@@ -10,6 +10,10 @@ const hourly = {};       // hourKey -> strategyId -> gate -> count  (+ _evaluate
 const nearMisses = [];   // newest first, capped
 const nearMissSeen = new Map(); // `${strategy}:${mint}:${gate}` -> ts
 let lastLoggedHour = null;
+// Recent "skip" records (signals that passed the strategy gates but were not entered),
+// e.g. slot-full and tokenized-equity. Newest first, capped; deduped per strategy+mint+reason for 10 min.
+const skips = [];
+const skipSeen = new Map();
 
 function hourKey(t = Date.now()) {
   return new Date(t).toISOString().slice(0, 13) + ':00Z';
@@ -42,6 +46,18 @@ function nearMiss(rec) {
   append(NEARMISS_FILE, row);
 }
 
+function skip(rec, opts = {}) {
+  if (opts.count !== false) count(rec.strategyId, rec.reason);
+  const key = `${rec.strategyId}:${rec.mint}:${rec.reason}`;
+  const last = skipSeen.get(key) || 0;
+  if (Date.now() - last < 10 * 60 * 1000) return false;
+  skipSeen.set(key, Date.now());
+  skips.unshift({ time: new Date().toISOString(), ...rec });
+  if (skips.length > 300) skips.pop();
+  if (skipSeen.size > 20000) skipSeen.clear();
+  return true;
+}
+
 function event(type, data) {
   const row = { time: new Date().toISOString(), type, ...data };
   append(EVENTS_FILE, row);
@@ -64,4 +80,4 @@ function snapshot() {
   return { currentHour: hourKey(), hourly, nearMissFile: NEARMISS_FILE };
 }
 
-module.exports = { count, nearMiss, event, maybeLogHourly, snapshot, nearMisses, hourKey };
+module.exports = { count, nearMiss, skip, skips, event, maybeLogHourly, snapshot, nearMisses, hourKey };

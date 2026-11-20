@@ -5,16 +5,19 @@ const { getCandidatePairs, getPairsByAddress } = require('./dataFetcher');
 const { generateSignals } = require('./buyAgent');
 const { decide, legPnlSol } = require('./sellAgent');
 const fillModel = require('./fillModel');
+const { fillGapPct } = fillModel;
+const { slotStatus, formatSkips } = require('./slots');
 const jup = require('./jupiterQuote');
 const rugGate = require('./rugGate');
 const memory = require('./marketMemory');
 const rej = require('./rejections');
+const denylist = require('./denylist');
 
 // Never let one bad promise or exception kill the process / scan loop.
 process.on('unhandledRejection', err => console.error('[unhandledRejection]', err && err.stack || err));
 process.on('uncaughtException', err => { console.error('[uncaughtException] exiting so Railway restarts', err && err.stack || err); process.exit(1); });
 
-// Persisted across restarts (Railway volume at /app/data); resets only when buildId changes.
+// Persisted across restarts and deploys (Railway volume at /app/data); a new buildId keeps balance + open positions.
 let state = loadState(config.startingSol, config.buildId);
 state.cooldowns = state.cooldowns || {};
 state.guards = state.guards || {};
@@ -98,12 +101,13 @@ async function sellLeg(pos, d, q, solUsd) {
     const quotedAdj = sq.quotedPriceUsd * (1 - (fill.driftPct || 0) / 100);
     if (quotedAdj < fillPrice) { fillPrice = quotedAdj; fillSource = 'jupiter'; }
   }
+  const gapPct = sq && sq.ok ? fillGapPct('sell', sq.quotedPriceUsd * (1 - (fill.driftPct || 0) / 100), fill.price) : null;
   const pnl = legPnlSol(pos, fillPrice, d.sellFrac);
   const leg = {
     time: new Date().toISOString(), reason: d.reason, sellFrac: d.sellFrac, tokens,
     midPrice: d.fillPrice, fillPrice, fillSource, modelPrice: fill.price, impactPct: fill.impactPct, slippagePct: fill.slippagePct,
     feePct: fill.feePct, driftPct: fill.driftPct, stop: fill.stop, failedFirst: fill.failedFirst,
-    txCostSol: fill.txCostSol, pnlSol: pnl, shadow
+    txCostSol: fill.txCostSol, pnlSol: pnl, fillGapPct: gapPct, shadow
   };
   if (fill.failedFirst) rej.event('exit-failed-retried', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, reason: d.reason, driftPct: fill.driftPct });
   pos.legs = pos.legs || [];
@@ -120,6 +124,12 @@ function finalizeTrade(pos, finalReason, fresh) {
   const pnl = legPnl - (pos.entryTxCostSol || 0) - legs.reduce((a, l) => a + l.txCostSol, 0);
   const soldFrac = legs.reduce((a, l) => a + l.sellFrac, 0) || 1;
   const last = legs[legs.length - 1] || {};
+  const gapLegs = legs.filter(l => l.fillGapPct != null || (l.shadow && l.shadow.ok && l.shadow.deltaPct != null));
+  const legGap = l => (l.fillGapPct != null ? l.fillGapPct : -l.shadow.deltaPct);
+  const gapFrac = gapLegs.reduce((a, l) => a + l.sellFrac, 0);
+  const exitFillGapPct = gapFrac > 0 ? +(gapLegs.reduce((a, l) => a + legGap(l) * l.sellFrac, 0) / gapFrac).toFixed(4) : null;
+  const entryFillGapPct = pos.entryFillGapPct != null ? pos.entryFillGapPct
+    : (pos.entryShadow && pos.entryShadow.ok && pos.entryShadow.deltaPct != null ? +pos.entryShadow.deltaPct.toFixed(4) : null);
   const trade = {
     id: pos.id,
     build: config.buildId,
@@ -140,6 +150,8 @@ function finalizeTrade(pos, finalReason, fresh) {
     entryLiquidityUsd: pos.entryLiquidityUsd || null,
     entryImpactPct: pos.entryImpactPct,
     entryShadow: pos.entryShadow || null,
+    entryFillGapPct,
+    exitFillGapPct,
     rug: pos.rug || null,
     exitPrice: last.midPrice,
     exitFillPrice: legs.reduce((a, l) => a + l.fillPrice * l.sellFrac, 0) / soldFrac,
@@ -240,6 +252,13 @@ async function processExits(solUsd) {
   return exits;
 }
 
+// Per-tick record of signals that passed but were skipped (shown in the scan line).
+let tickSkips = [];
+function noteSkip(rec, opts) {
+  tickSkips.push(rec);
+  rej.skip(rec, opts);
+}
+
 async function processEntries(signals, solUsd) {
   let entries = 0, rugChecks = 0;
   const openMints = new Set(state.openPositions.map(p => p.mint));
@@ -260,15 +279,31 @@ async function processEntries(signals, solUsd) {
   const queues = Object.values(byStrat);
   candidates.length = 0;
   while (queues.some(q => q.length)) queues.forEach(q => { if (q.length) candidates.push(q.shift()); });
-  if (!candidates.length || !canOpenGlobal()) return 0;
+  if (!candidates.length) return 0;
+  if (!canOpenGlobal()) {
+    const st = slotStatus(state, null, config);
+    for (const sig of candidates) noteSkip({ strategyId: sig.strategyId, ...st, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol });
+    return 0;
+  }
   const quotes = await getPairsByAddress(candidates.slice(0, 30).map(s => s.pairAddress));
   for (const sig of candidates.slice(0, 30)) {
-    if (!canOpenGlobal() || entries >= 5) break;
+    if (entries >= 5) break;
     const strat = sig.strategy;
+    // Signal passed its gates; if no slot is free, log it as a "slot-full skip".
+    const slot = slotStatus(state, strat, config);
+    if (slot) {
+      noteSkip({ strategyId: strat.id, ...slot, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol });
+      continue;
+    }
     const openForStrat = state.openPositions.filter(p => p.strategyId === strat.id);
-    if (openForStrat.length >= (strat.maxOpen || config.maxOpen)) continue;
     const q = quotes[sig.pairAddress];
     if (!q || q.mint !== sig.mint || !(q.priceUsd > 0)) { rej.count(strat.id, 'entry-quote-missing'); continue; }
+    // Tokenized equities (Jupiter tags / issuer). The static denylist already ran in buyAgent.
+    const eq = await denylist.check({ mint: sig.mint, symbol: sig.symbol, name: sig.name });
+    if (eq) {
+      noteSkip({ strategyId: strat.id, reason: denylist.REASON, detail: eq, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol });
+      continue;
+    }
     if (rugChecks >= MAX_RUG_CHECKS_PER_TICK) break;
     rugChecks++;
     const rug = await rugGate.checkToken({
@@ -299,6 +334,7 @@ async function processEntries(signals, solUsd) {
       sq = await jup.shadowBuyQuote({ mint: sig.mint, decimals: rug.facts.decimals, sizeSol, solUsd });
     } catch (e) { sq = { ok: false, error: e.message }; }
     const entryShadow = shadowSummary(sq, fill.price);
+    const entryFillGapPct = sq && sq.ok ? fillGapPct('buy', sq.quotedPriceUsd, fill.price) : null;
     let entryFill = fill.price, entryFillSource = 'depth';
     if (config.fills.useWorseOfQuote && sq && sq.ok && sq.quotedPriceUsd > entryFill) { entryFill = sq.quotedPriceUsd; entryFillSource = 'jupiter'; }
     if (sq && !sq.ok) rej.event('entry-quote-failed', { source: 'jupiter', mint: sig.mint, strategyId: strat.id, noRoute: !!sq.noRoute, error: sq.error });
@@ -323,6 +359,7 @@ async function processEntries(signals, solUsd) {
       entryImpactPct: fill.impactPct,
       entryTxCostSol: fill.txCostSol,
       entryShadow,
+      entryFillGapPct,
       tokens: (sizeSol * solUsd) / entryFill,
       sizeSol,
       remainingFrac: 1,
@@ -336,7 +373,7 @@ async function processEntries(signals, solUsd) {
     state.balance -= sizeSol + fill.txCostSol;
     openMints.add(sig.mint);
     entries++;
-    const line = `ENTRY ${sig.symbol} ${sig.mint} pair=${sig.pairAddress} (${strat.id}${sig.tier ? ' tier ' + sig.tier : ''}) mid=${q.priceUsd} fill=${entryFill.toPrecision(6)}(${entryFillSource}) size=${sizeSol} jup=${entryShadow && entryShadow.quotedPriceUsd ? entryShadow.quotedPriceUsd.toPrecision(6) : 'n/a'}`;
+    const line = `ENTRY ${sig.symbol} ${sig.mint} pair=${sig.pairAddress} (${strat.id}${sig.tier ? ' tier ' + sig.tier : ''}) mid=${q.priceUsd} fill=${entryFill.toPrecision(6)}(${entryFillSource}) size=${sizeSol} jup=${entryShadow && entryShadow.quotedPriceUsd ? entryShadow.quotedPriceUsd.toPrecision(6) : 'n/a'} gap=${entryFillGapPct == null ? 'n/a' : entryFillGapPct.toFixed(2) + '%'}`;
     addActivity(line);
     console.log(`[trade] ${line}`);
   }
@@ -353,6 +390,7 @@ async function tick() {
   const t0 = Date.now();
   let pairsCount = 0, discovered = 0, signalsCount = 0, entries = 0, exits = 0;
   let gateLine = '';
+  tickSkips = [];
   try {
     rej.maybeLogHourly();
     const solUsd = await jup.getSolUsd(state.lastSolUsd || null);
@@ -367,7 +405,7 @@ async function tick() {
     discovered = discoveredMints;
     addActivity(`Scanned ${pairs.length} pairs (${discoveredMints} mints known, liq >= $${config.scanMinLiquidityUsd})`);
 
-    const { signals, rejections, gateStats } = generateSignals(pairs, { count: rej.count, nearMiss: rej.nearMiss });
+    const { signals, rejections, gateStats } = generateSignals(pairs, { count: rej.count, nearMiss: rej.nearMiss, skip: noteSkip });
     signalsCount = signals.length;
     gateLine = Object.entries(gateStats).map(([id, st]) => {
       const fails = Object.entries(st.fails).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k}:${v}`).join(',');
@@ -381,7 +419,8 @@ async function tick() {
     console.error('[scan] tick error', e && e.stack || e);
   } finally {
     lastScanSummary = `${new Date().toISOString()} pairs=${pairsCount} signals=${signalsCount} entries=${entries} exits=${exits}`;
-    console.log(`[scan] #${tickCount} ${Date.now() - t0}ms mints=${discovered} pairs=${pairsCount} signals=${signalsCount} entries=${entries} exits=${exits} open=${state.openPositions.length} bal=${state.balance.toFixed(4)} || ${gateLine}`);
+    const skipLine = formatSkips(tickSkips);
+    console.log(`[scan] #${tickCount} ${Date.now() - t0}ms mints=${discovered} pairs=${pairsCount} signals=${signalsCount} entries=${entries} exits=${exits} open=${state.openPositions.length} bal=${state.balance.toFixed(4)} || ${gateLine}${skipLine ? ' || ' + skipLine : ''}`);
     try { saveState(state); } catch (e) { console.error('[scan] save error', e.message); }
     tickRunning = false;
   }
@@ -427,13 +466,19 @@ function summarize(trades) {
   return byStrategy;
 }
 
-// GET /api/trades            -> closed trades from the current build (newest first)
-// GET /api/trades?all=1      -> every trade in the log, including older builds
+// Trades of the current paper account (since state.startedAt; survives deploys).
+function sessionTrades(all) {
+  const since = state.startedAt ? Date.parse(state.startedAt) : 0;
+  return all.filter(t => Date.parse(t.closedAt || t.exitTime || 0) >= since);
+}
+
+// GET /api/trades            -> closed trades of the current paper account (newest first)
+// GET /api/trades?all=1      -> every trade in the log, including older accounts/builds
 // GET /api/trades?strategy=id
 app.get('/api/trades', (req, res) => {
   try {
     const all = readTrades().reverse();
-    let trades = req.query.all ? all : all.filter(t => t.build === config.buildId);
+    let trades = req.query.all ? all : sessionTrades(all);
     if (req.query.strategy) trades = trades.filter(t => t.strategyId === req.query.strategy);
     res.json({
       build: config.buildId,
@@ -441,7 +486,7 @@ app.get('/api/trades', (req, res) => {
       since: state.startedAt || null,
       balance: state.balance,
       count: trades.length,
-      summary: summarize(all.filter(t => t.build === config.buildId)),
+      summary: summarize(sessionTrades(all)),
       openPositions: state.openPositions,
       lastScan: lastScanSummary,
       trades
@@ -452,11 +497,15 @@ app.get('/api/trades', (req, res) => {
 });
 
 app.get('/api/rejections', (req, res) => {
-  res.json({ build: config.buildId, ...rej.snapshot(), nearMisses: rej.nearMisses.slice(0, parseInt(req.query.limit || '100', 10)) });
+  const limit = parseInt(req.query.limit || '100', 10);
+  res.json({ build: config.buildId, ...rej.snapshot(),
+    slotFullSkips: rej.skips.filter(k => k.reason === 'slot-full skip').slice(0, limit),
+    tokenizedEquity: rej.skips.filter(k => k.reason === denylist.REASON).slice(0, limit),
+    nearMisses: rej.nearMisses.slice(0, parseInt(req.query.limit || '100', 10)) });
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, build: config.buildId, ticks: tickCount, lastScan: lastScanSummary, lastUpdate: state.lastUpdate, configHashes: config.strategyHashes });
+  res.json({ ok: true, build: config.buildId, ticks: tickCount, lastScan: lastScanSummary, lastUpdate: state.lastUpdate, balance: state.balance, openPositions: state.openPositions.length, accountSince: state.startedAt || null, buildHistory: (state.buildHistory || []).slice(-5), configHashes: config.strategyHashes });
 });
 
 app.get('/', (req, res) => {
@@ -479,7 +528,7 @@ app.get('/', (req, res) => {
     </tr>`).join('');
 
   let summary = {};
-  try { summary = summarize(readTrades().filter(t => t.build === config.buildId)); } catch (e) { summary = {}; }
+  try { summary = summarize(sessionTrades(readTrades())); } catch (e) { summary = {}; }
   const stratRows = Object.entries(summary).map(([id, s]) => `
     <tr><td>${esc(id)}</td><td>${esc(s.configHash)}</td><td>${esc(s.goLiveProgress)}</td><td>${(s.winRate * 100).toFixed(0)}%</td>
     <td>${s.pnlSol.toFixed(4)}</td><td>${Number(s.pnlExBestSol).toFixed(4)}</td><td>${esc(strategyBlocked(strategyById(id) || {}) || 'ok')}</td></tr>`).join('');

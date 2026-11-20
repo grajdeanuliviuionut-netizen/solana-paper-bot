@@ -130,8 +130,9 @@ const strategies = [
 ];
 
 const config = {
-  // Bump this when a change must reset paper balance/positions (trade log is kept).
-  buildId: 'pr2-fills-rug-gates-2026-11-20',
+  // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
+  // go-live counts reset per strategy when its configHash changes.
+  buildId: 'pr2.1-equity-denylist-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',

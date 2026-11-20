@@ -1,4 +1,5 @@
 const config = require('./config');
+const denylist = require('./denylist');
 
 function ratio(t) {
   const b = (t && t.buys) || 0;
@@ -79,6 +80,9 @@ function evalNcs(pair, strategy) {
 
 function evaluate(pair, strategy) {
   if (!pair.mint || config.excludedMints[pair.mint]) return { fails: ['excludedMint'], tier: null, sizeMult: 0 };
+  // Universe filter (not part of any strategy's config hash): tokenized stocks are never traded.
+  const eq = denylist.staticCheck({ mint: pair.mint, symbol: pair.symbol, name: pair.name });
+  if (eq) return { fails: [denylist.REASON], tier: null, sizeMult: 0, detail: eq };
   return strategy.type === 'ncs' ? evalNcs(pair, strategy) : evalSimple(pair, strategy);
 }
 
@@ -97,11 +101,14 @@ function generateSignals(pairs, hooks = {}) {
         if (hooks.count) hooks.count(strat.id, g);
       }
       if (hooks.count) hooks.count(strat.id, '_evaluated');
-      if (r.fails.length === 1 && hooks.nearMiss && r.fails[0] !== 'excludedMint') {
+      if (r.fails.length === 1 && hooks.nearMiss && r.fails[0] !== 'excludedMint' && r.fails[0] !== denylist.REASON) {
         hooks.nearMiss({
           strategyId: strat.id, gate: r.fails[0], mint: pair.mint, pairAddress: pair.pairAddress, symbol: pair.symbol,
           liquidityUsd: pair.liquidityUsd, m5: pair.priceChange.m5, h1: pair.priceChange.h1, priceUsd: pair.priceUsd
         });
+      }
+      if (r.fails[0] === denylist.REASON && hooks.skip) {
+        hooks.skip({ strategyId: strat.id, reason: denylist.REASON, detail: r.detail, mint: pair.mint, pairAddress: pair.pairAddress, symbol: pair.symbol }, { count: false });
       }
       if (r.fails.length) {
         if (rejections.length < 20) rejections.push(`${strat.id}: ${pair.symbol} ${r.fails[0]}`);

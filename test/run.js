@@ -1,5 +1,12 @@
 // Minimal offline unit tests (no network). Run: npm test
 const assert = require('assert');
+const os = require('os');
+const fs = require('fs');
+const path = require('path');
+// Keep test state/near-miss/skip files out of ./data.
+const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'paperbot-test-'));
+process.env.STATE_FILE = path.join(TMP, 'state.json');
+process.env.TRADES_FILE = path.join(TMP, 'trades.jsonl');
 const config = require('../src/config');
 const fm = require('../src/fillModel');
 const { evaluateReport, cloneCheck } = require('../src/rugGate');
@@ -159,6 +166,88 @@ test('config hash changes when a strategy changes (resets the 50-trade count)', 
   s.exit.stopLossPct = 11;
   assert.notStrictEqual(h1, config.configHashFor(s));
   assert.strictEqual(config.configHashFor(ncs), config.strategyHashes[ncs.id]);
+});
+
+// ---------- tokenized-equity denylist ----------
+const denylist = require('../src/denylist');
+const { generateSignals } = require('../src/buyAgent');
+const TTWO = 'TTWofwAge91oFhZs7kpQdyrVRkmevgM88xijGvQFbKo';
+test('denylist: TTWO mint, Backpack/xStocks names, xStocks-style mints; memecoins pass', () => {
+  assert.ok(denylist.staticCheck({ mint: TTWO, symbol: 'TTWO', name: 'Take-Two' }));
+  assert.ok(denylist.staticCheck({ mint: 'AnyMint1111', symbol: 'NVDA', name: 'Nvidia - Backpack Securities' }));
+  assert.ok(denylist.staticCheck({ mint: 'AnyMint2222', symbol: 'TSLAx', name: 'Tesla xStock' }));
+  assert.ok(denylist.staticCheck({ mint: 'XsNewUnlistedMint1111111111111111111111111', symbol: 'ABCx', name: 'ABC' }));
+  assert.strictEqual(denylist.staticCheck({ mint: 'F8DXZJPgZPrMVkSjXn24jzcFS7fZ9QaFUGVwHDsupump', symbol: 'Gino', name: 'Gino' }), null);
+  assert.strictEqual(denylist.staticCheck({ mint: 'Bxx1pump', symbol: 'catx', name: 'cat x' }), null); // lowercase ticker + no issuer
+  assert.strictEqual(denylist.staticCheck({ mint: 'Bxx2pump', symbol: 'FIONA', name: 'Fiona the Hippo' }), null);
+});
+test('denylist: Jupiter tags / issuer accounts', () => {
+  assert.ok(/jupiter-tag/.test(denylist.jupiterCheck({ id: 'm1', symbol: 'AAA', name: 'AAA', tags: ['verified', 'stocks', 'rwa'] })));
+  assert.ok(/issuer/.test(denylist.jupiterCheck({ id: 'm2', symbol: 'AAA', name: 'AAA', tags: ['unknown'], dev: 'S7vYFFWH6BjJyEsdrPQpqpYTqLTrPRK6KW3VwsJuRaS' })));
+  assert.strictEqual(denylist.jupiterCheck({ id: 'm3', symbol: 'MEME', name: 'Meme', tags: ['unknown', 'token-2022'], dev: 'x' }), null);
+  assert.strictEqual(denylist.jupiterCheck(null), null);
+});
+test('denylist: buyAgent rejects tokenized equity as its own reason, counts it, no near-miss, no signal', () => {
+  const p = Object.assign(basePair(), { mint: TTWO, symbol: 'TTWO', name: 'Take-Two Interactive Software - Backpack Securities' });
+  assert.deepStrictEqual(evaluate(basePair(), ncs).fails, []); // same pair, ordinary mint: passes
+  for (const s of config.strategies) assert.deepStrictEqual(evaluate(p, s).fails, ['tokenized-equity']);
+  const counts = {}, near = [], skips = [];
+  const { signals, gateStats } = generateSignals([p], {
+    count: (sid, g) => { counts[g] = (counts[g] || 0) + 1; },
+    nearMiss: r => near.push(r), skip: r => skips.push(r)
+  });
+  assert.strictEqual(signals.length, 0);
+  assert.strictEqual(near.length, 0);
+  assert.strictEqual(counts['tokenized-equity'], config.strategies.length);
+  for (const st of Object.values(gateStats)) assert.strictEqual(st.fails['tokenized-equity'], 1);
+  assert.ok(skips.every(k => k.reason === 'tokenized-equity' && k.mint === TTWO));
+});
+test('denylist is a universe filter: strategy config hashes unchanged', () => {
+  assert.deepStrictEqual(config.strategyHashes, {
+    'aggressive-flow': 'f3e0a8a6ee6a', 'momentum-entry': '693cb5e06575', ncs_fresh_momentum_v1: '68a188ed9bc4'
+  });
+});
+
+// ---------- slot-full skips ----------
+const { slotStatus, formatSkips } = require('../src/slots');
+const rej = require('../src/rejections');
+test('slot-full skip: strategy cap, global cap, balance stop; logged to rejections + scan line', () => {
+  const strat = { id: 'momentum-entry', maxOpen: 2 };
+  const cfg = { maxOpen: 3, fullStopBalance: 2.5 };
+  const pos = id => ({ strategyId: id });
+  assert.strictEqual(slotStatus({ balance: 4, openPositions: [pos('momentum-entry')] }, strat, cfg), null);
+  const s1 = slotStatus({ balance: 4, openPositions: [pos('momentum-entry'), pos('momentum-entry')] }, strat, cfg);
+  assert.deepStrictEqual(s1, { reason: 'slot-full skip', scope: 'strategy', open: 2, max: 2 });
+  const s2 = slotStatus({ balance: 4, openPositions: [pos('a'), pos('b'), pos('c')] }, strat, cfg);
+  assert.strictEqual(s2.reason, 'slot-full skip'); assert.strictEqual(s2.scope, 'global');
+  assert.strictEqual(slotStatus({ balance: 1, openPositions: [] }, strat, cfg).reason, 'balance-stop');
+  const rec = { strategyId: strat.id, ...s1, mint: 'MintSlot1111', symbol: 'SLOT' };
+  rej.skip(rec); rej.skip(rec); // counted twice, listed once (10 min dedupe)
+  const snap = rej.snapshot();
+  assert.strictEqual(snap.hourly[snap.currentHour][strat.id]['slot-full skip'], 2);
+  assert.strictEqual(rej.skips.filter(k => k.mint === 'MintSlot1111').length, 1);
+  const line = formatSkips([rec, rec, { strategyId: 'aggressive-flow', reason: 'tokenized-equity', mint: TTWO, symbol: 'TTWO' }]);
+  assert.strictEqual(line, `slot-full skip: momentum-entry:MintSlot1111(SLOT) | tokenized-equity: aggressive-flow:${TTWO}(TTWO)`);
+});
+
+// ---------- fill gap + state persistence ----------
+test('fill gap: positive = Jupiter worse than model, on both sides', () => {
+  near(fm.fillGapPct('buy', 1.1, 1.0), 10);
+  near(fm.fillGapPct('buy', 0.9, 1.0), -10);
+  near(fm.fillGapPct('sell', 0.9, 1.0), 10);
+  assert.strictEqual(fm.fillGapPct('sell', null, 1), null);
+});
+test('state (balance + open positions) carries over a buildId change', () => {
+  const { loadState, saveState } = require('../src/logger');
+  const st = loadState(4, 'build-old');
+  st.balance = 3.1234; st.openPositions = [{ id: 'p1', mint: 'M', strategyId: 'momentum-entry' }];
+  saveState(st);
+  const st2 = loadState(4, 'build-new');
+  assert.strictEqual(st2.balance, 3.1234);
+  assert.strictEqual(st2.openPositions.length, 1);
+  assert.strictEqual(st2.build, 'build-new');
+  assert.strictEqual(st2.startedAt, st.startedAt);
+  assert.strictEqual(st2.buildHistory[st2.buildHistory.length - 1].from, 'build-old');
 });
 
 for (const [name, fn] of tests) {

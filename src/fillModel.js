@@ -54,4 +54,12 @@ function fillExit({ midPrice, valueUsd, liquidityUsd, reason, m5Pct = 0, rng = M
   };
 }
 
-module.exports = { fillEntry, fillExit, buyImpactPct, sellImpactPct, delayDriftPct, txCostSol, isStopReason };
+// Jupiter-vs-model fill gap in %, signed so that POSITIVE = Jupiter worse than the depth model.
+// Entry (buy): a higher quoted price is worse. Exit (sell): a lower quoted price is worse.
+function fillGapPct(side, quotedPriceUsd, modelPriceUsd) {
+  if (!(quotedPriceUsd > 0) || !(modelPriceUsd > 0)) return null;
+  const d = ((quotedPriceUsd - modelPriceUsd) / modelPriceUsd) * 100;
+  return +(side === 'buy' ? d : -d).toFixed(4);
+}
+
+module.exports = { fillGapPct, fillEntry, fillExit, buyImpactPct, sellImpactPct, delayDriftPct, txCostSol, isStopReason };
