@@ -47,3 +47,26 @@ Fills, gates and logs (PR2):
 - `npm test` runs offline unit tests.
 
 All paper. Live trading stays locked until you explicitly enable it.
+
+## Live path (PR3) - OFF by default
+Paper is always the default. Live mode only starts when ALL of these hold at startup; otherwise
+the bot logs `[live] LIVE MODE REFUSED ...` and keeps paper trading:
+- `LIVE_TRADING=true` and `KILL_SWITCH` not `true`
+- `WALLET_PRIVATE_KEY` (base58 secret key, e.g. Solflare export; set it only as a Railway secret,
+  never commit it; it is redacted from every log line)
+- `KILL_TOKEN` (>= 16 chars)
+- valid limits; code defaults: `LIVE_STRATEGIES=momentum-entry`, `MAX_SOL_PER_TRADE=0.1` (<= 1),
+  `MAX_DAILY_LOSS_SOL=0.5`, `MAX_OPEN_POSITIONS=3`, `MAX_CONSECUTIVE_LOSSES=5`, `PRIORITY_FEE=100000`
+  lamports, `JITO_TIP=0`
+- wallet balance >= `MAX_SOL_PER_TRADE` + `MIN_WALLET_RESERVE_SOL` (default 0.05), read via `RPC_URL`
+
+Every live swap re-quotes Jupiter (same `src/jupiterQuote.js`) and must pass the same quote sanity
+rules as paper (`src/quoteSanity.js`): buys need impact <= 5%, the strategy's gap cap, a reverse route
+with impact <= 3% and a round trip loss <= 3%; sells are refused when the quote is insane. Refused
+swaps are not sent (logged `refused-quoteSanity`). Emergency sells (rug/liquidity/no-sells) proceed
+and log `emergency-sell-sanity-override`. Swaps retry with exponential backoff, and every attempt is
+logged with priority fee and Jito tip (`GET /api/live`). Daily loss and losing-streak limits trip a
+persistent kill switch (`data/live-state.json`). `POST /api/kill` with
+`Authorization: Bearer <KILL_TOKEN>` stops all new live entries (paper unaffected; open live
+positions are still managed/sold); without a configured KILL_TOKEN it always returns 403. Live
+trades are logged with `mode: "live"` and on-chain signatures and kept out of the paper summary.
