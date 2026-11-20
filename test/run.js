@@ -385,16 +385,17 @@ test('exit: insane sell quote falls back to model; sane one is usable', () => {
 // ---------- aggressive-flow paused (shadow) + slot priorities ----------
 const shadow = require('../src/shadow');
 test('no strategy is paused/shadowed; aggressive-flow trades at half size (0.1) behind 3% gap cap (batch1) + 3% round trip', () => {
-  // Every LIVE strategy trades; the only shadow is the PR5.1 research variant momentum-h1ratio.
-  for (const st of config.strategies.filter(x => x.id !== 'momentum-h1ratio')) assert.ok(!shadow.isDisabled(st) && !shadow.isShadow(st), st.id);
-  assert.ok(shadow.isShadow(config.strategies.find(x => x.id === 'momentum-h1ratio')));
+  // Every LIVE strategy trades; the only shadow is the PR5.3 base comparison momentum-base-shadow.
+  for (const st of config.strategies.filter(x => x.id !== 'momentum-base-shadow')) assert.ok(!shadow.isDisabled(st) && !shadow.isShadow(st), st.id);
+  assert.ok(shadow.isShadow(config.strategies.find(x => x.id === 'momentum-base-shadow')));
+  assert.ok(!config.strategies.some(x => x.id === 'momentum-h1ratio')); // retired (history kept in shadow.jsonl)
   const af = config.strategies.find(s => s.id === 'aggressive-flow');
   assert.strictEqual(af.sizeSol, 0.02); // PR5 (batch2 0.05)
   const cfg = config.quoteSanityFor(af);
   assert.strictEqual(cfg.maxQuoteGapPct, 3); assert.strictEqual(cfg.maxRoundTripLossPct, 3);
   const p = Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 200000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 1, h1: 3, h6: 0, h24: 0 } });
   const split = shadow.splitSignals(generateSignals([p]).signals);
-  assert.ok(split.real.some(sg => sg.strategyId === 'aggressive-flow')); assert.ok(split.shadow.every(sg => sg.strategyId === 'momentum-h1ratio'));
+  assert.ok(split.real.some(sg => sg.strategyId === 'aggressive-flow')); assert.ok(split.shadow.every(sg => sg.strategyId === 'momentum-base-shadow'));
 });
 test('shadow code path (kept for future use): a shadowed strategy opens no real entries, tracks shadow ones without touching balance', () => {
   const saved = config.strategyOps['aggressive-flow'];
@@ -409,7 +410,7 @@ test('shadow code path (kept for future use): a shadowed strategy opens no real 
   assert.ok(signals.some(sg => sg.strategyId === 'aggressive-flow'), 'aggressive-flow still scans');
   const split = shadow.splitSignals(signals);
   assert.ok(split.real.every(sg => sg.strategyId !== 'aggressive-flow'));
-  assert.ok(split.shadow.some(sg => sg.strategyId === 'aggressive-flow') && split.shadow.every(sg => ['aggressive-flow', 'momentum-h1ratio'].includes(sg.strategyId)));
+  assert.ok(split.shadow.some(sg => sg.strategyId === 'aggressive-flow') && split.shadow.every(sg => ['aggressive-flow', 'momentum-base-shadow'].includes(sg.strategyId)));
   const st = { balance: 3, openPositions: [] };
   const sig = split.shadow.find(sg => sg.strategyId === 'aggressive-flow');
   assert.ok(shadow.canOpen(st, af, sig.mint));
@@ -461,7 +462,7 @@ test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawd
 });
 test('config hashes: all three changed (sell-quote exits + per-strategy gap caps; aggressive-flow also half size)', () => {
   assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': 'b7f4cc472695', 'momentum-entry': '1543766be09b', ncs_fresh_momentum_v1: 'bf331c3a05d5', 'momentum-h1ratio': '9acd2f79b34e'
+    'aggressive-flow': 'b7f4cc472695', 'momentum-entry': '5b686b14c4fb', ncs_fresh_momentum_v1: 'bf331c3a05d5', 'momentum-base-shadow': '1543766be09b'
   });
 });
 
@@ -664,7 +665,7 @@ test('slot allocator: cap 12 when cash covers it, AF max 4, NCS max 2, 5 slots r
   const { maxOpenFor, reservedFor, pickBumpVictim } = require('../src/slots');
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
   // Allocator lives outside every configHash: momentum-entry must stay fc3fd9a29a5c.
-  assert.strictEqual(config.strategyHashes['momentum-entry'], '1543766be09b'); // PR5 loser-cut
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '5b686b14c4fb'); // PR5.3 (h1 ratio live)
   assert.strictEqual(config.opsFor('aggressive-flow').maxOpen, 4); assert.strictEqual(config.opsFor(ncsS.id).maxOpen, 2);
   const now = Date.now();
   const P = (id, ageSec = 600, netPct = 0, extra = {}) => ({ strategyId: id, sizeSol: id === 'aggressive-flow' ? 0.1 : 0.2, remainingFrac: 1, entryTime: new Date(now - ageSec * 1000).toISOString(), lastJudge: { netPct }, ...extra });
@@ -719,7 +720,7 @@ test('allocator: momentum-entry claims a mint both strategies passed; a capped A
 });
 
 test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1 15; momentum hash unchanged', () => {
-  assert.strictEqual(config.strategyHashes['momentum-entry'], '1543766be09b'); // PR5 loser-cut
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '5b686b14c4fb'); // PR5.3 (h1 ratio live)
   const now = Date.now();
   const af = stratById('aggressive-flow');
   const P = (minsAgo, extra = {}) => ({ strategyId: 'aggressive-flow', strategyType: 'simple', entryTime: new Date(now - minsAgo * 60000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.1, remainingFrac: 1, highest: 1, exit: af.exit, ...extra });
@@ -751,7 +752,7 @@ test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1
 
 test('batch2: AF 0.05 SOL, v/l >= 0.15 (14:05), m5 buys > sells (fail closed), h1 > 0; NCS grace + fill stop, tier B half; allocator', () => {
   const { pickBumpVictim } = require('../src/slots');
-  assert.strictEqual(config.strategyHashes['momentum-entry'], '1543766be09b'); // PR5 loser-cut
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '5b686b14c4fb'); // PR5.3 (h1 ratio live)
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
   assert.strictEqual(af.sizeSol, 0.02); // PR5
   const P = () => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 120000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 0, h1: 1, h6: 0, h24: 0 } });
@@ -802,7 +803,7 @@ test('batch2: AF 0.05 SOL, v/l >= 0.15 (14:05), m5 buys > sells (fail closed), h
 
 test('PR4.1 momentum entry loosened (h1 >= 1.5, m5 >= 0.3), exits unchanged', () => {
   const mom = stratById('momentum-entry');
-  assert.deepStrictEqual(mom.entry.map(r => `${r.field}${r.op}${r.value}`), ['h1>=1.5', 'm5>=0.3', 'buysGtSellsM5>=1']); // PR5 adds m5 buys > sells
+  assert.deepStrictEqual(mom.entry.map(r => `${r.field}${r.op}${r.value}`), ['h1>=1.5', 'm5>=0.3', 'buysGtSellsM5>=1', 'buySellRatioH1>=1.3']); // PR5 adds m5 buys > sells, PR5.3 the h1 ratio
   const P = (h1, m5) => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 120000, priceChange: { m5, h1, h6: 0, h24: 0 } });
   assert.deepStrictEqual(evaluate(P(1.6, 0.35), mom).fails.filter(f => /h1|m5/.test(f)), []);
   assert.ok(evaluate(P(1.4, 0.35), mom).fails.includes('h1>=1.5'));
@@ -959,7 +960,7 @@ test('PR5 entry confirmation: 2 consecutive scan up-ticks; NCS delayed re-check 
   const ec = require('../src/entryConfirm');
   ec.reset();
   assert.deepStrictEqual(stratById('momentum-entry').entryConfirm, { upTicks: 1 }); // PR5.2: 2 -> 1
-  assert.deepStrictEqual(stratById('momentum-h1ratio').entryConfirm, { upTicks: 1 });
+  assert.deepStrictEqual(stratById('momentum-base-shadow').entryConfirm, { upTicks: 1 });
   assert.deepStrictEqual(stratById('aggressive-flow').entryConfirm, { upTicks: 2 });
   assert.deepStrictEqual(stratById('ncs_fresh_momentum_v1').entryConfirm, { delaySec: 20 });
   const t = Date.parse('2026-11-20T16:00:00Z');
@@ -995,24 +996,26 @@ test('PR5 sizes: AF 0.02 SOL; NCS tier A and tier B fixed 0.02 SOL (fixedSol ove
   assert.strictEqual(stratById('momentum-entry').sizeSol, 0.2); // unchanged
 });
 
-test('PR5.1 shadow momentum-h1ratio: momentum-entry + buySellRatioH1 >= 1.3, shadow only, own hash, same net exits; live hashes frozen', () => {
-  const mom = stratById('momentum-entry'), v = stratById('momentum-h1ratio');
-  assert.strictEqual(config.strategyHashes['momentum-entry'], '1543766be09b');
+test('PR5.3 live momentum has buySellRatioH1 >= 1.3; shadow momentum-base-shadow = old live config (hash 1543766be09b), shadow only, same net exits', () => {
+  const mom = stratById('momentum-entry'), v = stratById('momentum-base-shadow');
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '5b686b14c4fb');
   assert.strictEqual(config.strategyHashes['aggressive-flow'], 'b7f4cc472695');
   assert.strictEqual(config.strategyHashes.ncs_fresh_momentum_v1, 'bf331c3a05d5');
-  assert.strictEqual(config.strategyHashes['momentum-h1ratio'], '9acd2f79b34e');
-  assert.deepStrictEqual(v.entry, mom.entry.concat([{ field: 'buySellRatioH1', op: '>=', value: 1.3 }]));
-  assert.strictEqual(mom.entry.length, 3); // momentum-entry not mutated
+  assert.strictEqual(config.strategyHashes['momentum-base-shadow'], '1543766be09b'); // == PR5.2 live momentum
+  assert.deepStrictEqual(mom.entry.map(r => `${r.field}${r.op}${r.value}`), ['h1>=1.5', 'm5>=0.3', 'buysGtSellsM5>=1', 'buySellRatioH1>=1.3']);
+  assert.deepStrictEqual(v.entry, mom.entry.filter(r => r.field !== 'buySellRatioH1'));
+  assert.deepStrictEqual(mom.entryConfirm, { upTicks: 1 });
   assert.deepStrictEqual(v.exit, mom.exit); assert.strictEqual(v.sizeSol, mom.sizeSol); assert.deepStrictEqual(v.entryConfirm, mom.entryConfirm);
   assert.ok(shadow.isShadow(v) && shadow.isDisabled(v));
   // Signals: same pair -> momentum real, the variant only when h1 ratio >= 1.3, always in the shadow split.
   const P = (buys, sells) => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 200000, txns: { buys, sells }, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 1, h1: 3, h6: 0, h24: 0 } });
-  let split = shadow.splitSignals(generateSignals([P(140, 100)]).signals);
+  let split = shadow.splitSignals(generateSignals([P(140, 100)]).signals); // ratio 1.4: both
   assert.ok(split.real.some(sg => sg.strategyId === 'momentum-entry'));
-  assert.ok(split.shadow.some(sg => sg.strategyId === 'momentum-h1ratio'));
-  assert.ok(split.real.every(sg => sg.strategyId !== 'momentum-h1ratio'));
-  split = shadow.splitSignals(generateSignals([P(120, 100)]).signals);
-  assert.ok(!split.shadow.some(sg => sg.strategyId === 'momentum-h1ratio'));
+  assert.ok(split.shadow.some(sg => sg.strategyId === 'momentum-base-shadow'));
+  assert.ok(split.real.every(sg => sg.strategyId !== 'momentum-base-shadow'));
+  split = shadow.splitSignals(generateSignals([P(120, 100)]).signals); // ratio 1.2: base shadow only
+  assert.ok(!split.real.some(sg => sg.strategyId === 'momentum-entry'));
+  assert.ok(split.shadow.some(sg => sg.strategyId === 'momentum-base-shadow'));
   // Shadow position: no balance / slots / mint guard; exits judged NET like the live path.
   const st = { balance: 3, openPositions: [] };
   const sig = { strategyId: v.id, strategy: v, mint: 'MH1', pairAddress: 'PH1', symbol: 'H1R' };
@@ -1020,7 +1023,7 @@ test('PR5.1 shadow momentum-h1ratio: momentum-entry + buySellRatioH1 >= 1.3, sha
   const modelFill = fm.fillEntry({ midPrice: 1, sizeSol: 0.2, solUsd: 150, liquidityUsd: 200000 });
   const t0 = Date.now();
   const pos = shadow.open(st, { strat: v, sig, q, modelFill, entryFill: modelFill.price, entryFillSource: 'depth', sizeSol: 0.2, decimals: 6, quote: null }, new Date(t0));
-  assert.strictEqual(pos.configHash, '9acd2f79b34e');
+  assert.strictEqual(pos.configHash, '1543766be09b');
   assert.strictEqual(st.balance, 3); assert.strictEqual(st.openPositions.length, 0); assert.strictEqual(st.mintGuard, undefined);
   // Up +4% mid at 2 min (net ~+3.x%) -> breakeven armed; back to mid +0.9% (net < +0.5%) -> breakeven exit.
   assert.strictEqual(shadow.processExits(st, { PH1: { ...q, priceUsd: 1.045 } }, 150, t0 + 120000, () => 0.99).length, 0);
@@ -1034,7 +1037,7 @@ test('PR5.1 shadow momentum-h1ratio: momentum-entry + buySellRatioH1 >= 1.3, sha
   const c2 = shadow.processExits(st, { PH2: { ...q, mint: 'MH2', priceUsd: 1.01 } }, 150, t0 + 361000, () => 0.99);
   assert.strictEqual(c2.length, 1); assert.strictEqual(c2[0].exitReason, 'stall'); assert.ok(p2.id.startsWith('sh-'));
   assert.strictEqual(st.balance, 3); assert.strictEqual(st.openPositions.length, 0); assert.strictEqual(st.mintGuard, undefined);
-  assert.ok(shadow.summary(st)['momentum-h1ratio'].trades === 2);
+  assert.ok(shadow.summary(st)['momentum-base-shadow'].trades === 2);
 });
 
 (async () => {

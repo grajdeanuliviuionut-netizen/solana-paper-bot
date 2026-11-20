@@ -105,7 +105,9 @@ const strategies = [
       { field: 'h1', op: '>=', value: 1.5 },
       { field: 'm5', op: '>=', value: 0.3 },
       // PR5 (16:52 loser-cut spec): m5 buys > sells (missing data fails closed).
-      { field: 'buysGtSellsM5', op: '>=', value: 1 }
+      { field: 'buysGtSellsM5', op: '>=', value: 1 },
+      // PR5.3 (RA 17:55): h1 buys/sells >= 1.3 (today's winners median 1.45 vs losers 1.01).
+      { field: 'buySellRatioH1', op: '>=', value: 1.3 }
     ],
     // PR5: price must have risen on consecutive scans before entry (src/entryConfirm.js).
     // PR5.2 (RA 17:21): upTicks 2 -> 1 (only 1 momentum entry 16:59-17:21 at 2; ~half the blocked
@@ -186,18 +188,22 @@ const strategies = [
     riskGuards: { dailyLossHaltPct: 8, consecutiveLosses: 5, pauseMinutes: 30 }
   }
 ];
-// PR5.1 (RA 17:12) SHADOW variant: identical to momentum-entry (same exits incl. breakeven lock, early
-// fail, 12m max hold, sell-quote judging; same size and up-tick confirm) plus buySellRatioH1 >= 1.3
-// (today's momentum winners median 1.45 vs losers 1.01). strategyOps keeps it enabled:false /
-// shadow:true -> no paper positions, no allocator slots, no mint-guard writes. Its own configHash;
-// momentum-entry's object is untouched (deep copy).
+// PR5.3 (RA 17:55): live momentum-entry now has buySellRatioH1 >= 1.3; the SHADOW becomes the BASE
+// comparison = live momentum WITHOUT the ratio rule (exactly the PR5.2 live config 1543766be09b).
+// Its configHash is computed as that config (id/name of momentum-entry, ratio rule removed), so it
+// equals 1543766be09b. Shadow only (strategyOps enabled:false/shadow:true): no paper positions, no
+// slots, mint guard read-only. The retired PR5.1 shadow momentum-h1ratio keeps its history in
+// state.shadow.closed / data/shadow.jsonl (still listed by /api/shadow).
+const MOMENTUM_BASE_SHADOW = 'momentum-base-shadow';
+let momentumBaseHashConfig = null;
 {
   const mom = strategies.find(s => s.id === 'momentum-entry');
-  const v = JSON.parse(JSON.stringify(mom));
-  v.id = 'momentum-h1ratio';
-  v.name = 'Momentum entry + h1 buy/sell ratio >= 1.3 (shadow)';
-  v.entry.push({ field: 'buySellRatioH1', op: '>=', value: 1.3 });
-  strategies.push(v);
+  const base = JSON.parse(JSON.stringify(mom));
+  base.entry = base.entry.filter(r => r.field !== 'buySellRatioH1');
+  momentumBaseHashConfig = JSON.parse(JSON.stringify(base)); // id/name 'momentum-entry' as before
+  base.id = MOMENTUM_BASE_SHADOW;
+  base.name = 'Momentum entry BASE (no h1 ratio rule, shadow)';
+  strategies.push(base);
 }
 
 // ---- Quote sanity (entry hard-reject + exit fallback). Not part of any configHash (like the rug
@@ -244,8 +250,8 @@ const strategyOps = {
   // Batch2: momentum's allocator cap 8 -> 12 (bounded by the global cap): at 13:39-13:40 momentum was skipped
   // at its own 8/8 while the book had 11/12 open. Outside the configHash.
   'momentum-entry': { enabled: true, maxOpen: 12, priority: 1 },
-  // PR5.1 shadow-only variant (logs to data/shadow.jsonl, /api/shadow).
-  'momentum-h1ratio': { enabled: false, shadow: true, maxOpen: 12, priority: 9 },
+  // PR5.3 shadow-only BASE comparison (logs to data/shadow.jsonl, /api/shadow).
+  'momentum-base-shadow': { enabled: false, shadow: true, maxOpen: 12, priority: 9 },
   // NCS: spec sizing.max_concurrent_positions = 5 is kept; free slots go to tier A first (priority),
   // tier B is served after momentum-entry and tier A.
   ncs_fresh_momentum_v1: { enabled: true, tierPriority: { A: 1, B: 2 }, priority: 1, maxOpen: 2 }
@@ -281,7 +287,7 @@ const mintGuard = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr5.2-momentum-uptick1-2026-11-20',
+  buildId: 'pr5.3-momentum-h1ratio-live-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
@@ -331,5 +337,7 @@ config.configHashFor = strat => crypto.createHash('sha256')
   .digest('hex').slice(0, 12);
 config.opsFor = id => Object.assign({ enabled: true, shadow: false, priority: 5 }, strategyOps[id] || {});
 config.strategyHashes = Object.fromEntries(strategies.map(s => [s.id, config.configHashFor(s)]));
+// The base shadow is hashed as the config it reproduces (PR5.2 live momentum-entry).
+config.strategyHashes[MOMENTUM_BASE_SHADOW] = config.configHashFor(momentumBaseHashConfig);
 
 module.exports = config;
