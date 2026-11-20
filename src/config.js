@@ -77,8 +77,12 @@ const strategies = [
       { field: 'volumeToLiquidity', op: '>=', value: 0.03 },
       { field: 'm5', op: '>=', value: -2 }
     ],
-    exit: { takeProfitPct: 6, stopLossPct: 5, trailAfterPct: 3, trailPct: 2, maxHoldMinutes: 25, judgeOn: 'sell-quote', ...entryGrace },
-    quoteSanity: { maxQuoteGapPct: 5 }, // same tight gap cap as momentum-entry (+ global 3% round-trip gate)
+    // Batch1 (post-6pm): since 12:32 at 0.1 SOL, TP6 was never reached (best MFE +5.1% mid), trails armed at
+    // +3 exited ~0%, and stop-outs had MFE <= 0 and bled for 13-17 min before -5.7%. Lower TP, tighter
+    // trail, and a stall exit for trades that never went green.
+    exit: { takeProfitPct: 4, stopLossPct: 5, trailAfterPct: 2.5, trailPct: 1.25, maxHoldMinutes: 25, judgeOn: 'sell-quote',
+      stallAfterMin: 6, stallMaxPeakPct: 1, stallLossPct: 2.5, ...entryGrace },
+    quoteSanity: { maxQuoteGapPct: 3 }, // batch1: observed entry gaps since 12:32 within -2.1..+1.4%; 3% cap (+ global 3% round trip)
     sizeSol: 0.1, // re-enabled 2026-11-20 12:29 at half size (was 0.2)
     maxOpen: 6
   },
@@ -131,8 +135,12 @@ const strategies = [
     },
     exit: {
       stopLossPct: 12,
-      takeProfits: [{ atPct: 25, sellPct: 50 }, { atPct: 60, sellPct: 100 }],
-      trailAfterTp1Pct: 15, breakevenAfterTp1: true,
+      // Batch1 (post-6pm): 3 of 6 NCS stop-outs were up >= +8.5% (mid) before collapsing to -32..-42%;
+      // TP1 at +25% was reached once in 8. Lock profits from +8% net, take TP1 at +15%, trail 10% after.
+      // (Deviates from specs/ncs_fresh_momentum_v1.json: TP1 25 -> 15, trail 15 -> 10, adds the lock.)
+      takeProfits: [{ atPct: 15, sellPct: 50 }, { atPct: 60, sellPct: 100 }],
+      trailAfterTp1Pct: 10, breakevenAfterTp1: true,
+      lockAfterPct: 8, lockAtPct: 1,
       timeStop: { ifNotAbovePct: 5, afterMin: 15 },
       maxHoldMinutes: 30,
       emergency: { liqDropFromEntryPct: 30, zeroSellsMinBuysM5: 10 },
@@ -207,7 +215,7 @@ const allocator = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr3.3.1-momentum-claims-mints-2026-11-20',
+  buildId: 'tune-batch1-af-ncs-fullstop-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
@@ -217,7 +225,7 @@ const config = {
   positionSizeSol: 0.2,
   maxOpen: 10,                 // global cap across strategies
   dailyLossLimitSol: 0.25,
-  fullStopBalance: 2.5,         // compared with paper EQUITY (cash + open cost basis), not cash
+  fullStopBalance: 1.5,         // compared with paper EQUITY (cash + open cost basis), not cash. 2.5 -> 1.5 on 2026-11-20 13:08 (RA freeze exception); outside every configHash
   costRoundtripPct: 1.1,       // legacy flat cost, kept for reference only (depth model is used)
   // Legacy strategies keep a $50k floor via their universe; the scan floor is the lowest tier.
   minLiquidityUsd: num('MIN_LIQUIDITY_USD', 50000),
