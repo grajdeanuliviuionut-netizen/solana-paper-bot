@@ -1040,6 +1040,61 @@ test('PR5.3 live momentum has buySellRatioH1 >= 1.3; shadow momentum-base-shadow
   assert.ok(shadow.summary(st)['momentum-base-shadow'].trades === 2);
 });
 
+// ---------- PR5.3.1 boot smoke (7ca1a8a replaced src/config.js and crash-looped prod at mintGuard.seed) ----------
+test('boot contract: the real config has every section the startup path reads; mintGuard.seed runs on it and on a missing config', () => {
+  for (const k of ['stateFile', 'tradesFile', 'startingSol', 'buildId', 'strategies', 'strategyHashes', 'mintGuard', 'allocator', 'exitQuotes', 'quoteSanity', 'rugGate', 'strategyOps', 'fullStopBalance', 'exitCheckMs']) {
+    assert.ok(config[k] !== undefined && config[k] !== null, `config.${k} missing`);
+  }
+  for (const k of ['stopCooldownMin', 'stopReasons', 'maxLossesPerDay', 'brokenGapPct']) assert.ok(config.mintGuard[k] != null, `config.mintGuard.${k} missing`);
+  assert.strictEqual(typeof config.opsFor, 'function'); assert.strictEqual(typeof config.quoteSanityFor, 'function');
+  for (const st of config.strategies) {
+    assert.ok(st.id && st.type && st.exit && config.strategyHashes[st.id], `strategy ${st.id} incomplete`);
+    assert.ok(config.quoteSanityFor(st), st.id);
+  }
+  // Live hashes the revert must keep.
+  assert.deepStrictEqual(Object.assign({}, config.strategyHashes), {
+    'aggressive-flow': 'b7f4cc472695', 'momentum-entry': '5b686b14c4fb', ncs_fresh_momentum_v1: 'bf331c3a05d5', 'momentum-base-shadow': '1543766be09b'
+  });
+  const mg = require('../src/mintGuard');
+  const trades = [{ id: 't1', mint: 'BOOT1', entryTime: new Date().toISOString(), closedAt: new Date().toISOString(), exitReason: 'sl', pnlSol: -0.01, entryFillGapPct: 80 }];
+  for (const cfg of [config.mintGuard, undefined, {}, { stopCooldownMin: 120 }]) {
+    const st = { openPositions: [] };
+    const sum = mg.seed(st, { trades, events: [], shadowRows: [], openPositions: [] }, cfg);
+    assert.ok(sum.brokenQuoteMints.some(b => b.mint === 'BOOT1'));
+    assert.strictEqual(mg.check(st, 'BOOT1', cfg).reason, 'broken-quote-denylist');
+  }
+});
+
+test('boot smoke: node src/index.js starts on the real config (temp data dir, paper) and /api/health answers', async () => {
+  const { spawn } = require('child_process');
+  const http = require('http');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paperbot-boot-'));
+  fs.writeFileSync(path.join(dir, 'trades.jsonl'), JSON.stringify({ id: 'b1', mint: 'BOOTMINT', strategyId: 'momentum-entry', entryTime: new Date().toISOString(), closedAt: new Date().toISOString(), exitReason: 'stall', pnlSol: -0.001 }) + '\n');
+  const port = 20000 + Math.floor(Math.random() * 20000);
+  const env = Object.assign({}, process.env, { PORT: String(port), STATE_FILE: path.join(dir, 'state.json'), TRADES_FILE: path.join(dir, 'trades.jsonl'), EVENTS_FILE: path.join(dir, 'events.jsonl'), SHADOW_FILE: path.join(dir, 'shadow.jsonl'), POLL_INTERVAL_MS: '3600000' });
+  for (const k of ['LIVE_TRADING', 'WALLET_PRIVATE_KEY', 'RESET_STATE', 'KILL_TOKEN']) delete env[k];
+  const child = spawn(process.execPath, [path.join(__dirname, '..', 'src', 'index.js')], { env, cwd: path.join(__dirname, '..'), stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  child.stdout.on('data', d => { out += d; }); child.stderr.on('data', d => { out += d; });
+  let exited = null; child.on('exit', code => { exited = code; });
+  const get = () => new Promise(resolve => {
+    const req = http.get({ host: '127.0.0.1', port, path: '/api/health', timeout: 1500 }, res => { let b = ''; res.on('data', c => { b += c; }); res.on('end', () => resolve(res.statusCode === 200 ? b : null)); });
+    req.on('error', () => resolve(null)); req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+  let body = null;
+  try {
+    for (let i = 0; i < 40 && !body && exited === null; i++) { await new Promise(r => setTimeout(r, 250)); body = await get(); }
+    assert.ok(body, `no /api/health (exit=${exited}) output:\n${out.slice(-2000)}`);
+    const h = JSON.parse(body);
+    assert.strictEqual(h.mode, 'paper');
+    assert.strictEqual(h.configHashes['momentum-entry'], '5b686b14c4fb');
+    assert.ok(h.mintGuard && h.mintGuard.rules && h.mintGuard.rules.brokenGapPct === 50);
+    assert.ok(/\[mint-guard\] seeded/.test(out), 'mint guard seeded at boot');
+  } finally {
+    child.kill('SIGKILL');
+  }
+});
+
 (async () => {
   for (const [name, fn] of tests) {
     try { await fn(); passed++; console.log(`ok   ${name}`); } catch (e) { console.error(`FAIL ${name}\n     ${e.stack || e.message}`); process.exitCode = 1; }

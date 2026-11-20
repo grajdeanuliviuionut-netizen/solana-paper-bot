@@ -20,7 +20,18 @@ function ensure(state) {
   return state.mintGuard;
 }
 
-function isStopReason(reason, cfg) { return (cfg.stopReasons || []).includes(String(reason)); }
+// PR5.3.1: tolerate a missing/partial config.mintGuard (7ca1a8a crash-looped on cfg.brokenGapPct).
+const DEFAULTS = {
+  stopCooldownMin: 120, maxLossesPerDay: 2, brokenGapPct: 50, seedBrokenMints: [],
+  stopReasons: ['sl', 'hard-stop', 'stall', 'emergency-liq', 'emergency-nosells', 'emergency-rug']
+};
+function withDefaults(cfg) {
+  const out = Object.assign({}, DEFAULTS);
+  for (const [k, v] of Object.entries(cfg || {})) if (v !== undefined && v !== null) out[k] = v;
+  return out;
+}
+
+function isStopReason(reason, cfg) { return (withDefaults(cfg).stopReasons || []).includes(String(reason)); }
 
 function recordEntry(state, mint, ts = Date.now()) {
   const g = ensure(state);
@@ -32,6 +43,7 @@ function recordEntry(state, mint, ts = Date.now()) {
 function pruneDays(obj, ts) { for (const d of Object.keys(obj)) if (d < londonDay(ts - 2 * 86400000)) delete obj[d]; }
 
 function recordExit(state, { mint, reason, symbol, strategyId, pnlSol }, cfg, ts = Date.now()) {
+  cfg = withDefaults(cfg);
   if (!mint) return false; // old trade rows without a mint
   const g = ensure(state);
   if (pnlSol != null && Number.isFinite(Number(pnlSol))) {
@@ -53,6 +65,7 @@ function recordExit(state, { mint, reason, symbol, strategyId, pnlSol }, cfg, ts
 
 // null when the mint may be entered, else { reason: 'broken-quote-denylist'|'cooldown'|'mint-daily-cap', detail }.
 function check(state, mint, cfg, now = Date.now()) {
+  cfg = withDefaults(cfg);
   const g = ensure(state);
   const b = state.brokenQuoteMints[mint];
   if (b) return { reason: 'broken-quote-denylist', detail: `${b.symbol || ''} ${b.reason}`.trim() };
@@ -73,6 +86,7 @@ function addBroken(state, { mint, symbol, reason, source, at }) {
 
 // Entry quote-sanity result -> broken reason or null.
 function brokenFromEntrySanity({ gapPct, reasons, quotedPriceUsd }, cfg) {
+  cfg = withDefaults(cfg);
   const rs = reasons || [];
   if (gapPct != null && Number.isFinite(gapPct) && Math.abs(gapPct) > cfg.brokenGapPct) return `gap ${gapPct.toFixed(1)}%>${cfg.brokenGapPct}%`;
   const hit = rs.find(r => /^(reverse-no-route|gap-uncomputable|roundtrip-no-proceeds)/.test(r));
@@ -82,6 +96,7 @@ function brokenFromEntrySanity({ gapPct, reasons, quotedPriceUsd }, cfg) {
 }
 // Exit quote-sanity result (checkExit) -> broken reason or null.
 function brokenFromExitSanity({ gapPct, reasons }, cfg) {
+  cfg = withDefaults(cfg);
   if ((reasons || []).includes('bad-price')) return 'exit-quote-bad-price';
   if (gapPct != null && Number.isFinite(gapPct) && Math.abs(gapPct) > cfg.brokenGapPct) return `exit gap ${gapPct.toFixed(1)}%>${cfg.brokenGapPct}%`;
   return null;
@@ -97,6 +112,7 @@ function readJsonl(file) {
 // broken-quote mints found in trades / events / shadow history. Idempotent: entry counts are
 // recomputed from the logs (source of truth), not added on top of the persisted counts.
 function seed(state, { trades = [], events = [], shadowRows = [], openPositions = [] }, cfg, now = Date.now()) {
+  cfg = withDefaults(cfg);
   const g = ensure(state);
   const today = londonDay(now);
   const counts = {};
@@ -137,6 +153,7 @@ function seed(state, { trades = [], events = [], shadowRows = [], openPositions 
 }
 
 function summary(state, cfg, now = Date.now()) {
+  cfg = withDefaults(cfg);
   const g = ensure(state);
   const stops = Object.entries(g.stops).filter(([, s]) => s.until > now);
   const today = g.entries[londonDay(now)] || {};
@@ -152,4 +169,4 @@ function summary(state, cfg, now = Date.now()) {
   };
 }
 
-module.exports = { londonDay, ensure, recordEntry, recordExit, check, addBroken, brokenFromEntrySanity, brokenFromExitSanity, seed, summary, readJsonl, isStopReason };
+module.exports = { DEFAULTS, withDefaults, londonDay, ensure, recordEntry, recordExit, check, addBroken, brokenFromEntrySanity, brokenFromExitSanity, seed, summary, readJsonl, isStopReason };
