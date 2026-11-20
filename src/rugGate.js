@@ -32,23 +32,41 @@ function norm(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-async function verifiedTokensFor(symbol) {
+// Clone check (Jupiter token search): one retry after a short backoff before failing closed
+// (16:15 RA: transient Jupiter errors were rejecting otherwise-clean candidates). Module setting,
+// outside every strategy hash; env CLONE_CHECK_RETRY_MS (default 750, 0 = no wait).
+const CLONE_RETRY_MS = Number.isFinite(Number(process.env.CLONE_CHECK_RETRY_MS)) && process.env.CLONE_CHECK_RETRY_MS !== '' && process.env.CLONE_CHECK_RETRY_MS != null ? Number(process.env.CLONE_CHECK_RETRY_MS) : 750;
+const cloneStats = { retries: 0, recovered: 0, failedClosed: 0 };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+async function verifiedTokensFor(symbol, { retryMs = CLONE_RETRY_MS } = {}) {
   const key = norm(symbol);
   // Non-latin/empty symbols cannot collide with a verified latin ticker; nothing to compare.
   if (!key) return { ok: true, verified: [] };
   const c = cloneCache.get(key);
   if (c && Date.now() - c.at < 60 * 60 * 1000) return c;
-  try {
-    const res = await http.get(`${JUP_TOKENS}/search`, { timeout: 6000, params: { query: symbol } });
-    const verified = (Array.isArray(res.data) ? res.data : [])
-      .filter(t => t.isVerified)
-      .map(t => ({ mint: t.id, symbol: t.symbol, name: t.name }));
-    const entry = { ok: true, at: Date.now(), verified };
-    cloneCache.set(key, entry);
-    return entry;
-  } catch (e) {
-    return { ok: false, verified: [], error: e.message };
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const res = await http.get(`${JUP_TOKENS}/search`, { timeout: 6000, params: { query: symbol } });
+      const verified = (Array.isArray(res.data) ? res.data : [])
+        .filter(t => t.isVerified)
+        .map(t => ({ mint: t.id, symbol: t.symbol, name: t.name }));
+      const entry = { ok: true, at: Date.now(), verified, attempts: attempt };
+      cloneCache.set(key, entry);
+      if (attempt > 1) cloneStats.recovered++;
+      return entry;
+    } catch (e) {
+      lastErr = (e.response && `HTTP ${e.response.status}`) || e.message;
+      if (attempt === 1) {
+        cloneStats.retries++;
+        console.log(`[rugGate] clone check failed for ${symbol} (${lastErr}); retrying once in ${retryMs}ms`);
+        if (retryMs > 0) await sleep(retryMs);
+      }
+    }
   }
+  cloneStats.failedClosed++;
+  return { ok: false, verified: [], error: lastErr, attempts: 2 };
 }
 
 // Pure: clone decision given candidate + verified list.
@@ -161,4 +179,4 @@ async function checkToken({ mint, symbol, name, pairAddress, dexLiquidityUsd, ex
   }
 }
 
-module.exports = { checkToken, evaluateReport, cloneCheck, holdersExPool, fetchReport, setHttp };
+module.exports = { checkToken, evaluateReport, cloneCheck, holdersExPool, fetchReport, setHttp, verifiedTokensFor, cloneStats, clearCaches: () => { reportCache.clear(); cloneCache.clear(); } };

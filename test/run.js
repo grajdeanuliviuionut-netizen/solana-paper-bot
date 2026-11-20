@@ -106,6 +106,41 @@ test('clone check by mint', () => {
   assert.ok(!cloneCheck({ mint: 'real', symbol: 'Pnut' }, [{ mint: 'real', symbol: 'Pnut' }]).clone);
 });
 
+// Real RugCheck market payloads (fetched 2026-11-20 16:2x London, trimmed to the lp fields).
+// RIEMANN 2H3CV59d...: pool created directly on PumpSwap by the token creator; RugCheck's lp.holders
+// shows the creator wallet holds 99.99999999942% of the LP -> genuinely unlocked (not burned).
+// LOOSY HF2RBP...pump: a pump.fun graduate whose PumpSwap LP is burned -> RugCheck already reports 100%.
+const RIEMANN_MARKET = { pubkey: '6oWKYwo5LC7Uv76ivyMXF5nuTghSZpkwYGb4rZqsnDT2', marketType: 'pump_fun_amm',
+  lp: { lpMint: 'BZb5AHAGf4tWCt4cai7uwkkudtvQCvxAY2PzJqVXx45W', lpLocked: 101, lpUnlocked: 17320508075588, lpTotalSupply: 17320508075689,
+    lpLockedPct: 5.831237718815143e-10, lpLockedUSD: 5.940702743029853e-7,
+    holders: [{ address: '93vBQ4ofQ5TNvyXgtWEZ65Rk3W1gGA3Teg4ALmgFaBGs', amount: 17320508075588, pct: 99.99999999941687, owner: 'ALrmWwdQ79Mrg2jYoKwFjsWBmZiuLFjVP6oTyzQAVXRh', insider: false }] } };
+const LOOSY_MARKET = { pubkey: 'Bfiq9eLOOSYPOOL', marketType: 'pump_fun_amm',
+  lp: { lpLocked: 4193388282605, lpUnlocked: 0, lpTotalSupply: 4193388282605, lpLockedPct: 100 } };
+test('rug gate LP: burned pump.fun LP (real LOOSY payload) passes; creator-held PumpSwap LP (real RIEMANN payload) still rejects', () => {
+  // Pool pubkey mapped to the fixture POOL so the pool-holder exclusion matches; lp fields are verbatim.
+  let rep = goodReport(); Object.assign(rep.markets[0], { marketType: LOOSY_MARKET.marketType, lp: LOOSY_MARKET.lp });
+  assert.deepStrictEqual(evaluateReport(rep, { pairAddress: POOL }).reasons, []);
+  rep = goodReport(); rep.creator = 'ALrmWwdQ79Mrg2jYoKwFjsWBmZiuLFjVP6oTyzQAVXRh'; Object.assign(rep.markets[0], { marketType: RIEMANN_MARKET.marketType, lp: RIEMANN_MARKET.lp });
+  assert.deepStrictEqual(evaluateReport(rep, { pairAddress: POOL }).reasons, ['lp-locked 0%<90']);
+  assert.strictEqual(RIEMANN_MARKET.lp.holders[0].owner, rep.creator); // the LP sits in the creator wallet
+});
+
+test('clone check: one retry after a short backoff, then fail closed', async () => {
+  const rg = require('../src/rugGate');
+  let calls = 0;
+  const flaky = failN => ({ get: async () => { calls++; if (calls <= failN) { const e = new Error('socket hang up'); throw e; } return { data: [{ id: 'real', symbol: 'ZQX', name: 'Zqx', isVerified: true }] }; } });
+  rg.clearCaches(); calls = 0; rg.setHttp(flaky(1));
+  let v = await rg.verifiedTokensFor('ZQX', { retryMs: 5 });
+  assert.ok(v.ok); assert.strictEqual(calls, 2); assert.strictEqual(v.attempts, 2);
+  rg.clearCaches(); calls = 0; rg.setHttp(flaky(5));
+  v = await rg.verifiedTokensFor('ZQY', { retryMs: 5 });
+  assert.ok(!v.ok); assert.strictEqual(calls, 2); // exactly one retry, then fail closed
+  rg.clearCaches(); calls = 0; rg.setHttp(flaky(0));
+  v = await rg.verifiedTokensFor('ZQZ', { retryMs: 5 });
+  assert.ok(v.ok); assert.strictEqual(calls, 1);
+  rg.setHttp(require('axios')); rg.clearCaches();
+});
+
 // ---------- entry gates ----------
 const ncs = config.strategies.find(s => s.type === 'ncs');
 const basePair = () => ({

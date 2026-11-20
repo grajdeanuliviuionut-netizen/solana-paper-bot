@@ -250,7 +250,7 @@ const mintGuard = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr4.1-loss-cap-entry-loosen-2026-11-20',
+  buildId: 'pr4.2-clone-retry-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
