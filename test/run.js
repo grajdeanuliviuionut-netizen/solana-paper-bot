@@ -573,6 +573,47 @@ test('entry grace (aggressive-flow + momentum-entry): first 60s only a -15% hard
   assert.strictEqual(stratById('ncs_fresh_momentum_v1').exit.graceSec, undefined);
 });
 
+test('after a restart (no sell quote yet) SL/trail/TP wait for a real quote; hard stop / emergency may fire on the model', () => {
+  const { judgeExit, awaitQuoteGate } = require('../src/sellAgent');
+  assert.strictEqual(config.exitQuotes.firstQuoteWaitMs, 30000);
+  const now = Date.now();
+  // GATO-like: momentum-entry position opened 10 min ago (past grace), model says -6.15% net -> decide() fires 'sl'.
+  const ex = stratById('momentum-entry').exit;
+  const pos = { strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(now - 600000).toISOString(), entryPrice: 1, entryFillPrice: 1.01,
+    entryTxCostSol: fm.txCostSol(1), sizeSol: 0.2, remainingFrac: 1, highest: 1.05, exit: ex };
+  const model = { source: 'model', netPct: -6.15, price: 1 * (1 - 0.0615) };
+  const d = decide(pos, model.price, true, null, now);
+  assert.strictEqual(d.reason, 'sl');
+  // Waiting for the first quote: held.
+  let g = awaitQuoteGate(pos, d, model, { waiting: true, hardStopPct: 15 });
+  assert.strictEqual(g.d, null); assert.strictEqual(g.held, 'sl'); assert.strictEqual(g.modelExit, false);
+  // Trail and TP are held too.
+  for (const r of ['trail', 'tp', 'time-trail', 'breakeven']) assert.strictEqual(awaitQuoteGate(pos, { action: 'close', reason: r }, model, { waiting: true, hardStopPct: 15 }).d, null);
+  // Emergency (rug / liquidity / no sells) and hard stop may still fire on the model.
+  for (const r of ['emergency-liq', 'emergency-rug', 'emergency-nosells', 'hard-stop']) {
+    g = awaitQuoteGate(pos, { action: 'close', reason: r }, model, { waiting: true, hardStopPct: 15 });
+    assert.strictEqual(g.d.reason, r); assert.strictEqual(g.modelExit, true);
+  }
+  // Model at <= -15% net while waiting -> converted to a hard stop.
+  const deep = { source: 'model', netPct: -16, price: 0.84 };
+  g = awaitQuoteGate(pos, decide(pos, deep.price, true, null, now), deep, { waiting: true, hardStopPct: 15 });
+  assert.strictEqual(g.d.reason, 'hard-stop'); assert.strictEqual(g.held, 'sl'); assert.strictEqual(g.modelExit, true);
+  // NCS (stop 12%) uses max(hard stop, own stop): -13% held, -16% -> hard stop.
+  const ncsPos = Object.assign({}, pos, { strategyId: 'ncs_fresh_momentum_v1', exit: stratById('ncs_fresh_momentum_v1').exit });
+  assert.strictEqual(awaitQuoteGate(ncsPos, { action: 'close', reason: 'sl' }, { source: 'model', netPct: -13, price: 0.87 }, { waiting: true, hardStopPct: 15 }).d, null);
+  assert.strictEqual(awaitQuoteGate(ncsPos, { action: 'close', reason: 'sl' }, deep, { waiting: true, hardStopPct: 15 }).d.reason, 'hard-stop');
+  // A real sell quote (source jupiter) or an expired wait: normal decision passes through unchanged.
+  const jq = judgeExit(pos, { quote: { ok: true, quotedPriceUsd: 1.01 * 0.93 }, midPrice: 1.0, liquidityUsd: 100000, solUsd: 72 });
+  assert.strictEqual(jq.source, 'jupiter');
+  const dj = decide(pos, jq.price, true, null, now);
+  assert.strictEqual(dj.reason, 'sl');
+  assert.strictEqual(awaitQuoteGate(pos, dj, jq, { waiting: true, hardStopPct: 15 }).d, dj);
+  assert.strictEqual(awaitQuoteGate(pos, d, model, { waiting: false, hardStopPct: 15 }).d, d);
+  // index.js wires the gate into processExits for paper and live positions alike (one exit path).
+  const src = require('fs').readFileSync(require('path').join(__dirname, '../src/index.js'), 'utf8');
+  assert.ok(/awaitQuoteGate\(pos, d, judge/.test(src) && /exit-quote-wait-expired/.test(src) && /exit-held-awaiting-quote/.test(src));
+});
+
 (async () => {
   for (const [name, fn] of tests) {
     try { await fn(); passed++; console.log(`ok   ${name}`); } catch (e) { console.error(`FAIL ${name}\n     ${e.stack || e.message}`); process.exitCode = 1; }

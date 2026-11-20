@@ -105,4 +105,20 @@ function legPnlSol(pos, exitFill, sellFrac) {
   return pos.sizeSol * sellFrac * (exitFill / pos.entryFillPrice - 1);
 }
 
-module.exports = { decide, shouldExit, legPnlSol, judgeExit, isProfitReason };
+// Waiting for the first real sell quote (after a restart the exit-quote cache is empty).
+// While waiting and judged on the MODEL price: only a hard stop (net <= -hardStopPct, at least the
+// strategy's own stop) or an emergency exit (rug / liquidity / no sells) may fire; SL, trail,
+// breakeven, TP and time exits are held until a quote arrives or the wait expires.
+// Returns { d, held, modelExit }.
+function awaitQuoteGate(pos, d, judge, { waiting, hardStopPct }) {
+  if (!waiting || !judge || judge.source !== 'model') return { d, held: null, modelExit: false };
+  if (d && /^(hard-stop|emergency)/.test(d.reason)) return { d, held: null, modelExit: true };
+  const ex = pos.exit || {};
+  const hs = Math.max(hardStopPct || 0, ex.hardStopPct || 0, ex.stopLossPct || 0);
+  if (hs > 0 && judge.netPct <= -hs) {
+    return { d: { action: 'close', reason: 'hard-stop', sellFrac: pos.remainingFrac == null ? 1 : pos.remainingFrac, fillPrice: judge.price }, held: d ? d.reason : null, modelExit: true };
+  }
+  return { d: null, held: d ? d.reason : null, modelExit: false };
+}
+
+module.exports = { decide, shouldExit, legPnlSol, judgeExit, isProfitReason, awaitQuoteGate };

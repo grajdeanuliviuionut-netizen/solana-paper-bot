@@ -169,7 +169,11 @@ function quoteSanityFor(strat) {
 const exitQuotes = {
   ttlMs: num('EXIT_QUOTE_TTL_MS', 9000),          // reuse a position's sell quote for this long
   maxPerLoop: num('EXIT_QUOTES_PER_LOOP', 5),     // Jupiter calls per exit loop (oldest quote first)
-  maxAgeMs: num('EXIT_QUOTE_MAX_AGE_MS', 30000)   // older than this -> model fallback for judging
+  maxAgeMs: num('EXIT_QUOTE_MAX_AGE_MS', 30000),  // older than this -> model fallback for judging
+  // After a restart (empty quote cache) a position waits up to this long for its first real sell
+  // quote before SL/trail/TP/time exits may fire on the model price. Hard stop and emergency
+  // (rug/liquidity) exits may still fire on the model meanwhile (logged).
+  firstQuoteWaitMs: num('EXIT_FIRST_QUOTE_WAIT_MS', 30000)
 };
 
 // ---- Operational per-strategy settings (pause / shadow / slots / priority). Kept OUT of the
@@ -190,7 +194,7 @@ const strategyOps = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr3.1-live-path-entry-grace-2026-11-20',
+  buildId: 'pr3.2-await-first-sell-quote-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
@@ -219,6 +223,7 @@ const config = {
   quoteSanity,
   quoteSanityFor,
   exitQuotes,
+  entryGrace,
   ncsRealisticStopPct: num('NCS_REALISTIC_STOP_PCT', -25), // /api/trades expectancy: NCS stop-outs re-priced at this
   strategyOps,
   strategies

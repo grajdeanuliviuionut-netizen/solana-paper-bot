@@ -7,7 +7,7 @@ const config = require('./config');
 const { loadState, saveState, logTrade, readTrades } = require('./logger');
 const { getCandidatePairs, getPairsByAddress } = require('./dataFetcher');
 const { generateSignals } = require('./buyAgent');
-const { decide, legPnlSol, judgeExit, isProfitReason } = require('./sellAgent');
+const { decide, legPnlSol, judgeExit, isProfitReason, awaitQuoteGate } = require('./sellAgent');
 const fillModel = require('./fillModel');
 const { fillGapPct } = fillModel;
 const { equityOf, slotStatus, orderCandidates, formatSkips } = require('./slots');
@@ -308,6 +308,8 @@ function finalizeTrade(pos, finalReason, fresh) {
 // ---- Exit judging on Jupiter sell quotes (strategy exit.judgeOn = 'sell-quote').
 const exitQuoteCache = new Map(); // position id -> { at, sq, remainingFrac }
 const judgeFallbackLogged = new Map(); // position id -> ts of last fallback log
+// First real sell quote per position in this process (the cache is empty after a restart).
+const quoteWait = new Map(); // position id -> { since, got, expiredLogged, heldLogged }
 function judgesOnQuote(pos) {
   const strat = strategyById(pos.strategyId);
   return ((strat && strat.exit && strat.exit.judgeOn) || (pos.exit && pos.exit.judgeOn)) === 'sell-quote';
@@ -334,8 +336,16 @@ async function judgeOnQuote(pos, q, mid, solUsd, budget) {
     const chk = quoteSanity.checkExit({ sell: quote, quotedAdj: quote.quotedPriceUsd, modelPrice: model });
     if (chk.insane) { why = `quote-insane ${chk.reasons.join(',')}`; quote = null; }
   } else quote = null;
+  let w = quoteWait.get(pos.id);
+  if (!w) { w = { since: now, got: false }; quoteWait.set(pos.id, w); }
+  if (quote) w.got = true;
+  const waiting = !w.got && now - w.since < config.exitQuotes.firstQuoteWaitMs;
+  if (!w.got && !waiting && !w.expiredLogged) {
+    w.expiredLogged = true;
+    rej.event('exit-quote-wait-expired', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, why, waitedMs: now - w.since, note: 'no sell quote yet, judging on the model price' });
+  }
   const judge = judgeExit(pos, { quote, midPrice: mid, liquidityUsd: q ? q.liquidityUsd : null, solUsd });
-  if (judge) judge.quote = quote;
+  if (judge) { judge.quote = quote; judge.waitingForQuote = waiting; judge.why = why; }
   if (judge && judge.source === 'model' && now - (judgeFallbackLogged.get(pos.id) || 0) > 5 * 60000) {
     judgeFallbackLogged.set(pos.id, now);
     rej.event('exit-judge-fallback', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, why, mid, modelExecPrice: judge.execPrice, netPct: +judge.netPct.toFixed(2) });
@@ -396,6 +406,18 @@ async function processExits(solUsd) {
         }
       }
       let d = decide(pos, price, judgeFresh, fresh ? q : null);
+      if (judge && judge.waitingForQuote) {
+        // No real sell quote yet since boot: SL/trail/TP/time wait for one (max firstQuoteWaitMs);
+        // a hard stop or an emergency exit may still fire on the model price (logged).
+        const g = awaitQuoteGate(pos, d, judge, { waiting: true, hardStopPct: config.entryGrace.hardStopPct });
+        const w = quoteWait.get(pos.id) || {};
+        if (g.held && w.heldLogged !== g.held) {
+          w.heldLogged = g.held;
+          rej.event('exit-held-awaiting-quote', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, heldReason: g.held, modelNetPct: +judge.netPct.toFixed(2), why: judge.why, waitedMs: Date.now() - (w.since || Date.now()) });
+        }
+        if (g.modelExit) rej.event('exit-on-model-awaiting-quote', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, reason: g.d.reason, modelNetPct: +judge.netPct.toFixed(2), why: judge.why });
+        d = g.d;
+      }
       if (d) { d.judge = judge; d.judgedPrice = d.fillPrice; d.fillPrice = mid; }
 
       // NCS emergency: RugCheck flips (authority re-enabled / danger). Cached 5 min.
@@ -428,6 +450,7 @@ async function processExits(solUsd) {
   }
   state.openPositions = stillOpen;
   for (const id of exitQuoteCache.keys()) if (!stillOpen.some(p => p.id === id)) { exitQuoteCache.delete(id); judgeFallbackLogged.delete(id); }
+  for (const id of quoteWait.keys()) if (!stillOpen.some(p => p.id === id)) quoteWait.delete(id);
   return exits;
 }
 
