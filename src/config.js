@@ -98,7 +98,12 @@ const strategies = [
     // Time stop at maxHoldMinutes exits only when the position is under water (mid PnL < 0%);
     // otherwise a timeTrailPct trailing stop arms at max hold (high-water mark from that moment).
     // judgeOn 'sell-quote': TP/SL/trail/time triggers use the Jupiter sell quote at position size, net of tx costs.
-    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40, timeStopOnlyIfLoss: true, timeTrailPct: 5, judgeOn: 'sell-quote', ...entryGrace },
+    // CHANGES MOMENTUM HASH - only ship if Liviu/RA OK. 10 of 25 session trades hit the 40-min time
+    // exit at avg -3.3% (MFE mostly < +2%) while every TP came within 21 min -> max hold 25. Huss
+    // (fc3fd9a29a5c) fell through the 6% stop during the 60s grace and was stopped at -9.05% at 69s ->
+    // momentum grace 30s with a 10% hard stop.
+    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 25, timeStopOnlyIfLoss: true, timeTrailPct: 5, judgeOn: 'sell-quote', ...entryGrace,
+      graceSec: num('MOMENTUM_GRACE_SEC', 30), hardStopPct: num('MOMENTUM_HARD_STOP_PCT', 10) },
     quoteSanity: { maxQuoteGapPct: 5 }, // entry |Jupiter vs model| cap for this strategy (global default 15)
     sizeSol: 0.2,
     maxOpen: 6
@@ -215,7 +220,7 @@ const allocator = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'tune-batch1-af-ncs-2026-11-20',
+  buildId: 'tune-batch1-af-ncs-momentum-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',

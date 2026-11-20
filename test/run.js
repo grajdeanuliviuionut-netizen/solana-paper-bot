@@ -418,7 +418,7 @@ test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawd
 });
 test('config hashes: all three changed (sell-quote exits + per-strategy gap caps; aggressive-flow also half size)', () => {
   assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': '26ad0c25a969', 'momentum-entry': 'fc3fd9a29a5c', ncs_fresh_momentum_v1: '519d1125f74c'
+    'aggressive-flow': '26ad0c25a969', 'momentum-entry': 'dbaccdabd831', ncs_fresh_momentum_v1: '519d1125f74c' // momentum changed by the flagged batch1 commit
   });
 });
 
@@ -552,7 +552,8 @@ test('entry grace (aggressive-flow + momentum-entry): first 60s only a -15% hard
   const { judgeExit } = require('../src/sellAgent');
   for (const id of ['aggressive-flow', 'momentum-entry']) {
     const ex = stratById(id).exit;
-    assert.strictEqual(ex.graceSec, 60); assert.strictEqual(ex.hardStopPct, 15); assert.strictEqual(ex.judgeOn, 'sell-quote');
+    const exp = id === 'momentum-entry' ? [30, 10] : [60, 15]; // momentum batch1 commit: 30s grace, 10% hard stop
+    assert.strictEqual(ex.graceSec, exp[0]); assert.strictEqual(ex.hardStopPct, exp[1]); assert.strictEqual(ex.judgeOn, 'sell-quote');
     const now = Date.now();
     const pos = { strategyId: id, strategyType: 'simple', entryTime: new Date(now - 9000).toISOString(), entryPrice: 1, entryFillPrice: 1.04,
       entryTxCostSol: fm.txCostSol(1), sizeSol: 0.1, remainingFrac: 1, highest: 1.0, exit: ex };
@@ -618,8 +619,8 @@ test('after a restart (no sell quote yet) SL/trail/TP wait for a real quote; har
 test('slot allocator: cap 12 when cash covers it, AF max 4, NCS max 2, 5 slots reserved for momentum, bump the weakest AF past grace', () => {
   const { maxOpenFor, reservedFor, pickBumpVictim } = require('../src/slots');
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
-  // Allocator lives outside every configHash: momentum-entry must stay fc3fd9a29a5c.
-  assert.strictEqual(config.strategyHashes['momentum-entry'], 'fc3fd9a29a5c');
+  // Allocator lives outside every configHash (momentum hash here = batch1 momentum commit).
+  assert.strictEqual(config.strategyHashes['momentum-entry'], 'dbaccdabd831');
   assert.strictEqual(config.opsFor('aggressive-flow').maxOpen, 4); assert.strictEqual(config.opsFor(ncsS.id).maxOpen, 2);
   const now = Date.now();
   const P = (id, ageSec = 600, netPct = 0, extra = {}) => ({ strategyId: id, sizeSol: id === 'aggressive-flow' ? 0.1 : 0.2, remainingFrac: 1, entryTime: new Date(now - ageSec * 1000).toISOString(), lastJudge: { netPct }, ...extra });
@@ -673,8 +674,8 @@ test('allocator: momentum-entry claims a mint both strategies passed; a capped A
   assert.ok(/for \(const sig of orderCandidates\(split.real, config\)\)/.test(src) && /ownSlotBlocked\(slotStatus/.test(src));
 });
 
-test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1 15; momentum hash unchanged', () => {
-  assert.strictEqual(config.strategyHashes['momentum-entry'], 'fc3fd9a29a5c');
+test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1 15', () => {
+  assert.strictEqual(config.strategyHashes['momentum-entry'], 'dbaccdabd831');
   const now = Date.now();
   const af = stratById('aggressive-flow');
   const P = (minsAgo, extra = {}) => ({ strategyId: 'aggressive-flow', strategyType: 'simple', entryTime: new Date(now - minsAgo * 60000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.1, remainingFrac: 1, highest: 1, exit: af.exit, ...extra });
@@ -702,6 +703,18 @@ test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1
   const tp1 = decide(N({ judgedHigh: 1.16 }), 1.16, true, null, now);
   assert.strictEqual(tp1.reason, 'tp1'); assert.strictEqual(tp1.sellFrac, 0.5);
   assert.strictEqual(ncsS.exit.trailAfterTp1Pct, 10);
+});
+
+test('batch1 momentum (changes momentum hash; only ship if Liviu/RA OK): max hold 25, grace 30s, hard stop 10%', () => {
+  const mom = stratById('momentum-entry');
+  assert.strictEqual(mom.exit.maxHoldMinutes, 25); assert.strictEqual(mom.exit.graceSec, 30); assert.strictEqual(mom.exit.hardStopPct, 10);
+  assert.strictEqual(stratById('aggressive-flow').exit.graceSec, 60); // AF keeps the shared 60s / 15%
+  const now = Date.now();
+  const P = secAgo => ({ strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(now - secAgo * 1000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.2, remainingFrac: 1, highest: 1, judgedHigh: 1, exit: mom.exit });
+  assert.strictEqual(decide(P(20), 0.92, true, null, now), null);            // -8% inside 30s grace: held
+  assert.strictEqual(decide(P(20), 0.895, true, null, now).reason, 'hard-stop'); // -10.5%: hard stop
+  assert.strictEqual(decide(P(35), 0.935, true, null, now).reason, 'sl');     // after grace: normal 6% SL
+  assert.strictEqual(decide(P(25 * 60 + 5), 0.99, true, null, now).reason, 'time'); // 25-min time stop when under water
 });
 
 (async () => {
