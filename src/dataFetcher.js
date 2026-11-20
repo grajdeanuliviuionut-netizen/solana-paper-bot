@@ -41,6 +41,7 @@ function normalizePair(p) {
     quoteMint: p.quoteToken?.address || null,
     pairAgeMin: p.pairCreatedAt ? Math.max(0, (Date.now() - p.pairCreatedAt) / 60000) : null,
     name: p.baseToken?.name || null,
+    labels: Array.isArray(p.labels) ? p.labels : [],
     priceChange: {
       m5: p.priceChange?.m5 || 0,
       h1: p.priceChange?.h1 || 0,

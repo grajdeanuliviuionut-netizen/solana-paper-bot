@@ -84,7 +84,9 @@ const strategies = [
       { field: 'h1', op: '>=', value: 2 },
       { field: 'm5', op: '>=', value: 0.5 }
     ],
-    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40 },
+    // Time stop at maxHoldMinutes exits only when the position is under water (mid PnL < 0%);
+    // otherwise a timeTrailPct trailing stop arms at max hold (high-water mark from that moment).
+    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40, timeStopOnlyIfLoss: true, timeTrailPct: 5 },
     sizeSol: 0.2,
     maxOpen: 6
   },
@@ -95,6 +97,7 @@ const strategies = [
     type: 'ncs',
     universe: {
       pairAgeMinMin: 5, pairAgeMaxMin: 240, excludeBondingCurve: true,
+      tokenFirstSeenMaxHours: 6, // spec universe.token_first_seen_max_hours (token creation time from Jupiter)
       tiers: {
         A: { minLiquidityUsd: 15000, sizeMult: 1.0 },
         B: { maxPairAgeMin: 60, minLiquidityUsd: 8000, sizeMult: 0.5 }
@@ -104,6 +107,7 @@ const strategies = [
       m5Min: 3, m5Max: 40, h1Max: 300,
       minVolumeM5Usd: { A: 5000, B: 3000 },
       maxLiqDropVsPrevPct: 10,
+      requirePrevLiqPoll: true, // spec: "liquidity.usd not down > 10% vs previous poll" needs a previous poll
       maxH1VolToLiq: 12, maxM5VolToLiq: 3,
       honeypot: { minTxnsM5: 20, minSellsM5: 3, maxBuySellRatioM5: 4 }
     },
@@ -111,8 +115,10 @@ const strategies = [
       top10MaxPct: 30, singleHolderMaxPct: 10, // spec values; global gate is stricter and wins
       rejectDangerRisks: true, graphInsidersMax: 50,
       maxRugcheckToDexLiqRatioMin: 0.5,
+      rejectCreatorRugHistory: true, // spec anti_rug_hard.creator_rug_history: reject
+      // Spec names; matched as prefixes so RugCheck keys like confidentialTransferMint / pausableConfig hit too.
       token2022RejectExtensions: ['transferFeeConfig', 'transferHook', 'permanentDelegate', 'defaultAccountState',
-        'nonTransferable', 'confidentialTransferMint', 'pausableConfig', 'mintCloseAuthority', 'scaledUiAmountConfig', 'interestBearingConfig']
+        'nonTransferable', 'confidentialTransfer', 'pausable', 'mintCloseAuthority', 'scaledUiAmount', 'interestBearing']
     },
     exit: {
       stopLossPct: 12,
@@ -129,20 +135,44 @@ const strategies = [
   }
 ];
 
+// ---- Quote sanity (entry hard-reject + exit fallback). Not part of any configHash (like the rug
+// gate's fail-closed plumbing / the denylist, it filters broken or drained pools, not strategy edge).
+const quoteSanity = {
+  maxPriceImpactPct: num('MAX_PRICE_IMPACT_PCT', 5),       // entry: Jupiter priceImpact above this = reject
+  maxQuoteGapPct: num('MAX_QUOTE_GAP_PCT', 15),            // entry: |Jupiter vs model| above this = reject
+  requireReverseRoute: process.env.QUOTE_REQUIRE_REVERSE !== '0', // entry: token->SOL quote must route
+  maxExitPriceImpactPct: num('MAX_EXIT_PRICE_IMPACT_PCT', 50), // exit: above this the quote is "insane" -> model price
+  maxExitQuoteGapPct: num('MAX_EXIT_QUOTE_GAP_PCT', 50),
+  maxReverseImpactPct: num('MAX_REVERSE_IMPACT_PCT', 3)       // entry: token->SOL quote impact at size above this = reject
+};
+
+// ---- Operational per-strategy settings (pause / shadow / slots / priority). Kept OUT of the
+// configHash on purpose: they decide whether and how many trades are taken, not the strategy's
+// entry/exit/sizing rules, so they must not reset the 50-trade go-live counts.
+// Lower priority number = served first for free slots. tierMaxOpen caps a tier inside the strategy.
+const strategyOps = {
+  // Paused 2026-11-20 11:40 (1W/8L since 10:25, -0.285 SOL after costs): no new entries, shadow only.
+  'aggressive-flow': { enabled: false, shadow: true, priority: 9 },
+  'momentum-entry': { enabled: true, maxOpen: 8, priority: 1 },
+  // NCS: spec sizing.max_concurrent_positions = 5 is kept; free slots go to tier A first (priority),
+  // tier B is served after momentum-entry and tier A.
+  ncs_fresh_momentum_v1: { enabled: true, tierPriority: { A: 1, B: 2 }, priority: 1 }
+};
+
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr2.1-equity-denylist-2026-11-20',
+  buildId: 'pr2.2-quote-sanity-shadow-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
   startingSol: num('STARTING_SOL', 4),
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '45000', 10),
-  exitCheckMs: parseInt(process.env.EXIT_CHECK_MS || '15000', 10),
+  exitCheckMs: parseInt(process.env.EXIT_CHECK_MS || '10000', 10), // open positions re-priced every ~10s
   positionSizeSol: 0.2,
   maxOpen: 10,                 // global cap across strategies
   dailyLossLimitSol: 0.25,
-  fullStopBalance: 2.5,
+  fullStopBalance: 2.5,         // compared with paper EQUITY (cash + open cost basis), not cash
   costRoundtripPct: 1.1,       // legacy flat cost, kept for reference only (depth model is used)
   // Legacy strategies keep a $50k floor via their universe; the scan floor is the lowest tier.
   minLiquidityUsd: num('MIN_LIQUIDITY_USD', 50000),
@@ -158,6 +188,8 @@ const config = {
   majorTokens: MAJOR_TOKENS,
   fills,
   rugGate,
+  quoteSanity,
+  strategyOps,
   strategies
 };
 
@@ -172,6 +204,7 @@ config.stableStringify = stableStringify;
 config.configHashFor = strat => crypto.createHash('sha256')
   .update(stableStringify({ strat, fills, rugGate, minLiquidityUsd: config.minLiquidityUsd }))
   .digest('hex').slice(0, 12);
+config.opsFor = id => Object.assign({ enabled: true, shadow: false, priority: 5 }, strategyOps[id] || {});
 config.strategyHashes = Object.fromEntries(strategies.map(s => [s.id, config.configHashFor(s)]));
 
 module.exports = config;

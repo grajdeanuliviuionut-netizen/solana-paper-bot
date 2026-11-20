@@ -115,10 +115,16 @@ function evaluateReport(report, { pairAddress, dexLiquidityUsd, extra } = {}, g 
       const rcLiq = Number(report.totalMarketLiquidity) || 0;
       if (rcLiq < dexLiquidityUsd * extra.maxRugcheckToDexLiqRatioMin) reasons.push('liq-source-disagree');
     }
+    if (extra.rejectCreatorRugHistory) {
+      const ct = Array.isArray(report.creatorTokens) ? report.creatorTokens : [];
+      if (risks.some(r => /creator.*(rug|history)/i.test(r.name || '')) || ct.some(t => t && (t.rugged || /rug/i.test(String(t.status || ''))))) reasons.push('creator-rug-history');
+    }
     const ext = report.token_extensions || {};
     for (const k of extra.token2022RejectExtensions || []) {
-      const v = ext[k];
-      if (v && !(typeof v === 'object' && Object.keys(v).length === 0)) reasons.push(`ext-${k}`);
+      // Spec names are prefixes of RugCheck's keys (confidentialTransfer -> confidentialTransferMint, ...).
+      for (const [key, v] of Object.entries(ext)) {
+        if (key.toLowerCase().startsWith(k.toLowerCase()) && v && !(typeof v === 'object' && Object.keys(v).length === 0)) { reasons.push(`ext-${key}`); break; }
+      }
     }
   }
   return {

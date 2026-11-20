@@ -202,10 +202,10 @@ test('denylist: buyAgent rejects tokenized equity as its own reason, counts it, 
   for (const st of Object.values(gateStats)) assert.strictEqual(st.fails['tokenized-equity'], 1);
   assert.ok(skips.every(k => k.reason === 'tokenized-equity' && k.mint === TTWO));
 });
-test('denylist is a universe filter: strategy config hashes unchanged', () => {
-  assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': 'f3e0a8a6ee6a', 'momentum-entry': '693cb5e06575', ncs_fresh_momentum_v1: '68a188ed9bc4'
-  });
+test('denylist is a universe filter: not in any strategy config hash', () => {
+  const ncsStrat = config.strategies.find(x => x.type === 'ncs');
+  assert.ok(!JSON.stringify(ncsStrat).includes('TTWofw'));
+  assert.strictEqual(config.strategyHashes['aggressive-flow'], 'f3e0a8a6ee6a');
 });
 
 // ---------- slot-full skips ----------
@@ -250,7 +250,235 @@ test('state (balance + open positions) carries over a buildId change', () => {
   assert.strictEqual(st2.buildHistory[st2.buildHistory.length - 1].from, 'build-old');
 });
 
-for (const [name, fn] of tests) {
-  try { fn(); passed++; console.log(`ok   ${name}`); } catch (e) { console.error(`FAIL ${name}\n     ${e.message}`); process.exitCode = 1; }
+
+// ---------- quote sanity (RUDY 2026-11-20 11:29) ----------
+const jup = require('../src/jupiterQuote');
+const qs = require('../src/quoteSanity');
+const SOL = jup.SOL_MINT;
+const RUDY = 'HmBGdetVsQTRHh2wCa4HykUpKA7NJ1B8S16tUpYiWeaZ';
+const RUDY_MODEL = 4.502170211721098e-05;
+const SOL_USD = 71.95;
+// Fake Jupiter: routes keyed by `${inputMint}>${outputMint}` -> fn(amount) => quote body | Error
+function fakeJup(routes) {
+  return { get: async (url, { params }) => {
+    const fn = routes[`${params.inputMint}>${params.outputMint}`];
+    if (!fn) { const e = new Error('Request failed'); e.response = { status: 400, data: { error: 'No routes found', errorCode: 'COULD_NOT_FIND_ANY_ROUTE' } }; throw e; }
+    return { data: fn(params.amount, params) };
+  } };
 }
-console.log(`\n${passed}/${tests.length} passed`);
+const body = (inM, outM, inAmt, outAmt, impactFrac, label = 'Pump.fun Amm') => ({
+  inputMint: inM, outputMint: outM, inAmount: String(inAmt), outAmount: String(outAmt), swapMode: 'ExactIn',
+  priceImpactPct: String(impactFrac), routePlan: [{ swapInfo: { label, inputMint: inM, outputMint: outM } }]
+});
+// Healthy pool for RUDY at the model price: 0.2 SOL ($14.39) -> ~319,600 RUDY.
+const goodTokensRaw = Math.round((0.2 * SOL_USD) / (RUDY_MODEL * 1.01) * 1e6);
+async function entryCheck(routes, opts = {}) {
+  jup.setHttp(fakeJup(routes));
+  const buy = await jup.shadowBuyQuote({ mint: RUDY, decimals: 6, sizeSol: 0.2, solUsd: SOL_USD });
+  const reverse = buy.ok ? await jup.sellRawQuote({ mint: RUDY, raw: buy.rawOut, decimals: 6, solUsd: SOL_USD }) : null;
+  return { buy, reverse, res: qs.checkEntry({ buy, reverse, modelPrice: RUDY_MODEL, decimals: 6, jupDecimals: opts.jupDecimals }) };
+}
+const goodRoutes = () => ({
+  [`${SOL}>${RUDY}`]: amt => body(SOL, RUDY, amt, goodTokensRaw, 0.004),
+  [`${RUDY}>${SOL}`]: amt => body(RUDY, SOL, amt, 197000000, 0.006)
+});
+test('units: SOL/token raw amounts are exact integers (toRaw/fromRaw)', () => {
+  assert.strictEqual(jup.toRaw(0.2, 9), '200000000');
+  assert.strictEqual(jup.toRaw(41360.40055464931, 6), '41360400555');
+  assert.strictEqual(jup.fromRaw('4016', 6), 0.004016);
+  assert.throws(() => jup.toRaw(1, undefined));
+});
+test('RUDY repro: 0.2 SOL -> 4016 raw (0.004016 RUDY), impact 99.99999% => $3,58x/token; rejected', async () => {
+  const { buy, res } = await entryCheck({
+    [`${SOL}>${RUDY}`]: amt => body(SOL, RUDY, amt, 4016, 0.9999999873523959)
+    // drained pool: no reverse route
+  });
+  assert.ok(buy.ok); // the quote itself is internally consistent (mints/amounts/decimals all correct)
+  assert.ok(buy.quotedPriceUsd > 3500 && buy.quotedPriceUsd < 3700, String(buy.quotedPriceUsd));
+  assert.ok(buy.priceImpactPct > 99.9999);
+  assert.strictEqual(res.pass, false);
+  assert.ok(res.reasons.some(r => r.startsWith('impact')));
+  assert.ok(res.reasons.some(r => r.startsWith('gap')));
+  assert.ok(res.reasons.includes('reverse-no-route'));
+});
+test('quoteSanity passes a healthy quote (worse-of may then use it)', async () => {
+  const { res } = await entryCheck(goodRoutes());
+  assert.ok(res.pass, res.reasons.join(';'));
+  assert.ok(Math.abs(res.gapPct) < 2);
+});
+test('quoteSanity rule: priceImpact > MAX_PRICE_IMPACT_PCT (5) rejects on its own', async () => {
+  const r = goodRoutes(); r[`${SOL}>${RUDY}`] = amt => body(SOL, RUDY, amt, goodTokensRaw, 0.06);
+  const { res } = await entryCheck(r);
+  assert.deepStrictEqual(res.reasons, ['impact 6.00%>5%']);
+});
+test('quoteSanity rule: |quote vs model| > MAX_QUOTE_GAP_PCT (15) rejects on its own', async () => {
+  const r = goodRoutes(); r[`${SOL}>${RUDY}`] = amt => body(SOL, RUDY, amt, Math.round(goodTokensRaw / 1.25), 0.01);
+  const { res } = await entryCheck(r);
+  assert.strictEqual(res.reasons.length, 1); assert.ok(res.reasons[0].startsWith('gap 2'), res.reasons[0]);
+  const r2 = goodRoutes(); r2[`${SOL}>${RUDY}`] = amt => body(SOL, RUDY, amt, Math.round(goodTokensRaw * 1.3), 0.01); // too GOOD is also suspect
+  assert.ok((await entryCheck(r2)).res.reasons[0].startsWith('gap -'));
+});
+test('quoteSanity rule: reverse quote (token -> SOL at expected size) with no route rejects on its own', async () => {
+  const r = goodRoutes(); delete r[`${RUDY}>${SOL}`];
+  const { res, reverse } = await entryCheck(r);
+  assert.ok(reverse.noRoute);
+  assert.deepStrictEqual(res.reasons, ['reverse-no-route']);
+});
+test('quoteSanity: reverse quote sells exactly the forward outAmount', async () => {
+  let soldAmt = null;
+  const r = goodRoutes(); r[`${RUDY}>${SOL}`] = amt => { soldAmt = amt; return body(RUDY, SOL, amt, 197000000, 0.006); };
+  await entryCheck(r);
+  assert.strictEqual(soldAmt, String(goodTokensRaw));
+});
+test('quote validation: wrong output mint / changed inAmount / decimals mismatch are rejected', async () => {
+  const r = goodRoutes(); r[`${SOL}>${RUDY}`] = amt => body(SOL, 'SomeOtherMint111', amt, goodTokensRaw, 0.004);
+  const a = await entryCheck(r);
+  assert.ok(!a.buy.ok && a.buy.mismatch); assert.ok(a.res.reasons[0].startsWith('quote-mismatch'));
+  const r2 = goodRoutes(); r2[`${SOL}>${RUDY}`] = amt => body(SOL, RUDY, '100000000', goodTokensRaw, 0.004);
+  assert.ok((await entryCheck(r2)).buy.mismatch);
+  const c = await entryCheck(goodRoutes(), { jupDecimals: 9 });
+  assert.ok(c.res.reasons[0].startsWith('decimals-mismatch'));
+});
+test('exit: insane sell quote falls back to model; sane one is usable', () => {
+  const insane = qs.checkExit({ sell: { ok: true, priceImpactPct: 99.9 }, quotedAdj: 1e-9, modelPrice: 1e-4 });
+  assert.ok(insane.insane && !insane.usable);
+  const sane = qs.checkExit({ sell: { ok: true, priceImpactPct: 1.4 }, quotedAdj: 0.91e-4, modelPrice: 1e-4 });
+  assert.ok(sane.usable && !sane.insane);
+});
+
+// ---------- aggressive-flow paused (shadow) + slot priorities ----------
+const shadow = require('../src/shadow');
+test('aggressive-flow: disabled, opens no real entries, logs + tracks shadow entries without touching balance', () => {
+  const af = config.strategies.find(s => s.id === 'aggressive-flow');
+  const mom = config.strategies.find(s => s.id === 'momentum-entry');
+  assert.ok(shadow.isDisabled(af) && shadow.isShadow(af));
+  assert.ok(!shadow.isDisabled(mom));
+  const p = Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 20000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 1, h1: 3, h6: 0, h24: 0 } });
+  const { signals } = generateSignals([p]);
+  assert.ok(signals.some(sg => sg.strategyId === 'aggressive-flow'), 'aggressive-flow still scans');
+  const split = shadow.splitSignals(signals);
+  assert.ok(split.real.every(sg => sg.strategyId !== 'aggressive-flow'));
+  assert.ok(split.shadow.length >= 1 && split.shadow.every(sg => sg.strategyId === 'aggressive-flow'));
+  const st = { balance: 3, openPositions: [] };
+  const sig = split.shadow[0];
+  assert.ok(shadow.canOpen(st, af, sig.mint));
+  const q = { mint: sig.mint, priceUsd: 0.001, liquidityUsd: 200000, priceChange: { m5: 1 } };
+  const modelFill = fm.fillEntry({ midPrice: 0.001, sizeSol: 0.2, solUsd: 150, liquidityUsd: 200000 });
+  const pos = shadow.open(st, { strat: af, sig, q, modelFill, entryFill: modelFill.price, entryFillSource: 'depth', sizeSol: 0.2, decimals: 6, quote: { quotedPriceUsd: 0.00101, priceImpactPct: 0.3 } });
+  assert.ok(!shadow.canOpen(st, af, sig.mint)); // one shadow position per mint
+  assert.strictEqual(st.balance, 3); assert.strictEqual(st.openPositions.length, 0);
+  // Hypothetical TP exit (+7% > tp 6%)
+  const closed = shadow.processExits(st, { [sig.pairAddress]: { ...q, priceUsd: 0.00107 } }, 150, Date.now() + 60000, () => 0.99);
+  assert.strictEqual(closed.length, 1); assert.strictEqual(closed[0].exitReason, 'tp'); assert.ok(closed[0].pnlSol > 0);
+  assert.strictEqual(st.balance, 3); assert.strictEqual(st.shadow.open.length, 0);
+  assert.ok(!shadow.canOpen(st, af, sig.mint)); // cooldown after exit
+  assert.strictEqual(shadow.summary(st)['aggressive-flow'].trades, 1);
+  assert.ok(pos.id.startsWith('sh-'));
+});
+test('free slots: momentum-entry up to 8; NCS stays at spec max 5 with tier A served first', () => {
+  const { orderCandidates } = require('../src/slots');
+  const mom = config.strategies.find(s => s.id === 'momentum-entry');
+  const pos = (id, tier) => ({ strategyId: id, tier, sizeSol: 0.05 });
+  const seven = Array.from({ length: 7 }, () => pos('momentum-entry'));
+  assert.strictEqual(slotStatus({ balance: 4, openPositions: seven }, mom, config), null);
+  assert.strictEqual(slotStatus({ balance: 4, openPositions: seven.concat([pos('momentum-entry')]) }, mom, config).max, 8);
+  const fiveA = Array.from({ length: 5 }, () => pos(ncs.id, 'A'));
+  assert.strictEqual(slotStatus({ balance: 4, openPositions: fiveA }, ncs, config, 'A').max, 5);
+  const ten = Array.from({ length: 10 }, () => pos('x'));
+  assert.strictEqual(slotStatus({ balance: 4, openPositions: ten }, mom, config).scope, 'global');
+  const order = orderCandidates([
+    { strategyId: ncs.id, tier: 'B', mint: 'b' }, { strategyId: 'momentum-entry', mint: 'm' }, { strategyId: ncs.id, tier: 'A', mint: 'a' }
+  ], config).map(c => c.mint);
+  assert.strictEqual(order[2], 'b');
+  assert.strictEqual(mom.sizeSol, 0.2); // sizes unchanged
+});
+test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawdown is', () => {
+  const { equityOf } = require('../src/slots');
+  const mom = config.strategies.find(s => s.id === 'momentum-entry');
+  const six = Array.from({ length: 6 }, () => ({ strategyId: 'momentum-entry', sizeSol: 0.2, remainingFrac: 1 }));
+  near(equityOf({ balance: 2.3269, openPositions: six }), 3.5269);
+  assert.strictEqual(slotStatus({ balance: 2.3269, openPositions: six }, mom, config), null);
+  assert.strictEqual(slotStatus({ balance: 1.2, openPositions: six }, mom, config).reason, 'balance-stop');
+  assert.strictEqual(slotStatus({ balance: 0.1, openPositions: Array.from({ length: 9 }, () => ({ strategyId: 'x', sizeSol: 0.3 })) }, mom, config).scope, 'cash');
+});
+test('config hashes: aggressive-flow + momentum unchanged; NCS changed only by the spec gate fixes', () => {
+  assert.deepStrictEqual(config.strategyHashes, {
+    'aggressive-flow': 'f3e0a8a6ee6a', 'momentum-entry': '6d674dfaaf7c', ncs_fresh_momentum_v1: 'fda96c6c4b63'
+  });
+});
+
+// ---------- NCS spec audit ----------
+test('NCS spec: no previous liquidity poll cannot pass (Gino entered on scan #1 after a restart)', () => {
+  const p = basePair(); p.liqChangeVsPrevPct = null;
+  assert.deepStrictEqual(evaluate(p, ncs).fails, ['liqPrevMissing']);
+  const p2 = basePair(); p2.liqChangeVsPrevPct = -10.5;
+  assert.deepStrictEqual(evaluate(p2, ncs).fails, ['liqDropVsPrev']);
+});
+test('NCS spec: bonding-curve pools excluded by dexId or DEX Screener label (DBC / LaunchLab)', () => {
+  for (const [dexId, labels] of [['pumpfun', []], ['meteora', ['DBC']], ['raydium', ['LaunchLab']], ['moonshot', []]]) {
+    const p = basePair(); p.dexId = dexId; p.labels = labels;
+    assert.ok(evaluate(p, ncs).fails.includes('bondingCurve'), dexId);
+  }
+  const ok = basePair(); ok.dexId = 'pumpswap'; ok.labels = []; assert.deepStrictEqual(evaluate(ok, ncs).fails, []);
+  const ok2 = basePair(); ok2.dexId = 'meteora'; ok2.labels = ['DLMM']; assert.deepStrictEqual(evaluate(ok2, ncs).fails, []);
+});
+test('NCS spec boundaries: age 5..240, m5 +3..+40 inclusive, buys > sells strictly, wash 12/3, tier B <= 60 min', () => {
+  const e = (mut) => { const p = basePair(); mut(p); return evaluate(p, ncs).fails; };
+  assert.ok(e(p => { p.pairAgeMin = 4.9; }).includes('pairAge'));
+  assert.ok(!e(p => { p.pairAgeMin = 5; }).includes('pairAge'));
+  assert.ok(e(p => { p.pairAgeMin = 240.1; }).includes('pairAge'));
+  assert.ok(!e(p => { p.priceChange.m5 = 3; }).includes('m5Range'));
+  assert.ok(e(p => { p.priceChange.m5 = 2.99; }).includes('m5Range'));
+  assert.ok(e(p => { p.priceChange.m5 = 40.01; }).includes('m5Range'));
+  assert.ok(e(p => { p.txnsM5 = { buys: 15, sells: 15 }; }).includes('m5BuysGtSells'));
+  assert.ok(e(p => { p.volumeH1 = 20000 * 12.01; }).includes('washH1'));
+  assert.ok(!e(p => { p.volumeH1 = 20000 * 12; }).includes('washH1'));
+  assert.ok(e(p => { p.liquidityUsd = 9000; p.volumeM5 = 3500; p.volumeH1 = 20000; p.pairAgeMin = 61; }).includes('tierLiquidity'));
+  assert.strictEqual(ncs.universe.tokenFirstSeenMaxHours, 6);
+});
+test('NCS spec rug extras: creator rug history; token-2022 extensions matched by spec prefix', () => {
+  const rep = goodReport();
+  rep.risks = [{ name: 'Creator history of rugged tokens', level: 'warn' }];
+  assert.ok(evaluateReport(rep, { pairAddress: POOL, dexLiquidityUsd: 100000, extra: ncs.extraRug }).reasons.includes('creator-rug-history'));
+  const rep2 = goodReport(); rep2.token_extensions = { confidentialTransferMint: { authority: 'x' } };
+  assert.ok(evaluateReport(rep2, { pairAddress: POOL, dexLiquidityUsd: 100000, extra: ncs.extraRug }).reasons.includes('ext-confidentialTransferMint'));
+});
+test('quoteSanity rule: reverse-quote impact at size > MAX_REVERSE_IMPACT_PCT (3) rejects', async () => {
+  const r = goodRoutes(); r[`${RUDY}>${SOL}`] = amt => body(RUDY, SOL, amt, 190000000, 0.035);
+  const { res } = await entryCheck(r);
+  assert.deepStrictEqual(res.reasons, ['reverse-impact 3.50%>3%']);
+});
+test('rejections detail: per-mint rows with failed gate + value (last 200)', () => {
+  const rows = [];
+  const p = basePair(); p.priceChange.m5 = 1;
+  generateSignals([p], { detail: r => rows.push(r) });
+  const n = rows.find(r => r.strategyId === ncs.id);
+  assert.strictEqual(n.gate, 'm5Range'); assert.strictEqual(n.value, 1); assert.strictEqual(n.mint, 'M1');
+  for (let i = 0; i < 250; i++) rej.detail({ strategyId: 'x', mint: 'm' + i, gate: 'g', value: i });
+  assert.strictEqual(rej.details.length, 200); assert.strictEqual(rej.details[0].value, 249);
+});
+
+test('momentum-entry time stop: exits at max hold only if PnL < 0, else arms a trail', () => {
+  const t0 = Date.parse('2026-11-20T10:00:00Z');
+  const mk = () => ({ strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(t0).toISOString(), entryPrice: 1, highest: 1.05, remainingFrac: 1, exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40 } });
+  const late = t0 + 41 * 60000;
+  const loss = decide(mk(), 0.99, true, null, late);
+  assert.strictEqual(loss.reason, 'time');
+  const p = mk();
+  assert.strictEqual(decide(p, 1.03, true, null, late), null); // in profit: hold, trail armed at 1.03
+  assert.ok(p.timeTrailArmedAt); assert.strictEqual(p.timeTrailHigh, 1.03);
+  assert.strictEqual(decide(p, 1.06, true, null, late + 10000), null); // new high 1.06
+  assert.strictEqual(p.timeTrailHigh, 1.06);
+  assert.strictEqual(decide(p, 1.02, true, null, late + 20000), null); // -3.8% from high, still >0
+  assert.strictEqual(decide(p, 1.0065, true, null, late + 30000).reason, 'time-trail'); // -5.05% from high
+  const q = mk(); decide(q, 1.02, true, null, late);
+  assert.strictEqual(decide(q, 0.995, true, null, late + 10000).reason, 'time'); // dropped under 0%
+  assert.strictEqual(decide(mk(), 1.02, true, null, t0 + 30 * 60000), null); // before max hold: unchanged
+});
+
+(async () => {
+  for (const [name, fn] of tests) {
+    try { await fn(); passed++; console.log(`ok   ${name}`); } catch (e) { console.error(`FAIL ${name}\n     ${e.stack || e.message}`); process.exitCode = 1; }
+  }
+  console.log(`\n${passed}/${tests.length} passed`);
+})();

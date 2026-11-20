@@ -102,7 +102,7 @@ async function check({ mint, symbol, name }) {
     const res = await http.get(`${JUP_TOKENS}/search`, { timeout: 6000, params: { query: mint } });
     const t = (Array.isArray(res.data) ? res.data : []).find(x => x.id === mint);
     const reason = jupiterCheck(t);
-    jupCache.set(mint, { at: Date.now(), reason });
+    jupCache.set(mint, { at: Date.now(), reason, token: t ? { decimals: t.decimals, tokenProgram: t.tokenProgram, symbol: t.symbol, createdAt: (t.firstPool && t.firstPool.createdAt) || t.createdAt || null } : null });
     if (jupCache.size > 5000) jupCache.clear();
     return reason;
   } catch (e) {
@@ -110,4 +110,10 @@ async function check({ mint, symbol, name }) {
   }
 }
 
-module.exports = { MINTS, ISSUERS, staticCheck, jupiterCheck, check, setHttp, REASON: 'tokenized-equity' };
+// Jupiter token-list record cached by check() (decimals etc.), or null.
+function cachedToken(mint) {
+  const c = jupCache.get(mint);
+  return c ? c.token || null : null;
+}
+
+module.exports = { cachedToken, MINTS, ISSUERS, staticCheck, jupiterCheck, check, setHttp, REASON: 'tokenized-equity' };

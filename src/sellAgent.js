@@ -5,7 +5,10 @@ const config = require('./config');
 // priceFresh=false: only time stops may fire (never fake TP/SL off a stale number).
 // Returns null | { action: 'close'|'partial', reason, sellFrac (of ORIGINAL size), fillPrice }.
 function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
-  const ex = pos.exit || {};
+  // Simple strategies use the CURRENT config exit rules (so open positions pick up changes such as
+  // the momentum-entry time-stop rule); NCS positions keep the rules they were opened with.
+  const live = pos.strategyType !== 'ncs' && config.strategies.find(s => s.id === pos.strategyId);
+  const ex = Object.assign({}, pos.exit || {}, live && live.exit ? live.exit : {});
   const minsOpen = (now - new Date(pos.entryTime).getTime()) / 60000;
   const changePct = ((price - pos.entryPrice) / pos.entryPrice) * 100;
   const remaining = pos.remainingFrac == null ? 1 : pos.remainingFrac;
@@ -45,7 +48,15 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
       if (peakPct >= ex.trailAfterPct && price <= (pos.highest || pos.entryPrice) * (1 - (ex.trailPct || 5) / 100)) return close('trail');
     }
   }
-  if (minsOpen >= (ex.maxHoldMinutes || config.defaultMaxHoldMinutes)) return close(priceFresh ? 'time' : 'time-stale');
+  if (minsOpen >= (ex.maxHoldMinutes || config.defaultMaxHoldMinutes)) {
+    if (!ex.timeStopOnlyIfLoss || changePct < 0) return close(priceFresh ? 'time' : 'time-stale');
+    // In profit at max hold: no time exit; arm a trailing stop from here instead.
+    if (!pos.timeTrailArmedAt) { pos.timeTrailArmedAt = new Date(now).toISOString(); pos.timeTrailHigh = price; }
+    if (priceFresh) {
+      if (price > (pos.timeTrailHigh || 0)) pos.timeTrailHigh = price;
+      if (price <= pos.timeTrailHigh * (1 - (ex.timeTrailPct || ex.trailPct || 5) / 100)) return close('time-trail');
+    }
+  }
   return null;
 }
 
