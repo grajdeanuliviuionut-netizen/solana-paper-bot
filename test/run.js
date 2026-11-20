@@ -660,6 +660,19 @@ test('slot allocator: cap 12 when cash covers it, AF max 4, NCS max 2, 5 slots r
   assert.ok(/reason: 'bumped'/.test(src) && /judge.source !== 'jupiter'/.test(src) && /finalReason !== 'bumped'/.test(src));
 });
 
+test('allocator: momentum-entry claims a mint both strategies passed; a capped AF never takes it', () => {
+  const { orderCandidates, ownSlotBlocked } = require('../src/slots');
+  const af = stratById('aggressive-flow'), mom = stratById('momentum-entry');
+  const sigs = [{ strategyId: 'aggressive-flow', strategy: af, mint: 'X' }, { strategyId: 'momentum-entry', strategy: mom, mint: 'X' }];
+  assert.strictEqual(orderCandidates(sigs, config)[0].strategyId, 'momentum-entry');
+  const fourAF = Array.from({ length: 4 }, () => ({ strategyId: 'aggressive-flow', sizeSol: 0.1 }));
+  assert.ok(ownSlotBlocked(slotStatus({ balance: 3, openPositions: fourAF }, af, config)));
+  assert.ok(!ownSlotBlocked(slotStatus({ balance: 3, openPositions: fourAF }, mom, config)));
+  assert.ok(!ownSlotBlocked({ reason: 'slot-full skip', scope: 'global' }));
+  const src = require('fs').readFileSync(require('path').join(__dirname, '../src/index.js'), 'utf8');
+  assert.ok(/for \(const sig of orderCandidates\(split.real, config\)\)/.test(src) && /ownSlotBlocked\(slotStatus/.test(src));
+});
+
 (async () => {
   for (const [name, fn] of tests) {
     try { await fn(); passed++; console.log(`ok   ${name}`); } catch (e) { console.error(`FAIL ${name}\n     ${e.stack || e.message}`); process.exitCode = 1; }

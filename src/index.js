@@ -10,7 +10,7 @@ const { generateSignals } = require('./buyAgent');
 const { decide, legPnlSol, judgeExit, isProfitReason, awaitQuoteGate } = require('./sellAgent');
 const fillModel = require('./fillModel');
 const { fillGapPct } = fillModel;
-const { equityOf, slotStatus, orderCandidates, formatSkips, maxOpenFor, pickBumpVictim } = require('./slots');
+const { equityOf, slotStatus, orderCandidates, formatSkips, maxOpenFor, pickBumpVictim, ownSlotBlocked } = require('./slots');
 const quoteSanity = require('./quoteSanity');
 const shadow = require('./shadow');
 const jup = require('./jupiterQuote');
@@ -596,12 +596,16 @@ async function processEntries(signals, solUsd) {
   const split = shadow.splitSignals(signals.filter(s => s.mint));
   for (const sig of split.shadow) { shadowSignals.push(sig); rej.count(sig.strategyId, 'disabled-shadow'); }
   for (const sig of split.disabled) rej.count(sig.strategyId, 'disabled');
-  for (const sig of split.real) {
+  // One candidate per mint, claimed in priority order (momentum-entry before aggressive-flow), and a
+  // strategy that has no slot of its own (strategy/tier cap or the momentum reserve) doesn't claim the
+  // mint: before this, aggressive-flow (first in config order) took every mint both strategies passed
+  // and then hit its cap, starving momentum-entry.
+  for (const sig of orderCandidates(split.real, config)) {
     if (openMints.has(sig.mint) || seen.has(sig.mint)) continue;
     if (state.cooldowns[sig.mint]) { rej.count(sig.strategyId, 'cooldown'); continue; }
     const blocked = strategyBlocked(sig.strategy);
     if (blocked) { rej.count(sig.strategyId, blocked); continue; }
-    seen.add(sig.mint);
+    if (!ownSlotBlocked(slotStatus(state, sig.strategy, config, sig.tier))) seen.add(sig.mint);
     candidates.push(sig);
   }
   // Free slots go to higher-priority strategies/tiers first (config.strategyOps).
@@ -616,6 +620,7 @@ async function processEntries(signals, solUsd) {
     for (const sig of realSlice) noteSkip({ strategyId: sig.strategyId, ...st, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol });
   } else for (const sig of realSlice) {
     if (entries >= 5) break;
+    if (openMints.has(sig.mint)) continue; // another strategy just entered this mint
     const strat = sig.strategy;
     // Signal passed its gates; if no slot is free, log it as a "slot-full skip".
     let slot = slotStatus(state, strat, config, sig.tier);

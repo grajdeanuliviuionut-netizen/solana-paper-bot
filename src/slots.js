@@ -105,4 +105,10 @@ function pickBumpVictim(state, config, forStratId, now = Date.now()) {
   return c.sort((x, y) => weakness(x) - weakness(y))[0];
 }
 
-module.exports = { maxOpenFor, reservedFor, pickBumpVictim, weakness, equityOf, slotStatus, priorityOf, orderCandidates, formatSkips };
+// A slot status that is specific to the strategy (its own/tier cap or another strategy's reserve),
+// as opposed to the global book or cash.
+function ownSlotBlocked(st) {
+  return !!(st && st.reason === 'slot-full skip' && (st.scope === 'strategy' || st.scope === 'reserved' || String(st.scope).startsWith('tier')));
+}
+
+module.exports = { ownSlotBlocked, maxOpenFor, reservedFor, pickBumpVictim, weakness, equityOf, slotStatus, priorityOf, orderCandidates, formatSkips };
