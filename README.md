@@ -15,7 +15,8 @@ Paper-only. No wallet or private key required.
 
 The bot polls every 60 seconds, paper-trades the strategies, and the dashboard updates when you refresh.
 
-Strategies currently included: `aggressive-flow`, `momentum-entry` (see `src/config.js`).
+Strategies currently included: `aggressive-flow`, `momentum-entry`, `ncs_fresh_momentum_v1`
+(New Coin Scout spec, tiers down to $8k liquidity). See `src/config.js`.
 
 How it works:
 - Candidates come from DEX Screener boosts/profiles + GeckoTerminal trending/new pools, resolved
@@ -28,5 +29,21 @@ How it works:
   trades plus a per-strategy summary (`?all=1` for every build). `GET /api/health` shows the build.
 - One `[scan]` log line per cycle with pairs scanned, per-gate rejections, entries and exits.
 - Bump `buildId` in `src/config.js` to reset paper balance/positions on the next deploy.
+
+Fills, gates and logs (PR2):
+- Fills: depth model (constant-product impact on the pinned pool + slippage + DEX fee). Stop-outs
+  pay 2.5x slippage plus a 2-block delay drift; ~7.5% of exits "fail" and fill 2 blocks later.
+  Flat per-tx cost (base fee + priority fee + Jito tip). Every entry/exit also takes a shadow
+  Jupiter quote at the exact size (`src/jupiterQuote.js`, shared with the live path); the paper
+  fill is the WORSE of the model and the quote. Quoted vs modelled price, impact, no-route are logged.
+- Hard rug gate (`src/rugGate.js`, fails closed): RugCheck report - mint + freeze authority revoked,
+  pinned pool LP >= 90% burned/locked, top-10 holders ex-pool < 25%, no wallet > 5%, clone check by
+  mint (major-token list + Jupiter verified tokens). NCS adds its spec's extra checks.
+- Every trade carries `strategyId` and `configHash`; the 50-trade go-live count per strategy only
+  counts trades with the current hash.
+- `GET /api/rejections`: hourly per-gate rejection counts + recent near-misses (failed exactly one
+  gate, also appended to `data/nearmiss.jsonl`). Exit-quote failures, failed exits and liquidity
+  drops > 50% go to `data/events.jsonl` and the logs.
+- `npm test` runs offline unit tests.
 
 All paper. Live trading stays locked until you explicitly enable it.
