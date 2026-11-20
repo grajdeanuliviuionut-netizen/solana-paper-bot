@@ -10,7 +10,7 @@ const { generateSignals } = require('./buyAgent');
 const { decide, legPnlSol, judgeExit, isProfitReason, awaitQuoteGate } = require('./sellAgent');
 const fillModel = require('./fillModel');
 const { fillGapPct } = fillModel;
-const { equityOf, slotStatus, orderCandidates, formatSkips } = require('./slots');
+const { equityOf, slotStatus, orderCandidates, formatSkips, maxOpenFor, pickBumpVictim } = require('./slots');
 const quoteSanity = require('./quoteSanity');
 const shadow = require('./shadow');
 const jup = require('./jupiterQuote');
@@ -94,7 +94,7 @@ function shadowSummary(sq, modelledPriceUsd) {
 
 function canOpenGlobal() {
   if (equityOf(state) < config.fullStopBalance) return false; // equity, not cash (see src/slots.js)
-  if (state.openPositions.length >= config.maxOpen) return false;
+  if (state.openPositions.length >= maxOpenFor(state, config)) return false;
   return true;
 }
 
@@ -292,7 +292,7 @@ function finalizeTrade(pos, finalReason, fresh) {
   state.cooldowns[pos.mint] = Date.now() + ((strategyById(pos.strategyId) || {}).reentryCooldownMinutes || config.reentryCooldownMinutes) * 60000;
   const g = guardFor(pos.strategyId);
   g.dayPnlSol += pnl;
-  g.consecLosses = pnl < 0 ? g.consecLosses + 1 : 0;
+  if (finalReason !== 'bumped') g.consecLosses = pnl < 0 ? g.consecLosses + 1 : 0; // a bump is an allocator decision, not a strategy loss streak
   const rg = (strategyById(pos.strategyId) || {}).riskGuards;
   if (rg && g.consecLosses >= rg.consecutiveLosses) {
     g.pausedUntil = Date.now() + rg.pauseMinutes * 60000;
@@ -558,8 +558,35 @@ async function processShadowEntries(signals, quotes, solUsd, budget) {
 let tickShadowOpened = [];
 const shadowRugFail = new Map(); // mint -> retry-after ts (shadow path only)
 
+// Close `pos` (a weaker aggressive-flow position) at a fresh Jupiter sell quote to free a slot for
+// `forStrat` (momentum-entry). Exit reason 'bumped'. Returns true when the slot was freed.
+async function bumpPosition(pos, solUsd, forStrat, sig) {
+  let q = null;
+  try { q = (await getPairsByAddress([pos.pairAddress]))[pos.pairAddress]; } catch (e) { q = null; }
+  const fresh = !!(q && q.mint === pos.mint && q.priceUsd > 0);
+  const mid = fresh ? q.priceUsd : (pos.lastPrice || pos.entryPrice);
+  exitQuoteCache.delete(pos.id); // always a fresh sell quote at the position's size
+  const judge = await judgeOnQuote(pos, fresh ? q : null, mid, solUsd, { allowed: new Set([pos.id]) });
+  const base = { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, symbol: pos.symbol, forStrategyId: forStrat.id, forMint: sig.mint, forSymbol: sig.symbol };
+  if (!judge || judge.source !== 'jupiter') {
+    rej.event('bump-skipped', { ...base, why: judge ? (judge.why || 'model-only') : 'no-price' });
+    return false;
+  }
+  const d = { action: 'close', reason: 'bumped', sellFrac: pos.remainingFrac == null ? 1 : pos.remainingFrac, fillPrice: mid, judge, judgedPrice: judge.price };
+  pos.bumping = true;
+  let leg = null;
+  try { leg = await sellLeg(pos, d, fresh ? q : null, solUsd); } finally { pos.bumping = false; }
+  if (!leg) { rej.event('bump-skipped', { ...base, why: 'sell-failed' }); return false; }
+  const trade = finalizeTrade(pos, 'bumped', fresh);
+  state.openPositions = state.openPositions.filter(p => p !== pos);
+  exitQuoteCache.delete(pos.id); judgeFallbackLogged.delete(pos.id); quoteWait.delete(pos.id);
+  rej.event('bumped', { ...base, judgedNetPct: +judge.netPct.toFixed(2), pnlSol: trade ? +trade.pnlSol.toFixed(5) : null, heldSec: Math.round((Date.now() - Date.parse(pos.entryTime)) / 1000) });
+  console.log(`[trade] BUMP ${pos.symbol} (${pos.strategyId}) for ${sig.symbol} (${forStrat.id}) net=${judge.netPct.toFixed(2)}%`);
+  return true;
+}
+
 async function processEntries(signals, solUsd) {
-  let entries = 0, rugChecks = 0;
+  let entries = 0, rugChecks = 0, bumps = 0;
   const openMints = new Set(state.openPositions.map(p => p.mint));
   for (const [m, until] of Object.entries(state.cooldowns)) if (until <= Date.now()) delete state.cooldowns[m];
   const seen = new Set();
@@ -583,14 +610,21 @@ async function processEntries(signals, solUsd) {
   const shadowSlice = shadowSignals.filter(sg => (shadowRugFail.get(sg.mint) || 0) <= Date.now() && shadow.canOpen(state, sg.strategy, sg.mint)).slice(0, 10);
   if (!realSlice.length && !shadowSlice.length) return 0;
   const quotes = await getPairsByAddress(realSlice.concat(shadowSlice).map(s => s.pairAddress));
-  if (realSlice.length && !canOpenGlobal()) {
+  // Full stop (equity) skips everything; a full book is handled per signal (momentum-entry may bump).
+  if (realSlice.length && equityOf(state) < config.fullStopBalance) {
     const st = slotStatus(state, null, config);
     for (const sig of realSlice) noteSkip({ strategyId: sig.strategyId, ...st, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol });
   } else for (const sig of realSlice) {
     if (entries >= 5) break;
     const strat = sig.strategy;
     // Signal passed its gates; if no slot is free, log it as a "slot-full skip".
-    const slot = slotStatus(state, strat, config, sig.tier);
+    let slot = slotStatus(state, strat, config, sig.tier);
+    let bumpVictim = null;
+    if (slot && slot.reason === 'slot-full skip' && slot.scope === 'global' && config.allocator && bumps < config.allocator.bump.maxPerTick) {
+      const v = pickBumpVictim(state, config, strat.id);
+      // Only if this strategy would have a slot once the victim is gone (its own cap still applies).
+      if (v && !slotStatus({ ...state, openPositions: state.openPositions.filter(p => p !== v) }, strat, config, sig.tier)) { bumpVictim = v; slot = null; }
+    }
     if (slot) {
       noteSkip({ strategyId: strat.id, ...slot, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol });
       continue;
@@ -638,6 +672,15 @@ async function processEntries(signals, solUsd) {
     if (sq && !sq.ok) rej.event('entry-quote-failed', { source: 'jupiter', mint: sig.mint, strategyId: strat.id, noRoute: !!sq.noRoute, error: sq.error });
     // Hard reject: absurd/unroutable quote (see src/quoteSanity.js).
     if (!qc.sanity.pass) { quoteSanitySkip(strat, sig, q, qc); continue; }
+    // Valid signal (gates, rug, quote sanity passed) and the book is full: bump the weakest AF position.
+    if (bumpVictim) {
+      if (!state.openPositions.includes(bumpVictim) || !(await bumpPosition(bumpVictim, solUsd, strat, sig))) {
+        noteSkip({ strategyId: strat.id, reason: 'slot-full skip', scope: 'global-bump-failed', open: state.openPositions.length, max: maxOpenFor(state, config), mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol });
+        continue;
+      }
+      bumps++;
+      if (slotStatus(state, strat, config, sig.tier)) { rej.event('bump-no-slot', { strategyId: strat.id, mint: sig.mint }); continue; }
+    }
     // LIVE path (off by default): only when live mode is active and this strategy is enabled for live.
     let live = null, liveSize = sizeSol;
     if (liveExec) {
@@ -891,6 +934,15 @@ app.get('/api/rejections', (req, res) => {
     nearMisses: rej.nearMisses.slice(0, parseInt(req.query.limit || '100', 10)) });
 });
 
+function allocatorStatus() {
+  const a = config.allocator;
+  const byStrategy = {};
+  for (const p of state.openPositions) byStrategy[p.strategyId] = (byStrategy[p.strategyId] || 0) + 1;
+  const bumps = state.trades.filter(t => t.exitReason === 'bumped').slice(0, 10).map(t => ({ symbol: t.symbol, strategyId: t.strategyId, pnlSol: +t.pnlSol.toFixed(5), at: t.closedAt }));
+  return { maxOpen: maxOpenFor(state, config), baseMaxOpen: a.baseMaxOpen, targetMaxOpen: a.targetMaxOpen, cashBufferSol: a.cashBufferSol,
+    reserve: a.reserve, caps: Object.fromEntries(config.strategies.map(s => [s.id, config.opsFor(s.id).maxOpen || s.maxOpen])), open: state.openPositions.length, openByStrategy: byStrategy, recentBumps: bumps };
+}
+
 function strategyModes() {
   return Object.fromEntries(config.strategies.map(s => {
     const ops = config.opsFor(s.id);
@@ -943,7 +995,7 @@ app.get('/api/live', (req, res) => {
 });
 
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, build: config.buildId, mode: liveStatus.mode, ticks: tickCount, lastScan: lastScanSummary, lastUpdate: state.lastUpdate, balance: state.balance, openPositions: state.openPositions.length, accountSince: state.startedAt || null, buildHistory: (state.buildHistory || []).slice(-5), configHashes: config.strategyHashes, strategies: strategyModes(), shadowOpen: shadow.ensure(state).open.length, exitCheck: { everyMs: config.exitCheckMs, runs: exitChecks, last: lastExitCheckAt } });
+  res.json({ ok: true, build: config.buildId, mode: liveStatus.mode, ticks: tickCount, lastScan: lastScanSummary, lastUpdate: state.lastUpdate, balance: state.balance, openPositions: state.openPositions.length, accountSince: state.startedAt || null, buildHistory: (state.buildHistory || []).slice(-5), configHashes: config.strategyHashes, strategies: strategyModes(), allocator: allocatorStatus(), shadowOpen: shadow.ensure(state).open.length, exitCheck: { everyMs: config.exitCheckMs, runs: exitChecks, last: lastExitCheckAt } });
 });
 
 app.get('/', (req, res) => {
@@ -996,7 +1048,7 @@ app.get('/', (req, res) => {
     <body>
       <h1>Solana Paper Bot <span style="font-size:0.5em;color:${liveStatus.mode === 'live' ? '#f87171' : '#4ade80'}">${esc(liveStatus.mode.toUpperCase())}${liveState.killed ? ' (KILLED)' : ''}</span></h1>
       <div class="balance">Balance: ${state.balance.toFixed(4)} SOL</div>
-      <p>Open positions: ${state.openPositions.length} / ${config.maxOpen} | Last update: ${new Date(state.lastUpdate).toLocaleString()}</p>
+      <p>Open positions: ${state.openPositions.length} / ${maxOpenFor(state, config)} | Last update: ${new Date(state.lastUpdate).toLocaleString()}</p>
       <p style="color:#64748b">Build ${esc(config.buildId)} | since ${new Date(state.startedAt || state.lastUpdate).toLocaleString()} | last scan: ${esc(lastScanSummary)} | <a href="/api/trades" style="color:#38bdf8">/api/trades</a> | <a href="/api/rejections" style="color:#38bdf8">/api/rejections</a></p>
       <h2>Strategies (go-live count resets on config change)</h2>
       <table>

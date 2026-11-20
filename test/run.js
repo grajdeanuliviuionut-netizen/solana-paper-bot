@@ -389,17 +389,18 @@ test('shadow code path (kept for future use): a shadowed strategy opens no real 
   assert.ok(pos.id.startsWith('sh-'));
   } finally { config.strategyOps['aggressive-flow'] = saved; }
 });
-test('free slots: momentum-entry up to 8; NCS stays at spec max 5 with tier A served first', () => {
+test('free slots: momentum-entry up to 8; NCS capped at 2 by the allocator (spec max 5 kept in the hash), tier A served first', () => {
   const { orderCandidates } = require('../src/slots');
   const mom = config.strategies.find(s => s.id === 'momentum-entry');
   const pos = (id, tier) => ({ strategyId: id, tier, sizeSol: 0.05 });
   const seven = Array.from({ length: 7 }, () => pos('momentum-entry'));
   assert.strictEqual(slotStatus({ balance: 4, openPositions: seven }, mom, config), null);
   assert.strictEqual(slotStatus({ balance: 4, openPositions: seven.concat([pos('momentum-entry')]) }, mom, config).max, 8);
-  const fiveA = Array.from({ length: 5 }, () => pos(ncs.id, 'A'));
-  assert.strictEqual(slotStatus({ balance: 4, openPositions: fiveA }, ncs, config, 'A').max, 5);
-  const ten = Array.from({ length: 10 }, () => pos('x'));
-  assert.strictEqual(slotStatus({ balance: 4, openPositions: ten }, mom, config).scope, 'global');
+  const twoA = Array.from({ length: 2 }, () => pos(ncs.id, 'A'));
+  assert.strictEqual(slotStatus({ balance: 4, openPositions: twoA }, ncs, config, 'A').max, 2);
+  assert.strictEqual(ncs.maxOpen, 5);
+  const twelve = Array.from({ length: 12 }, () => pos('x'));
+  assert.strictEqual(slotStatus({ balance: 4, openPositions: twelve }, mom, config).scope, 'global');
   const order = orderCandidates([
     { strategyId: ncs.id, tier: 'B', mint: 'b' }, { strategyId: 'momentum-entry', mint: 'm' }, { strategyId: ncs.id, tier: 'A', mint: 'a' }
   ], config).map(c => c.mint);
@@ -612,6 +613,51 @@ test('after a restart (no sell quote yet) SL/trail/TP wait for a real quote; har
   // index.js wires the gate into processExits for paper and live positions alike (one exit path).
   const src = require('fs').readFileSync(require('path').join(__dirname, '../src/index.js'), 'utf8');
   assert.ok(/awaitQuoteGate\(pos, d, judge/.test(src) && /exit-quote-wait-expired/.test(src) && /exit-held-awaiting-quote/.test(src));
+});
+
+test('slot allocator: cap 12 when cash covers it, AF max 4, NCS max 2, 5 slots reserved for momentum, bump the weakest AF past grace', () => {
+  const { maxOpenFor, reservedFor, pickBumpVictim } = require('../src/slots');
+  const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
+  // Allocator lives outside every configHash: momentum-entry must stay fc3fd9a29a5c.
+  assert.strictEqual(config.strategyHashes['momentum-entry'], 'fc3fd9a29a5c');
+  assert.strictEqual(config.opsFor('aggressive-flow').maxOpen, 4); assert.strictEqual(config.opsFor(ncsS.id).maxOpen, 2);
+  const now = Date.now();
+  const P = (id, ageSec = 600, netPct = 0, extra = {}) => ({ strategyId: id, sizeSol: id === 'aggressive-flow' ? 0.1 : 0.2, remainingFrac: 1, entryTime: new Date(now - ageSec * 1000).toISOString(), lastJudge: { netPct }, ...extra });
+  // Cap: 12 when cash covers (12 - open) x 0.2 + 0.5 buffer, else the base 10.
+  const nine = Array.from({ length: 9 }, () => P('aggressive-flow'));
+  assert.strictEqual(maxOpenFor({ balance: 2.17, openPositions: nine }, config), 12);
+  assert.strictEqual(maxOpenFor({ balance: 1.0, openPositions: nine }, config), 10);
+  // Reserve: with 0 momentum open, 5 slots are held back -> AF/NCS may only use 12 - 5 = 7 slots in total.
+  assert.strictEqual(reservedFor({ openPositions: [] }, config, 'aggressive-flow'), 5);
+  assert.strictEqual(reservedFor({ openPositions: [] }, config, 'momentum-entry'), 0);
+  const mixed = [P('aggressive-flow'), P('aggressive-flow'), P('aggressive-flow'), P(ncsS.id), P(ncsS.id), P('x'), P('x')];
+  let st = slotStatus({ balance: 3, openPositions: mixed.slice(0, 6) }, af, config); // 3 AF + 2 NCS + 1 other, 6+1+5 <= 12
+  assert.strictEqual(st, null);
+  st = slotStatus({ balance: 3, openPositions: mixed }, af, config); // 7 open: 7+1+5 > 12 -> reserved
+  assert.strictEqual(st.scope, 'reserved');
+  assert.strictEqual(slotStatus({ balance: 3, openPositions: mixed }, mom, config), null); // momentum uses the reserve
+  // Caps: 4 AF open blocks AF; 2 NCS blocks NCS. Over-cap positions are not closed, they just block.
+  const fiveAF = Array.from({ length: 5 }, () => P('aggressive-flow'));
+  assert.strictEqual(slotStatus({ balance: 3, openPositions: fiveAF }, af, config).scope, 'strategy');
+  assert.strictEqual(slotStatus({ balance: 3, openPositions: [P(ncsS.id), P(ncsS.id)] }, ncsS, config, 'A').scope, 'strategy');
+  // Bump: weakest AF past its 60s grace; never one inside grace, never a live or non-AF position.
+  const book = [P('aggressive-flow', 600, -1), P('aggressive-flow', 30, -9), P('aggressive-flow', 300, -3.5), P('aggressive-flow', 900, -8, { live: {} }), P('momentum-entry', 900, -12), P(ncsS.id, 900, -11)];
+  const v = pickBumpVictim({ openPositions: book }, config, 'momentum-entry', now);
+  assert.strictEqual(v, book[2]);
+  assert.strictEqual(pickBumpVictim({ openPositions: book }, config, 'aggressive-flow', now), null); // only momentum bumps
+  assert.strictEqual(pickBumpVictim({ openPositions: [P('aggressive-flow', 59, -20)] }, config, 'momentum-entry', now), null);
+  // Weakness falls back to mid vs entry fill when there is no judged quote yet.
+  const noJ = [{ strategyId: 'aggressive-flow', entryTime: new Date(now - 600000).toISOString(), entryFillPrice: 1, lastPrice: 0.9 }, P('aggressive-flow', 600, -2)];
+  assert.strictEqual(pickBumpVictim({ openPositions: noJ }, config, 'momentum-entry', now), noJ[0]);
+  // Full 12/12 book: momentum is blocked globally, but after removing the victim it has a slot.
+  const full = Array.from({ length: 12 }, (_, i) => P(i < 6 ? 'aggressive-flow' : 'x', 600, -i));
+  assert.strictEqual(slotStatus({ balance: 3, openPositions: full }, mom, config).scope, 'global');
+  const victim = pickBumpVictim({ openPositions: full }, config, 'momentum-entry', now);
+  assert.strictEqual(victim, full[5]);
+  assert.strictEqual(slotStatus({ balance: 3, openPositions: full.filter(p => p !== victim) }, mom, config), null);
+  // index.js books a bump at a fresh sell quote with exit reason 'bumped' and doesn't count it as a loss streak.
+  const src = require('fs').readFileSync(require('path').join(__dirname, '../src/index.js'), 'utf8');
+  assert.ok(/reason: 'bumped'/.test(src) && /judge.source !== 'jupiter'/.test(src) && /finalReason !== 'bumped'/.test(src));
 });
 
 (async () => {

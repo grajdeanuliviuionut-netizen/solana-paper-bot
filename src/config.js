@@ -184,17 +184,30 @@ const strategyOps = {
   // Re-enabled 2026-11-20 12:29 at half size behind the tighter quote filters (was shadow-only 11:40-12:29).
   // Policy: no strategy is paused or shadowed; sizes and filters are tuned while it trades. The shadow
   // code path stays for future use (set enabled:false, shadow:true).
-  'aggressive-flow': { enabled: true, priority: 3 },
+  // 2026-11-20 12:48 slot allocation: aggressive-flow max 4 open, NCS max 2, momentum-entry gets a
+  // reserve of 5 slots (allocator below). Over-cap positions are not force-closed; they only block
+  // new entries of that strategy.
+  'aggressive-flow': { enabled: true, priority: 3, maxOpen: 4 },
   'momentum-entry': { enabled: true, maxOpen: 8, priority: 1 },
   // NCS: spec sizing.max_concurrent_positions = 5 is kept; free slots go to tier A first (priority),
   // tier B is served after momentum-entry and tier A.
-  ncs_fresh_momentum_v1: { enabled: true, tierPriority: { A: 1, B: 2 }, priority: 1 }
+  ncs_fresh_momentum_v1: { enabled: true, tierPriority: { A: 1, B: 2 }, priority: 1, maxOpen: 2 }
 };
 
+// ---- Slot allocator (global cap, reserves, bumping). Outside every configHash, like strategyOps.
+const allocator = {
+  baseMaxOpen: 10,                                       // used when cash can't cover the raised cap
+  targetMaxOpen: num('MAX_OPEN_TARGET', 12),             // raised global cap
+  cashBufferSol: num('ALLOC_CASH_BUFFER_SOL', 0.5),      // cash left after filling the raised cap at max size
+  reserve: { 'momentum-entry': 5 },                      // slots only this strategy may use
+  // Book full + valid momentum signal: close the weakest aggressive-flow position at its sell quote
+  // (exit reason 'bumped'), never one still inside its entry grace.
+  bump: { for: ['momentum-entry'], victims: ['aggressive-flow'], minAgeSec: entryGrace.graceSec, maxPerTick: 2 }
+};
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr3.2-await-first-sell-quote-2026-11-20',
+  buildId: 'pr3.3-slot-allocator-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
@@ -223,6 +236,7 @@ const config = {
   quoteSanity,
   quoteSanityFor,
   exitQuotes,
+  allocator,
   entryGrace,
   ncsRealisticStopPct: num('NCS_REALISTIC_STOP_PCT', -25), // /api/trades expectancy: NCS stop-outs re-priced at this
   strategyOps,

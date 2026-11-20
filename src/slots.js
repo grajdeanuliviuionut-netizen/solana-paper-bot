@@ -10,13 +10,35 @@ function equityOf(state) {
   return (state.balance || 0) + (state.openPositions || []).reduce((a, p) => a + (p.sizeSol || 0) * (p.remainingFrac == null ? 1 : p.remainingFrac), 0);
 }
 
+// Global open cap: the raised allocator cap when cash covers filling it at the largest strategy size
+// plus a cash buffer, else the base cap.
+function maxSizeSol(config) {
+  return Math.max(config.positionSizeSol || 0.2, ...(config.strategies || []).map(s => s.sizeSol || 0));
+}
+function maxOpenFor(state, config) {
+  const a = config.allocator;
+  if (!a) return config.maxOpen;
+  const open = (state.openPositions || []).length;
+  const need = Math.max(0, a.targetMaxOpen - open) * maxSizeSol(config) + a.cashBufferSol;
+  return (state.balance || 0) >= need ? a.targetMaxOpen : a.baseMaxOpen;
+}
+// Slots still held back for reserved strategies other than `stratId`.
+function reservedFor(state, config, stratId) {
+  const r = (config.allocator && config.allocator.reserve) || {};
+  const open = state.openPositions || [];
+  return Object.entries(r).reduce((a, [id, n]) => id === stratId ? a : a + Math.max(0, n - open.filter(p => p.strategyId === id).length), 0);
+}
+
 function slotStatus(state, strat, config, tier = null) {
   const open = state.openPositions || [];
-  if (equityOf(state) < config.fullStopBalance) return { reason: 'balance-stop', scope: 'global', open: open.length, max: config.maxOpen };
+  const maxOpen = maxOpenFor(state, config);
+  if (equityOf(state) < config.fullStopBalance) return { reason: 'balance-stop', scope: 'global', open: open.length, max: maxOpen };
   // Cash must still cover a new position.
-  if (state.balance < (strat && strat.sizeSol ? strat.sizeSol : 0.01) + 0.01) return { reason: 'balance-stop', scope: 'cash', open: open.length, max: config.maxOpen };
-  if (open.length >= config.maxOpen) return { reason: 'slot-full skip', scope: 'global', open: open.length, max: config.maxOpen };
+  if (state.balance < (strat && strat.sizeSol ? strat.sizeSol : 0.01) + 0.01) return { reason: 'balance-stop', scope: 'cash', open: open.length, max: maxOpen };
+  if (open.length >= maxOpen) return { reason: 'slot-full skip', scope: 'global', open: open.length, max: maxOpen };
   if (strat) {
+    const held = reservedFor(state, config, strat.id);
+    if (held && open.length + 1 + held > maxOpen) return { reason: 'slot-full skip', scope: 'reserved', open: open.length, max: maxOpen - held };
     const ops = (config.opsFor && config.opsFor(strat.id)) || {};
     const mine = open.filter(p => p.strategyId === strat.id);
     const max = ops.maxOpen || strat.maxOpen || config.maxOpen;
@@ -67,4 +89,20 @@ function formatSkips(list) {
   return Object.entries(byReason).map(([r, arr]) => `${r}: ${arr.slice(0, 6).join(', ')}${arr.length > 6 ? ` +${arr.length - 6} more` : ''}`).join(' | ');
 }
 
-module.exports = { equityOf, slotStatus, priorityOf, orderCandidates, formatSkips };
+// Weakest bumpable position: a victim strategy, paper only, past its entry grace; lowest judged net %
+// (sell quote, else mid vs entry fill).
+function weakness(p) {
+  if (p.lastJudge && Number.isFinite(p.lastJudge.netPct)) return p.lastJudge.netPct;
+  return p.entryFillPrice > 0 && p.lastPrice > 0 ? (p.lastPrice / p.entryFillPrice - 1) * 100 : 0;
+}
+function pickBumpVictim(state, config, forStratId, now = Date.now()) {
+  const b = config.allocator && config.allocator.bump;
+  if (!b || !b.for.includes(forStratId)) return null;
+  const minAgeMs = (b.minAgeSec || 0) * 1000;
+  const c = (state.openPositions || []).filter(p => b.victims.includes(p.strategyId) && !p.live && !p.bumping
+    && now - Date.parse(p.entryTime) >= minAgeMs);
+  if (!c.length) return null;
+  return c.sort((x, y) => weakness(x) - weakness(y))[0];
+}
+
+module.exports = { maxOpenFor, reservedFor, pickBumpVictim, weakness, equityOf, slotStatus, priorityOf, orderCandidates, formatSkips };
