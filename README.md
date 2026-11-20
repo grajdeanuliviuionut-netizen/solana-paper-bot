@@ -15,10 +15,18 @@ Paper-only. No wallet or private key required.
 
 The bot polls every 60 seconds, paper-trades the strategies, and the dashboard updates when you refresh.
 
-Strategies currently included (aggressive set):
-- buy-ratio-spike-wide (benchmark)
-- fresh-breakout-runner
-- flush-reclaim-bounce
-- volume-ignition-small-cap
+Strategies currently included: `aggressive-flow`, `momentum-entry` (see `src/config.js`).
+
+How it works:
+- Candidates come from DEX Screener boosts/profiles + GeckoTerminal trending/new pools, resolved
+  to one deepest-liquidity pool per token mint. Liquidity floor $50k (`MIN_LIQUIDITY_USD`).
+- Positions are keyed by token mint + pairAddress (never by symbol). The pair is pinned at entry
+  and quoted directly for entry and exit prices. One open position per mint across all strategies.
+- JUP, Bonk, SOL, USDC, USDT are excluded by mint.
+- Every closed trade is appended to `data/trades.jsonl` (mint, pairAddress, symbol, strategy,
+  entry/exit price and time, exit reason, PnL). `GET /api/trades` returns the current build's
+  trades plus a per-strategy summary (`?all=1` for every build). `GET /api/health` shows the build.
+- One `[scan]` log line per cycle with pairs scanned, per-gate rejections, entries and exits.
+- Bump `buildId` in `src/config.js` to reset paper balance/positions on the next deploy.
 
 All paper. Live trading stays locked until you explicitly enable it.
