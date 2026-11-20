@@ -107,8 +107,10 @@ const strategies = [
       // PR5 (16:52 loser-cut spec): m5 buys > sells (missing data fails closed).
       { field: 'buysGtSellsM5', op: '>=', value: 1 }
     ],
-    // PR5: price must have risen on 2 consecutive scans before entry (src/entryConfirm.js).
-    entryConfirm: { upTicks: 2 },
+    // PR5: price must have risen on consecutive scans before entry (src/entryConfirm.js).
+    // PR5.2 (RA 17:21): upTicks 2 -> 1 (only 1 momentum entry 16:59-17:21 at 2; ~half the blocked
+    // candidates had risen on the latest scan).
+    entryConfirm: { upTicks: 1 },
     // Time stop at maxHoldMinutes exits only when the position is under water (mid PnL < 0%);
     // otherwise a timeTrailPct trailing stop arms at max hold (high-water mark from that moment).
     // judgeOn 'sell-quote': TP/SL/trail/time triggers use the Jupiter sell quote at position size, net of tx costs.
@@ -279,7 +281,7 @@ const mintGuard = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr5.1-shadow-h1ratio-2026-11-20',
+  buildId: 'pr5.2-momentum-uptick1-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',

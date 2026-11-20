@@ -461,7 +461,7 @@ test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawd
 });
 test('config hashes: all three changed (sell-quote exits + per-strategy gap caps; aggressive-flow also half size)', () => {
   assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': 'b7f4cc472695', 'momentum-entry': 'c1ab00a8e531', ncs_fresh_momentum_v1: 'bf331c3a05d5', 'momentum-h1ratio': 'cfc41521e67d'
+    'aggressive-flow': 'b7f4cc472695', 'momentum-entry': '1543766be09b', ncs_fresh_momentum_v1: 'bf331c3a05d5', 'momentum-h1ratio': '9acd2f79b34e'
   });
 });
 
@@ -664,7 +664,7 @@ test('slot allocator: cap 12 when cash covers it, AF max 4, NCS max 2, 5 slots r
   const { maxOpenFor, reservedFor, pickBumpVictim } = require('../src/slots');
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
   // Allocator lives outside every configHash: momentum-entry must stay fc3fd9a29a5c.
-  assert.strictEqual(config.strategyHashes['momentum-entry'], 'c1ab00a8e531'); // PR5 loser-cut
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '1543766be09b'); // PR5 loser-cut
   assert.strictEqual(config.opsFor('aggressive-flow').maxOpen, 4); assert.strictEqual(config.opsFor(ncsS.id).maxOpen, 2);
   const now = Date.now();
   const P = (id, ageSec = 600, netPct = 0, extra = {}) => ({ strategyId: id, sizeSol: id === 'aggressive-flow' ? 0.1 : 0.2, remainingFrac: 1, entryTime: new Date(now - ageSec * 1000).toISOString(), lastJudge: { netPct }, ...extra });
@@ -719,7 +719,7 @@ test('allocator: momentum-entry claims a mint both strategies passed; a capped A
 });
 
 test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1 15; momentum hash unchanged', () => {
-  assert.strictEqual(config.strategyHashes['momentum-entry'], 'c1ab00a8e531'); // PR5 loser-cut
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '1543766be09b'); // PR5 loser-cut
   const now = Date.now();
   const af = stratById('aggressive-flow');
   const P = (minsAgo, extra = {}) => ({ strategyId: 'aggressive-flow', strategyType: 'simple', entryTime: new Date(now - minsAgo * 60000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.1, remainingFrac: 1, highest: 1, exit: af.exit, ...extra });
@@ -751,7 +751,7 @@ test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1
 
 test('batch2: AF 0.05 SOL, v/l >= 0.15 (14:05), m5 buys > sells (fail closed), h1 > 0; NCS grace + fill stop, tier B half; allocator', () => {
   const { pickBumpVictim } = require('../src/slots');
-  assert.strictEqual(config.strategyHashes['momentum-entry'], 'c1ab00a8e531'); // PR5 loser-cut
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '1543766be09b'); // PR5 loser-cut
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
   assert.strictEqual(af.sizeSol, 0.02); // PR5
   const P = () => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 120000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 0, h1: 1, h6: 0, h24: 0 } });
@@ -958,7 +958,8 @@ test('PR5 momentum exits: breakeven lock (+3% net peak -> exit at +0.5%), early 
 test('PR5 entry confirmation: 2 consecutive scan up-ticks; NCS delayed re-check (price higher >= 20s later)', () => {
   const ec = require('../src/entryConfirm');
   ec.reset();
-  assert.deepStrictEqual(stratById('momentum-entry').entryConfirm, { upTicks: 2 });
+  assert.deepStrictEqual(stratById('momentum-entry').entryConfirm, { upTicks: 1 }); // PR5.2: 2 -> 1
+  assert.deepStrictEqual(stratById('momentum-h1ratio').entryConfirm, { upTicks: 1 });
   assert.deepStrictEqual(stratById('aggressive-flow').entryConfirm, { upTicks: 2 });
   assert.deepStrictEqual(stratById('ncs_fresh_momentum_v1').entryConfirm, { delaySec: 20 });
   const t = Date.parse('2026-11-20T16:00:00Z');
@@ -968,6 +969,9 @@ test('PR5 entry confirmation: 2 consecutive scan up-ticks; NCS delayed re-check 
   ec.record([{ pairAddress: 'P1', priceUsd: 1.02 }, { pairAddress: 'P2', priceUsd: 1.01 }], t + 120000);
   assert.ok(ec.upTickCheck('P1', 2, t + 120000).ok);
   assert.strictEqual(ec.upTickCheck('P2', 2, t + 120000).why, 'not-rising'); // flat tick fails
+  // upTicks 1 (momentum since PR5.2): only the latest scan must be higher.
+  assert.ok(ec.upTickCheck('P2', 1, t + 120000).ok === false); // flat last tick
+  assert.ok(ec.upTickCheck('P1', 1, t + 120000).ok);
   ec.record([{ pairAddress: 'P1', priceUsd: 1.015 }], t + 180000);
   assert.ok(!ec.upTickCheck('P1', 2, t + 180000).ok); // down tick resets
   // Same-scan duplicates overwrite instead of counting as a tick.
@@ -993,10 +997,10 @@ test('PR5 sizes: AF 0.02 SOL; NCS tier A and tier B fixed 0.02 SOL (fixedSol ove
 
 test('PR5.1 shadow momentum-h1ratio: momentum-entry + buySellRatioH1 >= 1.3, shadow only, own hash, same net exits; live hashes frozen', () => {
   const mom = stratById('momentum-entry'), v = stratById('momentum-h1ratio');
-  assert.strictEqual(config.strategyHashes['momentum-entry'], 'c1ab00a8e531');
+  assert.strictEqual(config.strategyHashes['momentum-entry'], '1543766be09b');
   assert.strictEqual(config.strategyHashes['aggressive-flow'], 'b7f4cc472695');
   assert.strictEqual(config.strategyHashes.ncs_fresh_momentum_v1, 'bf331c3a05d5');
-  assert.strictEqual(config.strategyHashes['momentum-h1ratio'], 'cfc41521e67d');
+  assert.strictEqual(config.strategyHashes['momentum-h1ratio'], '9acd2f79b34e');
   assert.deepStrictEqual(v.entry, mom.entry.concat([{ field: 'buySellRatioH1', op: '>=', value: 1.3 }]));
   assert.strictEqual(mom.entry.length, 3); // momentum-entry not mutated
   assert.deepStrictEqual(v.exit, mom.exit); assert.strictEqual(v.sizeSol, mom.sizeSol); assert.deepStrictEqual(v.entryConfirm, mom.entryConfirm);
@@ -1016,7 +1020,7 @@ test('PR5.1 shadow momentum-h1ratio: momentum-entry + buySellRatioH1 >= 1.3, sha
   const modelFill = fm.fillEntry({ midPrice: 1, sizeSol: 0.2, solUsd: 150, liquidityUsd: 200000 });
   const t0 = Date.now();
   const pos = shadow.open(st, { strat: v, sig, q, modelFill, entryFill: modelFill.price, entryFillSource: 'depth', sizeSol: 0.2, decimals: 6, quote: null }, new Date(t0));
-  assert.strictEqual(pos.configHash, 'cfc41521e67d');
+  assert.strictEqual(pos.configHash, '9acd2f79b34e');
   assert.strictEqual(st.balance, 3); assert.strictEqual(st.openPositions.length, 0); assert.strictEqual(st.mintGuard, undefined);
   // Up +4% mid at 2 min (net ~+3.x%) -> breakeven armed; back to mid +0.9% (net < +0.5%) -> breakeven exit.
   assert.strictEqual(shadow.processExits(st, { PH1: { ...q, priceUsd: 1.045 } }, 150, t0 + 120000, () => 0.99).length, 0);
