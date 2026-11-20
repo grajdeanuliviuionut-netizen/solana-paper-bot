@@ -19,6 +19,7 @@ const memory = require('./marketMemory');
 const rej = require('./rejections');
 const denylist = require('./denylist');
 const mintGuard = require('./mintGuard');
+const entryConfirm = require('./entryConfirm');
 const { initLive } = require('./live/executor');
 
 // Never let one bad promise or exception kill the process / scan loop.
@@ -524,7 +525,7 @@ function sizeFor(strat, sig, q, solUsd) {
   if (strat.sizing) {
     const openForStrat = state.openPositions.filter(p => p.strategyId === strat.id);
     const eq = equitySol();
-    sizeSol = eq * (strat.sizing.basePctOfEquity / 100) * (sig.sizeMult || 1);
+    sizeSol = strat.sizing.fixedSol > 0 ? strat.sizing.fixedSol : eq * (strat.sizing.basePctOfEquity / 100) * (sig.sizeMult || 1);
     sizeSol = Math.min(sizeSol, (q.liquidityUsd * strat.sizing.maxPctOfPoolLiquidity / 100) / solUsd);
     const exposure = openForStrat.reduce((a, p) => a + p.sizeSol * (p.remainingFrac == null ? 1 : p.remainingFrac), 0);
     const room = eq * (strat.sizing.maxTotalExposurePct / 100) - exposure;
@@ -637,6 +638,15 @@ async function processEntries(signals, solUsd) {
     const mg = mintGuard.check(state, sig.mint, config.mintGuard);
     if (mg) { noteSkip({ strategyId: sig.strategyId, reason: mg.reason, detail: mg.detail, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol }); continue; }
     if (state.cooldowns[sig.mint]) { rej.count(sig.strategyId, 'cooldown'); continue; }
+    const ec = sig.strategy.entryConfirm;
+    if (ec && ec.upTicks) {
+      const u = entryConfirm.upTickCheck(sig.pairAddress, ec.upTicks);
+      if (!u.ok) {
+        rej.count(sig.strategyId, 'uptick-confirm');
+        rej.detail({ strategyId: sig.strategyId, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol, gate: 'uptick-confirm', value: `${u.why} ${(u.prices || []).map(p => Number(p).toPrecision(5)).join('>')}` });
+        continue;
+      }
+    }
     const blocked = strategyBlocked(sig.strategy);
     if (blocked) { rej.count(sig.strategyId, blocked); continue; }
     if (!ownSlotBlocked(slotStatus(state, sig.strategy, config, sig.tier))) seen.add(sig.mint);
@@ -703,6 +713,19 @@ async function processEntries(signals, solUsd) {
       rej.detail({ strategyId: strat.id, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol, gate, value: rug.reasons.join('; ') });
       rej.nearMiss({ strategyId: strat.id, gate, reasons: rug.reasons, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol, liquidityUsd: q.liquidityUsd, priceUsd: q.priceUsd });
       continue;
+    }
+    // PR5 delayed confirmation (NCS): park the first pass, enter only if the fresh price is higher
+    // >= delaySec later; a re-check pass is scheduled so the delay is ~delaySec, not a full scan.
+    if (strat.entryConfirm && strat.entryConfirm.delaySec) {
+      const dc = entryConfirm.delayedCheck(sig.mint, sig.pairAddress, q.priceUsd, strat.entryConfirm.delaySec);
+      if (dc.state !== 'ok') {
+        const gate = dc.state === 'fail' ? 'delayed-confirm-failed' : 'delayed-confirm-pending';
+        rej.count(strat.id, gate);
+        rej.detail({ strategyId: strat.id, mint: sig.mint, pairAddress: sig.pairAddress, symbol: sig.symbol, gate, value: dc.chgPct != null ? `${dc.chgPct.toFixed(2)}% after ${dc.ageSec.toFixed(0)}s` : `at ${q.priceUsd}` });
+        if (dc.state === 'parked') scheduleConfirm(sig, strat.entryConfirm.delaySec);
+        continue;
+      }
+      console.log(`[confirm] ${sig.symbol} ${sig.mint} (${strat.id}) price +${dc.chgPct.toFixed(2)}% after ${dc.ageSec.toFixed(0)}s -> entering at ${q.priceUsd}`);
     }
     const sizeSol = sizeFor(strat, sig, q, solUsd);
     if (!sizeSol) { rej.count(strat.id, 'exposure-cap'); continue; }
@@ -810,6 +833,7 @@ async function tick() {
 
     const { pairs, discoveredMints } = await getCandidatePairs();
     memory.record(pairs);
+    entryConfirm.record(pairs);
     pairsCount = pairs.length;
     discovered = discoveredMints;
     addActivity(`Scanned ${pairs.length} pairs (${discoveredMints} mints known, liq >= $${config.scanMinLiquidityUsd})`);
@@ -835,6 +859,26 @@ async function tick() {
     try { saveState(state); } catch (e) { console.error('[scan] save error', e.message); }
     tickRunning = false;
   }
+}
+
+// PR5: delayed-confirmation re-check pass (runs the parked signal through processEntries again).
+function scheduleConfirm(sig, delaySec, attempt = 0) {
+  setTimeout(async () => {
+    if (tickRunning) { if (attempt < 20) scheduleConfirm(sig, 2, attempt + 1); return; }
+    tickRunning = true;
+    try {
+      const solUsd = await jup.getSolUsd(state.lastSolUsd || null);
+      if (solUsd) {
+        const n = await processEntries([sig], solUsd);
+        if (n) console.log(`[confirm] entries=${n} open=${state.openPositions.length}`);
+      }
+    } catch (e) {
+      console.error('[confirm] error', e && e.stack || e);
+    } finally {
+      try { saveState(state); } catch (e) { /* logged */ }
+      tickRunning = false;
+    }
+  }, Math.max(1, delaySec) * 1000 + 250);
 }
 
 // Fast exit checks for open positions between full scans (NCS spec: recheck every 15s).

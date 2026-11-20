@@ -387,7 +387,7 @@ const shadow = require('../src/shadow');
 test('no strategy is paused/shadowed; aggressive-flow trades at half size (0.1) behind 3% gap cap (batch1) + 3% round trip', () => {
   for (const st of config.strategies) assert.ok(!shadow.isDisabled(st) && !shadow.isShadow(st), st.id);
   const af = config.strategies.find(s => s.id === 'aggressive-flow');
-  assert.strictEqual(af.sizeSol, 0.05); // batch2
+  assert.strictEqual(af.sizeSol, 0.02); // PR5 (batch2 0.05)
   const cfg = config.quoteSanityFor(af);
   assert.strictEqual(cfg.maxQuoteGapPct, 3); assert.strictEqual(cfg.maxRoundTripLossPct, 3);
   const p = Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 200000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 1, h1: 3, h6: 0, h24: 0 } });
@@ -459,7 +459,7 @@ test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawd
 });
 test('config hashes: all three changed (sell-quote exits + per-strategy gap caps; aggressive-flow also half size)', () => {
   assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': '340064b403e0', 'momentum-entry': '4add15a57dca', ncs_fresh_momentum_v1: '694b165387f0'
+    'aggressive-flow': 'b7f4cc472695', 'momentum-entry': 'c1ab00a8e531', ncs_fresh_momentum_v1: 'bf331c3a05d5'
   });
 });
 
@@ -516,7 +516,8 @@ test('rejections detail: per-mint rows with failed gate + value (last 200)', () 
 
 test('momentum-entry time stop: exits at max hold only if PnL < 0, else arms a trail', () => {
   const t0 = Date.parse('2026-11-20T10:00:00Z');
-  const mk = () => ({ strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(t0).toISOString(), entryPrice: 1, highest: 1.05, remainingFrac: 1, exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40 } });
+  // highest 1.02: peak below the PR5 +3% breakeven arm and at the +2% early-fail bar (current config exits apply).
+  const mk = () => ({ strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(t0).toISOString(), entryPrice: 1, highest: 1.02, remainingFrac: 1, exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40 } });
   const late = t0 + 41 * 60000;
   const loss = decide(mk(), 0.99, true, null, late);
   assert.strictEqual(loss.reason, 'time');
@@ -529,7 +530,7 @@ test('momentum-entry time stop: exits at max hold only if PnL < 0, else arms a t
   assert.strictEqual(decide(p, 1.0065, true, null, late + 30000).reason, 'time-trail'); // -5.05% from high
   const q = mk(); decide(q, 1.02, true, null, late);
   assert.strictEqual(decide(q, 0.995, true, null, late + 10000).reason, 'time'); // dropped under 0%
-  assert.strictEqual(decide(mk(), 1.02, true, null, t0 + 30 * 60000), null); // before max hold: unchanged
+  assert.strictEqual(decide(mk(), 1.02, true, null, t0 + 11 * 60000), null); // before max hold (12): unchanged
 });
 
 // ---------- PR2.3: per-strategy gap caps, round trip, exits judged on the sell quote ----------
@@ -661,7 +662,7 @@ test('slot allocator: cap 12 when cash covers it, AF max 4, NCS max 2, 5 slots r
   const { maxOpenFor, reservedFor, pickBumpVictim } = require('../src/slots');
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
   // Allocator lives outside every configHash: momentum-entry must stay fc3fd9a29a5c.
-  assert.strictEqual(config.strategyHashes['momentum-entry'], '4add15a57dca'); // PR4.1 (h1 1.5, m5 0.3)
+  assert.strictEqual(config.strategyHashes['momentum-entry'], 'c1ab00a8e531'); // PR5 loser-cut
   assert.strictEqual(config.opsFor('aggressive-flow').maxOpen, 4); assert.strictEqual(config.opsFor(ncsS.id).maxOpen, 2);
   const now = Date.now();
   const P = (id, ageSec = 600, netPct = 0, extra = {}) => ({ strategyId: id, sizeSol: id === 'aggressive-flow' ? 0.1 : 0.2, remainingFrac: 1, entryTime: new Date(now - ageSec * 1000).toISOString(), lastJudge: { netPct }, ...extra });
@@ -716,7 +717,7 @@ test('allocator: momentum-entry claims a mint both strategies passed; a capped A
 });
 
 test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1 15; momentum hash unchanged', () => {
-  assert.strictEqual(config.strategyHashes['momentum-entry'], '4add15a57dca'); // PR4.1 (h1 1.5, m5 0.3)
+  assert.strictEqual(config.strategyHashes['momentum-entry'], 'c1ab00a8e531'); // PR5 loser-cut
   const now = Date.now();
   const af = stratById('aggressive-flow');
   const P = (minsAgo, extra = {}) => ({ strategyId: 'aggressive-flow', strategyType: 'simple', entryTime: new Date(now - minsAgo * 60000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.1, remainingFrac: 1, highest: 1, exit: af.exit, ...extra });
@@ -732,10 +733,10 @@ test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1
   assert.strictEqual(decide(P(7, { judgedHigh: 1.005 }), 0.95, true, null, now).reason, 'sl');
   // inside grace only the hard stop
   assert.strictEqual(decide(P(0.5, { judgedHigh: 1.0 }), 0.96, true, null, now), null);
-  // momentum: no stall/lock keys -> unchanged behaviour (-3% at 10 min stays open)
+  // momentum: no AF-style stall keys; PR5 early-failure exit cuts -3% at 10 min (never +2%) as 'stall'.
   const mom = stratById('momentum-entry');
   assert.strictEqual(mom.exit.stallAfterMin, undefined);
-  assert.strictEqual(decide({ strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(now - 600000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.2, remainingFrac: 1, highest: 1, judgedHigh: 1, exit: mom.exit }, 0.97, true, null, now), null);
+  assert.strictEqual(decide({ strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(now - 600000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.2, remainingFrac: 1, highest: 1, judgedHigh: 1, exit: mom.exit }, 0.97, true, null, now).reason, 'stall');
   // NCS lock: peak +8% net, back to +1% -> lock; peak +7% -> nothing; TP1 at +15%
   const ncsS = stratById('ncs_fresh_momentum_v1');
   const N = extra => ({ strategyId: ncsS.id, strategyType: 'ncs', entryTime: new Date(now - 120000).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.08, remainingFrac: 1, highest: 1, exit: ncsS.exit, ...extra });
@@ -748,9 +749,9 @@ test('batch1: AF TP 4 / trail 2.5->1.25 / stall exit; NCS lock after +8% and TP1
 
 test('batch2: AF 0.05 SOL, v/l >= 0.15 (14:05), m5 buys > sells (fail closed), h1 > 0; NCS grace + fill stop, tier B half; allocator', () => {
   const { pickBumpVictim } = require('../src/slots');
-  assert.strictEqual(config.strategyHashes['momentum-entry'], '4add15a57dca'); // PR4.1 (h1 1.5, m5 0.3)
+  assert.strictEqual(config.strategyHashes['momentum-entry'], 'c1ab00a8e531'); // PR5 loser-cut
   const af = stratById('aggressive-flow'), mom = stratById('momentum-entry'), ncsS = stratById('ncs_fresh_momentum_v1');
-  assert.strictEqual(af.sizeSol, 0.05);
+  assert.strictEqual(af.sizeSol, 0.02); // PR5
   const P = () => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 120000, txnsM5: { buys: 30, sells: 20 }, priceChange: { m5: 0, h1: 1, h6: 0, h24: 0 } });
   assert.deepStrictEqual(evaluate(P(), af).fails, []);
   let p = P(); p.volumeH1 = 28000; assert.ok(evaluate(p, af).fails.includes('volumeToLiquidity>=0.15')); // 0.14 < 0.15
@@ -799,25 +800,24 @@ test('batch2: AF 0.05 SOL, v/l >= 0.15 (14:05), m5 buys > sells (fail closed), h
 
 test('PR4.1 momentum entry loosened (h1 >= 1.5, m5 >= 0.3), exits unchanged', () => {
   const mom = stratById('momentum-entry');
-  assert.deepStrictEqual(mom.entry.map(r => `${r.field}${r.op}${r.value}`), ['h1>=1.5', 'm5>=0.3']);
+  assert.deepStrictEqual(mom.entry.map(r => `${r.field}${r.op}${r.value}`), ['h1>=1.5', 'm5>=0.3', 'buysGtSellsM5>=1']); // PR5 adds m5 buys > sells
   const P = (h1, m5) => Object.assign(basePair(), { liquidityUsd: 200000, volumeH1: 120000, priceChange: { m5, h1, h6: 0, h24: 0 } });
   assert.deepStrictEqual(evaluate(P(1.6, 0.35), mom).fails.filter(f => /h1|m5/.test(f)), []);
   assert.ok(evaluate(P(1.4, 0.35), mom).fails.includes('h1>=1.5'));
   assert.ok(evaluate(P(1.6, 0.25), mom).fails.includes('m5>=0.3'));
-  assert.strictEqual(mom.exit.maxHoldMinutes, 25); assert.strictEqual(mom.exit.graceSec, 30); assert.strictEqual(mom.sizeSol, 0.2);
+  assert.strictEqual(mom.exit.maxHoldMinutes, 12); assert.strictEqual(mom.exit.graceSec, 30); assert.strictEqual(mom.sizeSol, 0.2);
 });
 
 test('PR4 momentum (98074ad): max hold 25 min, 30s grace with a 10% hard stop', () => {
   const ex = stratById('momentum-entry').exit;
-  assert.strictEqual(ex.maxHoldMinutes, 25); assert.strictEqual(ex.graceSec, 30); assert.strictEqual(ex.hardStopPct, 10);
+  assert.strictEqual(ex.maxHoldMinutes, 12); assert.strictEqual(ex.graceSec, 30); assert.strictEqual(ex.hardStopPct, 10); // PR5: 25 -> 12
   assert.strictEqual(ex.stopLossPct, 6); assert.strictEqual(ex.takeProfitPct, 10);
   const t0 = Date.now();
   const pos = { strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(t0).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.2, remainingFrac: 1, highest: 1, exit: ex };
   assert.strictEqual(decide(pos, 0.93, true, null, t0 + 20000), null);            // -7% at 20s: inside grace
   assert.strictEqual(decide(pos, 0.89, true, null, t0 + 20000).reason, 'hard-stop'); // -11% at 20s: hard stop
   assert.strictEqual(decide(pos, 0.93, true, null, t0 + 35000).reason, 'sl');      // -7% at 35s: normal SL (Huss case)
-  assert.strictEqual(decide(pos, 0.98, true, null, t0 + 24 * 60000), null);
-  assert.ok(decide(pos, 0.98, true, null, t0 + 25 * 60000 + 1000));               // losing at 25 min: time exit
+  assert.strictEqual(decide(pos, 0.98, true, null, t0 + 5 * 60000), null);
   // Unchanged: AF and NCS keep 60s / 15%.
   assert.strictEqual(stratById('aggressive-flow').exit.graceSec, 60); assert.strictEqual(stratById('ncs_fresh_momentum_v1').exit.hardStopPct, 15);
 });
@@ -925,6 +925,68 @@ test('PR4 broken-quote denylist: gap > 50%, no reverse route, NaN/zero output; s
   assert.strictEqual(mg.check(st, 'GOOD', cfg, far), null);
   assert.strictEqual(mg.addBroken(st, { mint: 'EV1', reason: 'again' }), false); // first reason kept
   assert.ok(!JSON.stringify(config.strategies).includes('seedBrokenMints'));
+});
+
+test('PR5 momentum exits: breakeven lock (+3% net peak -> exit at +0.5%), early failure (not +2% by 6 min), max hold 12', () => {
+  const ex = stratById('momentum-entry').exit;
+  assert.strictEqual(ex.breakevenArmPct, 3); assert.strictEqual(ex.breakevenLockPct, 0.5);
+  assert.strictEqual(ex.earlyFailAfterMin, 6); assert.strictEqual(ex.earlyFailMinPeakPct, 2); assert.strictEqual(ex.maxHoldMinutes, 12);
+  assert.strictEqual(ex.takeProfitPct, 10); assert.strictEqual(ex.stopLossPct, 6);
+  const t0 = Date.parse('2026-11-20T16:00:00Z');
+  const P = jh => ({ strategyId: 'momentum-entry', strategyType: 'simple', entryTime: new Date(t0).toISOString(), entryPrice: 1, entryFillPrice: 1, sizeSol: 0.2, remainingFrac: 1, highest: jh, judgedHigh: jh, exit: ex });
+  // Breakeven: peak +3.5% net, back to +0.4% at 2 min -> 'breakeven'; at +0.8% -> hold.
+  assert.strictEqual(decide(P(1.035), 1.004, true, null, t0 + 120000).reason, 'breakeven');
+  assert.strictEqual(decide(P(1.035), 1.008, true, null, t0 + 120000), null);
+  // Peak only +2.9%: no breakeven lock.
+  assert.strictEqual(decide(P(1.029), 1.0, true, null, t0 + 120000), null);
+  // Not within the 30s grace (only the hard stop there).
+  assert.strictEqual(decide(P(1.035), 1.0, true, null, t0 + 20000), null);
+  // Early failure: peak +1.5% at 6 min -> 'stall' (mint-guard stop reason); peak +2.5% -> hold; 5 min -> hold.
+  assert.strictEqual(decide(P(1.015), 1.01, true, null, t0 + 6 * 60000 + 1000).reason, 'stall');
+  assert.strictEqual(decide(P(1.015), 1.01, true, null, t0 + 5 * 60000), null);
+  assert.strictEqual(decide(P(1.025), 1.02, true, null, t0 + 7 * 60000), null);
+  assert.ok(config.mintGuard.stopReasons.includes('stall'));
+  // Max hold 12: losing at 12 min after a +2.5% peak -> 'time'; winning -> time trail armed.
+  assert.strictEqual(decide(P(1.025), 0.995, true, null, t0 + 12 * 60000 + 1000).reason, 'time');
+  assert.strictEqual(decide(P(1.025), 1.02, true, null, t0 + 12 * 60000 + 1000), null);
+  // Stale price: only time exits.
+  assert.strictEqual(decide(P(1.035), 1.0, false, null, t0 + 120000), null);
+});
+
+test('PR5 entry confirmation: 2 consecutive scan up-ticks; NCS delayed re-check (price higher >= 20s later)', () => {
+  const ec = require('../src/entryConfirm');
+  ec.reset();
+  assert.deepStrictEqual(stratById('momentum-entry').entryConfirm, { upTicks: 2 });
+  assert.deepStrictEqual(stratById('aggressive-flow').entryConfirm, { upTicks: 2 });
+  assert.deepStrictEqual(stratById('ncs_fresh_momentum_v1').entryConfirm, { delaySec: 20 });
+  const t = Date.parse('2026-11-20T16:00:00Z');
+  ec.record([{ pairAddress: 'P1', priceUsd: 1.0 }, { pairAddress: 'P2', priceUsd: 1.0 }], t);
+  assert.ok(!ec.upTickCheck('P1', 2, t).ok); // not enough history
+  ec.record([{ pairAddress: 'P1', priceUsd: 1.01 }, { pairAddress: 'P2', priceUsd: 1.01 }], t + 60000);
+  ec.record([{ pairAddress: 'P1', priceUsd: 1.02 }, { pairAddress: 'P2', priceUsd: 1.01 }], t + 120000);
+  assert.ok(ec.upTickCheck('P1', 2, t + 120000).ok);
+  assert.strictEqual(ec.upTickCheck('P2', 2, t + 120000).why, 'not-rising'); // flat tick fails
+  ec.record([{ pairAddress: 'P1', priceUsd: 1.015 }], t + 180000);
+  assert.ok(!ec.upTickCheck('P1', 2, t + 180000).ok); // down tick resets
+  // Same-scan duplicates overwrite instead of counting as a tick.
+  ec.record([{ pairAddress: 'P3', priceUsd: 1 }], t); ec.record([{ pairAddress: 'P3', priceUsd: 1.1 }], t + 1000); ec.record([{ pairAddress: 'P3', priceUsd: 1.2 }], t + 2000);
+  assert.ok(!ec.upTickCheck('P3', 2, t + 2000).ok);
+  // Delayed confirmation.
+  assert.strictEqual(ec.delayedCheck('M1', 'P1', 1.0, 20, t).state, 'parked');
+  assert.strictEqual(ec.delayedCheck('M1', 'P1', 1.05, 20, t + 10000).state, 'wait');
+  const ok = ec.delayedCheck('M1', 'P1', 1.01, 20, t + 21000);
+  assert.strictEqual(ok.state, 'ok'); near(ok.chgPct, 1);
+  assert.strictEqual(ec.delayedCheck('M2', 'P2', 1.0, 20, t).state, 'parked');
+  assert.strictEqual(ec.delayedCheck('M2', 'P2', 1.0, 20, t + 21000).state, 'fail'); // not higher
+  assert.strictEqual(ec.delayedCheck('M2', 'P2', 1.0, 20, t + 22000).state, 'parked'); // re-parks on the next pass
+  ec.reset();
+});
+
+test('PR5 sizes: AF 0.02 SOL; NCS tier A and tier B fixed 0.02 SOL (fixedSol overrides % of equity and tier mult)', () => {
+  assert.strictEqual(stratById('aggressive-flow').sizeSol, 0.02);
+  const n = stratById('ncs_fresh_momentum_v1');
+  assert.strictEqual(n.sizing.fixedSol, 0.02);
+  assert.strictEqual(stratById('momentum-entry').sizeSol, 0.2); // unchanged
 });
 
 (async () => {

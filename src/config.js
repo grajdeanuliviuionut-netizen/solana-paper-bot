@@ -84,13 +84,15 @@ const strategies = [
       // zero entries since 15:00; h1>0 was the top AF filter reject).
       { field: 'buysGtSellsM5', op: '>=', value: 1 }
     ],
+    // PR5: same 2-scan up-tick confirmation as momentum.
+    entryConfirm: { upTicks: 2 },
     // Batch1 (post-6pm): since 12:32 at 0.1 SOL, TP6 was never reached (best MFE +5.1% mid), trails armed at
     // +3 exited ~0%, and stop-outs had MFE <= 0 and bled for 13-17 min before -5.7%. Lower TP, tighter
     // trail, and a stall exit for trades that never went green.
     exit: { takeProfitPct: 4, stopLossPct: 5, trailAfterPct: 2.5, trailPct: 1.25, maxHoldMinutes: 25, judgeOn: 'sell-quote',
       stallAfterMin: 6, stallMaxPeakPct: 1, stallLossPct: 2.5, ...entryGrace },
     quoteSanity: { maxQuoteGapPct: 3 }, // batch1: observed entry gaps since 12:32 within -2.1..+1.4%; 3% cap (+ global 3% round trip)
-    sizeSol: 0.05, // batch2 13:57: 0.1 -> 0.05 (re-enabled 12:29 at 0.1, was 0.2)
+    sizeSol: 0.02, // PR5 16:52: 0.05 -> 0.02 (SL 18 at avg -13%, held 42s). batch2: 0.1 -> 0.05
     maxOpen: 6
   },
   {
@@ -101,16 +103,24 @@ const strategies = [
     entry: [
       // 16:04 RA (zero entries since 15:00): h1 2 -> 1.5, m5 0.5 -> 0.3.
       { field: 'h1', op: '>=', value: 1.5 },
-      { field: 'm5', op: '>=', value: 0.3 }
+      { field: 'm5', op: '>=', value: 0.3 },
+      // PR5 (16:52 loser-cut spec): m5 buys > sells (missing data fails closed).
+      { field: 'buysGtSellsM5', op: '>=', value: 1 }
     ],
+    // PR5: price must have risen on 2 consecutive scans before entry (src/entryConfirm.js).
+    entryConfirm: { upTicks: 2 },
     // Time stop at maxHoldMinutes exits only when the position is under water (mid PnL < 0%);
     // otherwise a timeTrailPct trailing stop arms at max hold (high-water mark from that moment).
     // judgeOn 'sell-quote': TP/SL/trail/time triggers use the Jupiter sell quote at position size, net of tx costs.
     // From branch commit 98074ad (merged 15:07, RA lifted the momentum freeze): 10 of 25 session trades
     // hit the 40-min time exit at avg -3.3% while every TP came within 21 min -> max hold 25. Huss fell
     // through the 6% stop during the 60s grace (-9.05% at 69s) -> grace 30s with a 10% hard stop.
-    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 25, timeStopOnlyIfLoss: true, timeTrailPct: 5, judgeOn: 'sell-quote', ...entryGrace,
-      graceSec: num('MOMENTUM_GRACE_SEC', 30), hardStopPct: num('MOMENTUM_HARD_STOP_PCT', 10) },
+    // PR5 (16:52 loser-cut spec; 109 trades: SL avg -7.9% with MFE +0.7%, time exits avg -2.6% over
+    // 21.7m, TPs avg +9.1% in 11.6m, 9 of 26 losers were up 3%+ first): max hold 25 -> 12; breakeven
+    // lock (net peak +3% -> exit at +0.5%); early-failure exit (not +2% net by 6 min -> exit).
+    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 12, timeStopOnlyIfLoss: true, timeTrailPct: 5, judgeOn: 'sell-quote', ...entryGrace,
+      graceSec: num('MOMENTUM_GRACE_SEC', 30), hardStopPct: num('MOMENTUM_HARD_STOP_PCT', 10),
+      breakevenArmPct: 3, breakevenLockPct: 0.5, earlyFailAfterMin: 6, earlyFailMinPeakPct: 2 },
     quoteSanity: { maxQuoteGapPct: 5 }, // entry |Jupiter vs model| cap for this strategy (global default 15)
     sizeSol: 0.2,
     maxOpen: 6
@@ -164,7 +174,11 @@ const strategies = [
     },
     quoteSanity: { maxQuoteGapPct: 8 },
     // Tier A = base size (2% of equity), tier B = half of that (universe.tiers.*.sizeMult).
-    sizing: { basePctOfEquity: 2.0, maxPctOfPoolLiquidity: 1.0, maxTotalExposurePct: 10 },
+    // PR5 16:52 (SL 11 at avg -21.6%, held 66s): fixed 0.02 SOL for tier A and tier B (fixedSol overrides
+    // the %-of-equity size and the tier sizeMult); entry only if the price is higher >= 20s after the
+    // signal (delayed re-check, booked at that price).
+    sizing: { basePctOfEquity: 2.0, maxPctOfPoolLiquidity: 1.0, maxTotalExposurePct: 10, fixedSol: 0.02 },
+    entryConfirm: { delaySec: 20 },
     maxOpen: 5,
     reentryCooldownMinutes: 30,
     riskGuards: { dailyLossHaltPct: 8, consecutiveLosses: 5, pauseMinutes: 30 }
@@ -250,7 +264,7 @@ const mintGuard = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr4.2-clone-retry-2026-11-20',
+  buildId: 'pr5-loser-cut-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',

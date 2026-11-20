@@ -68,6 +68,18 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
       const peakPct = (((hi || pos.entryPrice) - pos.entryPrice) / pos.entryPrice) * 100;
       if (peakPct >= ex.trailAfterPct && price <= (hi || pos.entryPrice) * (1 - (ex.trailPct || 5) / 100)) return close('trail');
     }
+    // PR5 breakeven lock: once the judged (net) peak reached breakevenArmPct, exit if net falls back to
+    // breakevenLockPct (e.g. +3% -> lock +0.5%).
+    if (ex.breakevenArmPct != null) {
+      const peakPct = (((hi || pos.entryPrice) - pos.entryPrice) / pos.entryPrice) * 100;
+      if (peakPct >= ex.breakevenArmPct && changePct <= (ex.breakevenLockPct || 0)) return close('breakeven');
+    }
+    // PR5 early-failure exit: not up earlyFailMinPeakPct (net peak) within earlyFailAfterMin -> exit
+    // (reason 'stall', so the mint guard's 2h cooldown applies).
+    if (ex.earlyFailAfterMin && minsOpen >= ex.earlyFailAfterMin) {
+      const peakPct = (((hi || pos.entryPrice) - pos.entryPrice) / pos.entryPrice) * 100;
+      if (peakPct < ex.earlyFailMinPeakPct) return close('stall');
+    }
     // Stall exit: after stallAfterMin, a trade that never got above stallMaxPeakPct and is down
     // stallLossPct is cut instead of bleeding to the full stop.
     if (ex.stallAfterMin && minsOpen >= ex.stallAfterMin) {
