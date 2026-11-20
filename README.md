@@ -47,3 +47,21 @@ Fills, gates and logs (PR2):
 - `npm test` runs offline unit tests.
 
 All paper. Live trading stays locked until you explicitly enable it.
+
+## Live path (PR3) - OFF by default
+Paper is always the default. Live mode only starts when ALL of these hold at startup; otherwise
+the bot logs `[live] LIVE MODE REFUSED ...` and keeps paper trading:
+- `LIVE_TRADING=true`, `KILL_SWITCH` not `true`
+- `WALLET_PRIVATE_KEY` (base58 secret key, e.g. Solflare export; set it only as a Railway secret,
+  never commit it; it is redacted from every log line)
+- `KILL_TOKEN` (>= 16 chars), `LIVE_STRATEGIES` (comma-separated strategy ids)
+- `MAX_SOL_PER_TRADE` (<= 1), `MAX_DAILY_LOSS_SOL`, `MAX_OPEN_POSITIONS`, `MAX_CONSECUTIVE_LOSSES`
+- `PRIORITY_FEE` (lamports cap) and `JITO_TIP` (lamports; > 0 uses a Jito tip instead)
+- wallet balance >= `MAX_SOL_PER_TRADE` + `MIN_WALLET_RESERVE_SOL` (default 0.05), read via `RPC_URL`
+
+Swaps go through Jupiter using the same `src/jupiterQuote.js` as paper shadow quotes, are retried
+with exponential backoff (re-quoting each attempt), and every attempt is logged with priority fee
+and Jito tip (`GET /api/live`). Daily loss and losing-streak limits trip a persistent kill switch
+(`data/live-state.json`). `POST /api/kill` with `Authorization: Bearer <KILL_TOKEN>` stops all new
+live entries (open positions are still managed/sold). Live trades are logged with `mode: "live"`
+and on-chain signatures, and are kept out of the paper go-live summary.

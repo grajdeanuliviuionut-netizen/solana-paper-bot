@@ -1,4 +1,7 @@
+// Redact secrets from every log line before anything else runs.
+require('./live/redact').installConsoleRedaction();
 const express = require('express');
+const crypto = require('crypto');
 const config = require('./config');
 const { loadState, saveState, logTrade, readTrades } = require('./logger');
 const { getCandidatePairs, getPairsByAddress } = require('./dataFetcher');
@@ -9,6 +12,7 @@ const jup = require('./jupiterQuote');
 const rugGate = require('./rugGate');
 const memory = require('./marketMemory');
 const rej = require('./rejections');
+const { initLive } = require('./live/executor');
 
 // Never let one bad promise or exception kill the process / scan loop.
 process.on('unhandledRejection', err => console.error('[unhandledRejection]', err && err.stack || err));
@@ -18,6 +22,17 @@ process.on('uncaughtException', err => { console.error('[uncaughtException] exit
 let state = loadState(config.startingSol, config.buildId);
 state.cooldowns = state.cooldowns || {};
 state.guards = state.guards || {};
+// Live-mode risk state survives restarts AND build resets (kill switch stays on until cleared).
+const liveStateFile = require('path').join(require('path').dirname(config.stateFile), 'live-state.json');
+function loadLiveState() {
+  try { return JSON.parse(require('fs').readFileSync(liveStateFile, 'utf8')); } catch (e) { return { day: null, dayPnlSol: 0, consecLosses: 0, killed: false, txLog: [] }; }
+}
+function saveLiveState() {
+  try { require('fs').writeFileSync(liveStateFile, JSON.stringify(liveState, null, 2)); } catch (e) { console.error('live state save failed', e.message); }
+}
+const liveState = loadLiveState();
+let liveExec = null;
+let liveStatus = { mode: 'paper', reasons: ['not initialised'] };
 saveState(state);
 console.log(`Boot build=${config.buildId} balance=${state.balance.toFixed(4)} open=${state.openPositions.length} hashes=${JSON.stringify(config.strategyHashes)}`);
 
@@ -77,7 +92,40 @@ function canOpenGlobal() {
   return true;
 }
 
+async function liveSellLeg(pos, d) {
+  const remaining = pos.remainingFrac == null ? 1 : pos.remainingFrac;
+  let raw;
+  try {
+    const bal = await liveExec.tokenBalanceRaw(pos.mint);
+    raw = d.action === 'close' || d.sellFrac >= remaining - 1e-9 ? bal : (bal * BigInt(Math.round((d.sellFrac / remaining) * 1e6))) / 1000000n;
+  } catch (e) {
+    rej.event('live-balance-failed', { mint: pos.mint, error: e.message });
+    return null;
+  }
+  const r = await liveExec.sell(pos.mint, raw);
+  saveLiveState();
+  if (!r.ok) {
+    pos.exitQuoteFailures = (pos.exitQuoteFailures || 0) + 1;
+    rej.event('live-sell-failed', { mint: pos.mint, pairAddress: pos.pairAddress, strategyId: pos.strategyId, reason: d.reason, error: r.error });
+    return null; // position stays open; retried next check
+  }
+  const received = r.solDeltaLamports != null ? r.solDeltaLamports : Number(r.quotedOutAmount || 0);
+  pos.live.sellSignatures.push(r.signature);
+  pos.live.solReceivedLamports += received;
+  const spentShare = pos.live.solSpentLamports * d.sellFrac;
+  const leg = {
+    time: new Date().toISOString(), reason: d.reason, sellFrac: d.sellFrac, midPrice: d.fillPrice, fillSource: 'live',
+    signature: r.signature, tokensRaw: raw.toString(), solReceivedLamports: received, pnlSol: (received - spentShare) / 1e9, txCostSol: 0,
+    fillPrice: d.fillPrice
+  };
+  pos.legs = pos.legs || [];
+  pos.legs.push(leg);
+  pos.remainingFrac = Math.max(0, remaining - d.sellFrac);
+  return leg;
+}
+
 async function sellLeg(pos, d, q, solUsd) {
+  if (pos.live) return liveSellLeg(pos, d);
   const liq = (q && q.liquidityUsd) || pos.entryLiquidityUsd || 0;
   const valueUsd = pos.sizeSol * d.sellFrac * solUsd * (d.fillPrice / pos.entryFillPrice);
   const fill = fillModel.fillExit({ midPrice: d.fillPrice, valueUsd, liquidityUsd: liq, reason: d.reason, m5Pct: q ? q.priceChange.m5 : 0 });
@@ -117,7 +165,9 @@ function finalizeTrade(pos, finalReason, fresh) {
   const legs = pos.legs || [];
   const legPnl = legs.reduce((a, l) => a + l.pnlSol, 0);
   const txCosts = (pos.entryTxCostSol || 0) + legs.reduce((a, l) => a + l.txCostSol, 0);
-  const pnl = legPnl - (pos.entryTxCostSol || 0) - legs.reduce((a, l) => a + l.txCostSol, 0);
+  const pnl = pos.live
+    ? (pos.live.solReceivedLamports - pos.live.solSpentLamports) / 1e9 // actual on-chain SOL in/out (fees included)
+    : legPnl - (pos.entryTxCostSol || 0) - legs.reduce((a, l) => a + l.txCostSol, 0);
   const soldFrac = legs.reduce((a, l) => a + l.sellFrac, 0) || 1;
   const last = legs[legs.length - 1] || {};
   const trade = {
@@ -155,8 +205,11 @@ function finalizeTrade(pos, finalReason, fresh) {
     txCostsSol: txCosts,
     pnlSol: pnl,
     pnlPct: (pnl / pos.sizeSol) * 100,
-    fillModel: 'depth-v1'
+    fillModel: pos.live ? 'live' : 'depth-v1',
+    mode: pos.live ? 'live' : 'paper',
+    live: pos.live || null
   };
+  if (pos.live && liveExec) { liveExec.recordResult(pnl); saveLiveState(); }
   state.trades.unshift(trade);
   if (state.trades.length > 100) state.trades.pop();
   logTrade(trade);
@@ -219,7 +272,9 @@ async function processExits(solUsd) {
         }
       }
       if (!d) { stillOpen.push(pos); continue; }
-      await sellLeg(pos, d, fresh ? q : null, solUsd);
+      if (pos.live && !liveExec) { stillOpen.push(pos); rej.event('live-position-no-executor', { mint: pos.mint }); continue; }
+      const leg = await sellLeg(pos, d, fresh ? q : null, solUsd);
+      if (!leg) { stillOpen.push(pos); continue; }
       if (d.action === 'partial') {
         pos.tp1Done = true;
         addActivity(`PARTIAL ${pos.symbol} (${pos.strategyId}) ${d.reason} ${Math.round(d.sellFrac * 100)}%`);
@@ -293,6 +348,21 @@ async function processEntries(signals, solUsd) {
       if (!(sizeSol >= 0.01)) { rej.count(strat.id, 'exposure-cap'); continue; }
     }
     sizeSol = +sizeSol.toFixed(4);
+    // LIVE path (off by default): only when live mode is active and this strategy is enabled.
+    let live = null;
+    if (liveExec) {
+      const block = liveExec.entryBlock(state.openPositions.filter(p => p.live).length, strat.id);
+      if (!block) {
+        sizeSol = Math.min(sizeSol, liveExec.cfg.maxSolPerTrade);
+        const r = await liveExec.buy(sig.mint, sizeSol);
+        saveLiveState();
+        if (!r.ok) { rej.event('live-buy-failed', { mint: sig.mint, strategyId: strat.id, error: r.error }); continue; }
+        const tokensRaw = r.tokenDeltaRaw && BigInt(r.tokenDeltaRaw) > 0n ? r.tokenDeltaRaw : r.quotedOutAmount;
+        live = { buySignature: r.signature, tokensRaw, solSpentLamports: r.solDeltaLamports != null ? -r.solDeltaLamports : Math.round(sizeSol * 1e9), sellSignatures: [], solReceivedLamports: 0 };
+      } else if (liveExec.cfg.liveStrategies.includes(strat.id)) {
+        rej.count(strat.id, `live-blocked:${block}`);
+      }
+    }
     const fill = fillModel.fillEntry({ midPrice: q.priceUsd, sizeSol, solUsd, liquidityUsd: q.liquidityUsd });
     let sq = null;
     try {
@@ -330,13 +400,14 @@ async function processEntries(signals, solUsd) {
       exit: strat.exit,
       highest: q.priceUsd,
       lastPrice: q.priceUsd,
-      rug: rug.facts
+      rug: rug.facts,
+      live
     };
     state.openPositions.push(pos);
-    state.balance -= sizeSol + fill.txCostSol;
+    if (!live) state.balance -= sizeSol + fill.txCostSol; // live positions don't touch the paper balance
     openMints.add(sig.mint);
     entries++;
-    const line = `ENTRY ${sig.symbol} ${sig.mint} pair=${sig.pairAddress} (${strat.id}${sig.tier ? ' tier ' + sig.tier : ''}) mid=${q.priceUsd} fill=${entryFill.toPrecision(6)}(${entryFillSource}) size=${sizeSol} jup=${entryShadow && entryShadow.quotedPriceUsd ? entryShadow.quotedPriceUsd.toPrecision(6) : 'n/a'}`;
+    const line = `${live ? 'LIVE ' : ''}ENTRY ${sig.symbol} ${sig.mint} pair=${sig.pairAddress} (${strat.id}${sig.tier ? ' tier ' + sig.tier : ''}) mid=${q.priceUsd} fill=${entryFill.toPrecision(6)}(${entryFillSource}) size=${sizeSol} jup=${entryShadow && entryShadow.quotedPriceUsd ? entryShadow.quotedPriceUsd.toPrecision(6) : 'n/a'}`;
     addActivity(line);
     console.log(`[trade] ${line}`);
   }
@@ -411,6 +482,7 @@ function summarize(trades) {
     byStrategy[s.id] = { configHash: config.strategyHashes[s.id], trades: 0, wins: 0, pnlSol: 0, best: null, olderHashTrades: 0 };
   }
   for (const t of trades) {
+    if (t.mode === 'live') continue; // live trades are reported separately (/api/live)
     const s = byStrategy[t.strategyId] || (byStrategy[t.strategyId] = { configHash: null, trades: 0, wins: 0, pnlSol: 0, best: null, olderHashTrades: 0 });
     // The go-live count resets whenever the strategy's config hash changes.
     if (s.configHash && t.configHash !== s.configHash) { s.olderHashTrades++; continue; }
@@ -455,8 +527,39 @@ app.get('/api/rejections', (req, res) => {
   res.json({ build: config.buildId, ...rej.snapshot(), nearMisses: rej.nearMisses.slice(0, parseInt(req.query.limit || '100', 10)) });
 });
 
+function tokenOk(given) {
+  const want = process.env.KILL_TOKEN;
+  if (!want || want.length < 16 || !given) return false;
+  const a = crypto.createHash('sha256').update(String(given)).digest();
+  const b = crypto.createHash('sha256').update(want).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+// POST /api/kill  (Authorization: Bearer <KILL_TOKEN>)  -> stops all new live entries.
+app.post('/api/kill', (req, res) => {
+  const auth = String(req.headers.authorization || '');
+  const given = auth.startsWith('Bearer ') ? auth.slice(7) : (req.body && req.body.token);
+  if (!tokenOk(given)) return res.status(403).json({ ok: false, error: 'forbidden' });
+  liveState.killed = true;
+  liveState.killReason = `api:${String((req.body && req.body.reason) || 'manual').slice(0, 80)}`;
+  liveState.killedAt = new Date().toISOString();
+  saveLiveState();
+  console.error(`[live] KILL SWITCH via /api/kill (${liveState.killReason})`);
+  res.json({ ok: true, killed: true, killedAt: liveState.killedAt, mode: liveStatus.mode });
+});
+
+app.get('/api/live', (req, res) => {
+  res.json({
+    mode: liveStatus.mode, reasons: liveStatus.reasons, config: liveStatus.config || null,
+    publicKey: liveStatus.publicKey || null, walletSolAtStart: liveStatus.walletSol || null,
+    killed: !!liveState.killed, killReason: liveState.killReason || null, dayPnlSol: liveState.dayPnlSol || 0,
+    consecLosses: liveState.consecLosses || 0, recentTx: (liveState.txLog || []).slice(0, 20),
+    openLivePositions: state.openPositions.filter(p => p.live).length
+  });
+});
+
 app.get('/api/health', (req, res) => {
-  res.json({ ok: true, build: config.buildId, ticks: tickCount, lastScan: lastScanSummary, lastUpdate: state.lastUpdate, configHashes: config.strategyHashes });
+  res.json({ ok: true, build: config.buildId, mode: liveStatus.mode, ticks: tickCount, lastScan: lastScanSummary, lastUpdate: state.lastUpdate, configHashes: config.strategyHashes });
 });
 
 app.get('/', (req, res) => {
@@ -507,7 +610,7 @@ app.get('/', (req, res) => {
       </style>
     </head>
     <body>
-      <h1>Solana Paper Bot</h1>
+      <h1>Solana Paper Bot <span style="font-size:0.5em;color:${liveStatus.mode === 'live' ? '#f87171' : '#4ade80'}">${esc(liveStatus.mode.toUpperCase())}${liveState.killed ? ' (KILLED)' : ''}</span></h1>
       <div class="balance">Balance: ${state.balance.toFixed(4)} SOL</div>
       <p>Open positions: ${state.openPositions.length} / ${config.maxOpen} | Last update: ${new Date(state.lastUpdate).toLocaleString()}</p>
       <p style="color:#64748b">Build ${esc(config.buildId)} | since ${new Date(state.startedAt || state.lastUpdate).toLocaleString()} | last scan: ${esc(lastScanSummary)} | <a href="/api/trades" style="color:#38bdf8">/api/trades</a> | <a href="/api/rejections" style="color:#38bdf8">/api/rejections</a></p>
@@ -536,8 +639,19 @@ app.get('/', (req, res) => {
   `);
 });
 
-app.listen(config.port, () => {
+app.listen(config.port, async () => {
   console.log(`Dashboard running on port ${config.port}`);
+  try {
+    const r = await initLive({ liveState, strategyIds: config.strategies.map(s => s.id) });
+    liveStatus = r.status;
+    liveExec = r.executor;
+  } catch (e) {
+    liveStatus = { mode: 'paper', reasons: [`live init error: ${e.message}`] };
+    liveExec = null;
+    console.error('[live] init error, staying in PAPER', e.message);
+  }
+  console.log(`[mode] ${liveStatus.mode.toUpperCase()}${liveStatus.mode === 'paper' ? ' (' + liveStatus.reasons.join('; ') + ')' : ''}`);
+  if (state.openPositions.some(p => p.live) && !liveExec) console.error('[live] WARNING: open LIVE positions exist but live mode is off; they will not be sold automatically');
   tick();
   setInterval(() => { tick().catch(e => console.error('[scan] interval error', e)); }, config.pollIntervalMs);
   setInterval(() => { exitTick().catch(e => console.error('[exit-check] interval error', e)); }, config.exitCheckMs);
