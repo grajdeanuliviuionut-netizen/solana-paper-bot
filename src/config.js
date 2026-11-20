@@ -3,6 +3,12 @@ const crypto = require('crypto');
 
 const num = (name, def) => (process.env[name] !== undefined && process.env[name] !== '' ? parseFloat(process.env[name]) : def);
 
+// Entry grace (aggressive-flow, momentum-entry): all % triggers are measured from the actual entry
+// fill (sell-quote PnL net of costs). For the first graceSec after entry only a hard stop at
+// -hardStopPct can fire, so the entry spread/impact can't trip the normal SL or trail (iAgent was
+// stopped 9s after entry at -5.9%). Normal SL / trail / TP start after the grace period.
+const entryGrace = { graceSec: num('ENTRY_GRACE_SEC', 60), hardStopPct: num('ENTRY_HARD_STOP_PCT', 15) };
+
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
@@ -71,7 +77,7 @@ const strategies = [
       { field: 'volumeToLiquidity', op: '>=', value: 0.03 },
       { field: 'm5', op: '>=', value: -2 }
     ],
-    exit: { takeProfitPct: 6, stopLossPct: 5, trailAfterPct: 3, trailPct: 2, maxHoldMinutes: 25, judgeOn: 'sell-quote' },
+    exit: { takeProfitPct: 6, stopLossPct: 5, trailAfterPct: 3, trailPct: 2, maxHoldMinutes: 25, judgeOn: 'sell-quote', ...entryGrace },
     quoteSanity: { maxQuoteGapPct: 5 }, // same tight gap cap as momentum-entry (+ global 3% round-trip gate)
     sizeSol: 0.1, // re-enabled 2026-11-20 12:29 at half size (was 0.2)
     maxOpen: 6
@@ -88,7 +94,7 @@ const strategies = [
     // Time stop at maxHoldMinutes exits only when the position is under water (mid PnL < 0%);
     // otherwise a timeTrailPct trailing stop arms at max hold (high-water mark from that moment).
     // judgeOn 'sell-quote': TP/SL/trail/time triggers use the Jupiter sell quote at position size, net of tx costs.
-    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40, timeStopOnlyIfLoss: true, timeTrailPct: 5, judgeOn: 'sell-quote' },
+    exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40, timeStopOnlyIfLoss: true, timeTrailPct: 5, judgeOn: 'sell-quote', ...entryGrace },
     quoteSanity: { maxQuoteGapPct: 5 }, // entry |Jupiter vs model| cap for this strategy (global default 15)
     sizeSol: 0.2,
     maxOpen: 6
@@ -184,7 +190,7 @@ const strategyOps = {
 const config = {
   // Build label only. Balance and open positions persist across builds (RESET_STATE=1 to start fresh);
   // go-live counts reset per strategy when its configHash changes.
-  buildId: 'pr2.3-sell-quote-exits-2026-11-20',
+  buildId: 'pr3.1-live-path-entry-grace-2026-11-20',
   port: parseInt(process.env.PORT || '3000', 10),
   stateFile: process.env.STATE_FILE || './data/state.json',
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',

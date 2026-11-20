@@ -1,7 +1,7 @@
 // Depth-based paper fill model. Pure functions (rng injectable) so they can be unit tested.
 const config = require('./config');
 
-const STOP_REASONS = new Set(['sl', 'trail', 'breakeven', 'emergency-liq', 'emergency-nosells', 'emergency-rug']);
+const STOP_REASONS = new Set(['sl', 'hard-stop', 'trail', 'breakeven', 'emergency-liq', 'emergency-nosells', 'emergency-rug']);
 
 function isStopReason(reason) {
   return STOP_REASONS.has(reason) || String(reason).startsWith('emergency');

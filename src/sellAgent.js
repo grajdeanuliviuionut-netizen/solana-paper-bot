@@ -43,6 +43,11 @@ function decide(pos, price, priceFresh = true, q = null, now = Date.now()) {
     return null;
   }
 
+  // Entry grace: only the hard stop (from the entry fill, on the judged sell-quote PnL) can fire.
+  if (ex.graceSec > 0 && minsOpen * 60 < ex.graceSec) {
+    if (priceFresh && ex.hardStopPct > 0 && changePct <= -ex.hardStopPct) return close('hard-stop');
+    return null;
+  }
   if (priceFresh) {
     if (changePct >= ex.takeProfitPct) return close('tp');
     if (changePct <= -ex.stopLossPct) return close('sl');

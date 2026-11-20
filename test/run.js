@@ -417,7 +417,7 @@ test('full stop uses equity: 2.33 cash + 6 x 0.2 open is not stopped; real drawd
 });
 test('config hashes: all three changed (sell-quote exits + per-strategy gap caps; aggressive-flow also half size)', () => {
   assert.deepStrictEqual(config.strategyHashes, {
-    'aggressive-flow': '278ccee0216f', 'momentum-entry': '97ccf25bbf1e', ncs_fresh_momentum_v1: '41e98d37e5f6'
+    'aggressive-flow': '379c94debb44', 'momentum-entry': 'fc3fd9a29a5c', ncs_fresh_momentum_v1: '41e98d37e5f6'
   });
 });
 
@@ -545,6 +545,32 @@ test('NCS sizing: tier A = base size (sizeMult 1), tier B = half (0.5)', () => {
   const ncs = stratById('ncs_fresh_momentum_v1');
   assert.strictEqual(ncs.universe.tiers.A.sizeMult, 1.0);
   assert.strictEqual(ncs.universe.tiers.B.sizeMult, 0.5);
+});
+
+test('entry grace (aggressive-flow + momentum-entry): first 60s only a -15% hard stop from the entry fill (sell quote) can fire', () => {
+  const { judgeExit } = require('../src/sellAgent');
+  for (const id of ['aggressive-flow', 'momentum-entry']) {
+    const ex = stratById(id).exit;
+    assert.strictEqual(ex.graceSec, 60); assert.strictEqual(ex.hardStopPct, 15); assert.strictEqual(ex.judgeOn, 'sell-quote');
+    const now = Date.now();
+    const pos = { strategyId: id, strategyType: 'simple', entryTime: new Date(now - 9000).toISOString(), entryPrice: 1, entryFillPrice: 1.04,
+      entryTxCostSol: fm.txCostSol(1), sizeSol: 0.1, remainingFrac: 1, highest: 1.0, exit: ex };
+    // iAgent: 9s after entry, sell quote -5.9% vs the entry FILL -> no stop during grace (old rule fired 'sl').
+    const j = judgeExit(pos, { quote: { ok: true, quotedPriceUsd: 1.04 * 0.941 }, midPrice: 1.0, liquidityUsd: 100000, solUsd: 72 });
+    assert.ok(j.netPct < -5.9 && j.netPct > -7, String(j.netPct));
+    assert.strictEqual(decide(pos, j.price, true, null, now), null);
+    // +20% within grace: no TP either (only the hard stop can fire).
+    const up = judgeExit(pos, { quote: { ok: true, quotedPriceUsd: 1.04 * 1.2 }, midPrice: 1.2, liquidityUsd: 100000, solUsd: 72 });
+    assert.strictEqual(decide(pos, up.price, true, null, now), null);
+    // -16% from the fill within grace -> hard stop (a stop reason for the fill model).
+    const crash = judgeExit(pos, { quote: { ok: true, quotedPriceUsd: 1.04 * 0.84 }, midPrice: 0.9, liquidityUsd: 100000, solUsd: 72 });
+    assert.strictEqual(decide(pos, crash.price, true, null, now).reason, 'hard-stop');
+    assert.ok(fm.isStopReason('hard-stop'));
+    // After 60s the normal SL applies to the same -5.9% (measured from the fill, not mid: mid here is flat).
+    assert.strictEqual(decide(pos, j.price, true, null, now + 52000).reason, 'sl');
+  }
+  // NCS is unchanged (no grace).
+  assert.strictEqual(stratById('ncs_fresh_momentum_v1').exit.graceSec, undefined);
 });
 
 (async () => {
