@@ -17,6 +17,44 @@ module.exports = {
   reentryCooldownMin: 45,       // no re-entry on the same token (mint / pool) for 45 min after any exit
   costRoundtripPct: 1.1,
   brokenGapPct: 15,
+
+  // PR11 (Liviu t64u, 21 Nov): four aggressive PAPER books, side by side, same size, own capacity.
+  // Fills and marks come only from Jupiter quotes (read-only quote API, never a swap).
+  books: {
+    epoch: 'books-v1',            // scoreboard epoch: old trades archived on the volume, fresh board from here
+    sizeSol: 0.05,                // SAME size per trade for every book (manager never cuts the books)
+    maxOpenPerBook: 2,            // own capacity per book, separate from the legacy maxOpen 4
+    targetTrades: 30,             // report each book after 30 trades
+    maxPriceAgeSec: 30,           // never act on a scan row or a quote older than 30 s
+    exitLoopMs: 5000,             // pause between exit passes (each pass re-quotes every open book position)
+    maxEntriesPerTick: 4,
+    maxRoundTripLossPct: 10,      // skip a buy whose immediate Jupiter buy->sell round trip loses more
+    maxQuoteGapPct: 15,           // skip a buy whose Jupiter fill is >15% worse than the DexScreener price
+    noRouteTotalLossMin: 10,      // no sell route for 10 min -> book a total loss (never the last/entry price)
+    noQuoteAfterMaxHoldMin: 10,   // no usable sell quote 10 min past max hold -> total loss
+    list: [
+      {
+        id: 'graduation-sniper', name: 'Graduation sniper', version: 1,
+        entry: { pumpOrigin: true, maxPoolAgeMin: 15, m5BuysGtSells: true, minLiquidityUsd: 30000 },
+        exit: { stopLossPct: 10, takeProfitPct: 40, trailAfterPct: 15, trailPct: 10, maxHoldMinutes: 60 }
+      },
+      {
+        id: 'runner-hunter', name: 'Runner hunter', version: 1,
+        entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },
+        exit: { stopLossPct: 12, partial: { atPct: 10, sellPct: 20 }, trailAfterPartial: true, trailPct: 15, maxHoldMinutes: 240 }
+      },
+      {
+        id: 'volume-explosion', name: 'Volume explosion', version: 1,
+        entry: { minM5VolumeVsHourAvg: 10, minVolumeM5Usd: 3000, minM5: 0, maxM5: 30, minPoolAgeMin: 60, minLiquidityUsd: 10000 },
+        exit: { stopLossPct: 8, trailAfterPct: 10, trailPct: 6, maxHoldMinutes: 60 }
+      },
+      {
+        id: 'trending-pullback', name: 'Trending pullback', version: 1,
+        entry: { minH24: 100, minDropFromHighPct: 20, maxDropFromHighPct: 30, volumeRising: true, minLiquidityUsd: 20000 },
+        exit: { stopLossPct: 10, takeProfitPct: 25, trailAfterPct: 15, trailPct: 5, maxHoldMinutes: 180 }
+      }
+    ]
+  },
   strategies: [
     {
       id: 'aggressive-flow',

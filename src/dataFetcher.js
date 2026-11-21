@@ -58,6 +58,8 @@ function mapDsPair(r, now) {
   if (liquidityUsd < MIN_LIQ_USD) return null;
   const pc = r.priceChange || {};
   const tx = (r.txns && r.txns.h1) || {};
+  const tx5 = (r.txns && r.txns.m5) || {};
+  const vol = r.volume || {};
   const created = num(r.pairCreatedAt);
   const t = now == null ? Date.now() : now;
   return {
@@ -73,6 +75,12 @@ function mapDsPair(r, now) {
     mcapUsd: num(r.marketCap) || num(r.fdv),
     pairCreatedAt: created || null,
     dexId: r.dexId || null,
+    // PR11 (books): 5-min txns, m5/h6/h24 volume, SOL price, token name, fetch time.
+    txnsM5: { buys: num(tx5.buys), sells: num(tx5.sells) },
+    volumeM5: num(vol.m5), volumeH6: num(vol.h6), volumeH24: num(vol.h24),
+    priceNative: num(r.priceNative),
+    name: String(base.name || ''),
+    fetchedAt: Date.now(),
     source: 'dexscreener'
   };
 }
