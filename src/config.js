@@ -6,9 +6,9 @@ module.exports = {
   tradesFile: process.env.TRADES_FILE || './data/trades.jsonl',
   startingSol: parseFloat(process.env.STARTING_SOL || '4'),
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '45000', 10),
-  positionSizeSol: 0.2,
-  maxOpen: 6,
-  dailyLossLimitSol: 0.25,
+  positionSizeSol: 0.15,
+  maxOpen: 5,
+  dailyLossLimitSol: 0.2,
   fullStopBalance: 2.5,
   costRoundtripPct: 1.1,
   brokenGapPct: 15,
@@ -16,23 +16,23 @@ module.exports = {
     {
       id: 'aggressive-flow',
       name: 'Aggressive flow scalp',
-      universe: { minAgeDays: 0, maxAgeDays: null, minLiquidityUsd: 10000, maxLiquidityUsd: 1000000 },
+      universe: { minAgeDays: 0, maxAgeDays: null, minLiquidityUsd: 8000, maxLiquidityUsd: 2000000 },
       entry: [
-        { field: 'buySellRatioH1', op: '>=', value: 1.0 },
-        { field: 'volumeToLiquidity', op: '>=', value: 0.15 },
-        { field: 'm5', op: '>=', value: -2 }
+        { field: 'buySellRatioH1', op: '>=', value: 0.9 },
+        { field: 'volumeToLiquidity', op: '>=', value: 0.08 },
+        { field: 'm5', op: '>=', value: -3 }
       ],
-      exit: { takeProfitPct: 6, stopLossPct: 5, trailAfterPct: 3, trailPct: 2, maxHoldMinutes: 25 }
+      exit: { takeProfitPct: 5, stopLossPct: 4, trailAfterPct: 2, trailPct: 1.5, maxHoldMinutes: 20 }
     },
     {
       id: 'momentum-entry',
       name: 'Momentum entry',
-      universe: { minAgeDays: 0, maxAgeDays: 14, minLiquidityUsd: 15000 },
+      universe: { minAgeDays: 0, maxAgeDays: 30, minLiquidityUsd: 10000 },
       entry: [
-        { field: 'h1', op: '>=', value: 2 },
-        { field: 'm5', op: '>=', value: 0.5 }
+        { field: 'h1', op: '>=', value: 1 },
+        { field: 'm5', op: '>=', value: -1 }
       ],
-      exit: { takeProfitPct: 10, stopLossPct: 6, maxHoldMinutes: 40 }
+      exit: { takeProfitPct: 8, stopLossPct: 5, maxHoldMinutes: 30 }
     }
   ]
 };
