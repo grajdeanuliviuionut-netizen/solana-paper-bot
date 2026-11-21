@@ -13,7 +13,7 @@ const { review } = require('./manager');
 const { step: labStep } = require('./lab');
 
 const shouldExit = sellAgent.shouldExit;
-const computePnl = sellAgent.computePnl || function(pos, exitPrice) {
+const computePnl = sellAgent.computePnl || function (pos, exitPrice) {
   const gross = (exitPrice - pos.entryPrice) / pos.entryPrice;
   const net = gross - (config.costRoundtripPct || 1.1) / 100;
   return net * pos.sizeSol;
@@ -35,7 +35,7 @@ function addActivity(msg) {
 }
 
 function lockedSol() {
-  return (state.openPositions || []).reduce((sum, pos) => sum + (Number(pos.sizeSol) || 0), 0);
+  return (state.openPositions || []).reduce(function (sum, pos) { return sum + (Number(pos.sizeSol) || 0); }, 0);
 }
 
 function equity() {
@@ -44,25 +44,30 @@ function equity() {
 
 function sessionPnl() {
   const since = state.riskResetAt || 0;
-  return (state.trades || []).reduce((sum, trade) => {
+  return (state.trades || []).reduce(function (sum, trade) {
     if (new Date(trade.closedAt).getTime() < since) return sum;
     return sum + (Number(trade.pnlSol) || 0);
   }, 0);
 }
 
+function skipSummary(rejections) {
+  const counts = {};
+  for (const line of rejections || []) {
+    const raw = String(line);
+    const match = raw.match(/:\s*([a-zA-Z0-9]+)\s+[-\d.]+\s+not\s+([<>]=?)\s+([-\d.]+)/);
+    const key = match ? match[1] + ' not ' + match[2] + ' ' + match[3] : raw.split(':').slice(1).join(':').trim().slice(0, 60);
+    if (!key) continue;
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return Object.keys(counts).sort(function (a, b) { return counts[b] - counts[a]; }).slice(0, 4).map(function (key) {
+    return counts[key] + ' missed: ' + key;
+  });
+}
+
 function canOpen() {
-  if (equity() < config.fullStopBalance) {
-    state.blockReason = 'equity under 2.5';
-    return false;
-  }
-  if ((state.openPositions || []).length >= config.maxOpen) {
-    state.blockReason = 'slots full';
-    return false;
-  }
-  if (state.coolUntil && Date.now() < state.coolUntil) {
-    state.blockReason = 'cooldown';
-    return false;
-  }
+  if (equity() < config.fullStopBalance) { state.blockReason = 'equity under 2.5'; return false; }
+  if ((state.openPositions || []).length >= config.maxOpen) { state.blockReason = 'slots full'; return false; }
+  if (state.coolUntil && Date.now() < state.coolUntil) { state.blockReason = 'cooldown'; return false; }
   if (sessionPnl() <= -config.dailyLossLimitSol) {
     state.coolUntil = Date.now() + 15 * 60 * 1000;
     state.riskResetAt = state.coolUntil;
@@ -81,22 +86,17 @@ async function tick() {
       state.coolUntil = 0;
       addActivity('MANAGER old losses no longer freeze new paper trades');
     }
-
     const notes = review(state, config).notes;
     for (const note of notes) addActivity(note);
-
     const pairs = await scan();
     addActivity('SCAN: ' + pairs.length + ' pairs');
-
     const byAddr = {};
-    for (const p of pairs) {
-      if (p && p.pairAddress) byAddr[p.pairAddress] = p;
-    }
-
+    for (const p of pairs) if (p && p.pairAddress) byAddr[p.pairAddress] = p;
     const stillOpen = [];
     for (const pos of state.openPositions) {
       const pair = byAddr[pos.pairAddress];
       const price = pair ? pair.priceUsd : pos.entryPrice;
+      if (pair && pair.priceUsd) pos.lastPrice = pair.priceUsd;
       if (price > (pos.highest || 0)) pos.highest = price;
       const exit = shouldExit(pos, price);
       if (exit) {
@@ -106,37 +106,26 @@ async function tick() {
         state.trades.unshift(trade);
         if (state.trades.length > 100) state.trades.pop();
         logTrade(trade);
-        const dec = logDecision('EXIT', pos.symbol, exit.reason, { pnl: pnl.toFixed(4) });
-        state.decisions.unshift(dec);
+        state.decisions.unshift(logDecision('EXIT', pos.symbol, exit.reason, { pnl: pnl.toFixed(4) }));
         addActivity('EXIT ' + pos.symbol + ' ' + exit.reason + ' pnl=' + pnl.toFixed(4));
-      } else {
-        stillOpen.push(pos);
-      }
+      } else stillOpen.push(pos);
     }
     state.openPositions = stillOpen;
-
     const labNotes = labStep(state, pairs);
     for (const note of labNotes) addActivity(note);
-    state.labTicks = (state.labTicks || 0) + 1;
-    if (state.lab && state.lab.lines && state.labTicks % 4 === 1) {
-      addActivity('LAB ' + state.lab.lines[0]);
-    }
-
+    const result = generateSignals(pairs) || { signals: [], rejections: [] };
+    state.skips = skipSummary(result.rejections);
     if (canOpen()) {
-      const result = generateSignals(pairs) || { signals: [], rejections: [] };
       let opened = 0;
       for (const sig of (result.signals || []).slice(0, 3)) {
         if (!canOpen()) break;
-        const already = state.openPositions.some(function (p) { return p.symbol === sig.symbol; });
-        if (already) continue;
+        if (state.openPositions.some(function (p) { return p.symbol === sig.symbol; })) continue;
         if ((state.pausedIds || []).includes(sig.strategyId)) continue;
-
         const check = rugCheck(sig.pair || pairs.find(function (p) { return p.pairAddress === sig.pairAddress; }));
         if (!check.pass) {
           state.decisions.unshift(logDecision('SKIP', sig.symbol, 'rug check: ' + check.reason));
           continue;
         }
-
         const size = Math.max(0.05, sizePosition(state.balance) * (state.sizeMult || 1));
         const exec = executeEntry(sig, size, state.balance);
         if (exec.ok) {
@@ -156,7 +145,6 @@ async function tick() {
       addActivity('HOLD ' + state.blockReason);
       state.lastBlock = state.blockReason;
     }
-
     if (state.decisions.length > 100) state.decisions = state.decisions.slice(0, 100);
   } catch (e) {
     addActivity('Tick error: ' + e.message);
