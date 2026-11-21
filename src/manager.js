@@ -28,11 +28,15 @@ function review(state, config) {
   if (!state.stratSizeMult || typeof state.stratSizeMult !== 'object') state.stratSizeMult = {};
   for (const strat of config.strategies || []) {
     const row = stats[strat.id];
-    const mult = row && row.n >= minTrades && row.pnl < 0 ? 0.5 : 1;
+    const losing = !!(row && row.n >= minTrades && row.pnl < 0);
+    const cfgMult = Number(strat.sizeMult) > 0 ? Number(strat.sizeMult) : 1;
+    // Effective per-strategy size multiplier: the results cut (0.5) or the config sizeMult, whichever is
+    // lower (they do not stack). E.g. dip-buyers: config sizeMult 0.5 -> 0.5 even without a losing record.
+    const mult = Math.min(losing ? 0.5 : 1, cfgMult);
     const prev = state.stratSizeMult[strat.id] || 1;
     if (mult !== prev && !strat.paused) {
       notes.push(mult < 1
-        ? 'MANAGER size cut to half for ' + strat.id + ': ' + row.n + ' trades, pnl ' + row.pnl.toFixed(4) + ' SOL, win ' + Math.round((100 * row.wins) / row.n) + '%'
+        ? 'MANAGER size x' + mult + ' for ' + strat.id + ': ' + (losing ? row.n + ' trades, pnl ' + row.pnl.toFixed(4) + ' SOL, win ' + Math.round((100 * row.wins) / row.n) + '%' : 'config sizeMult ' + cfgMult)
         : 'MANAGER size restored for ' + strat.id);
     }
     state.stratSizeMult[strat.id] = mult;

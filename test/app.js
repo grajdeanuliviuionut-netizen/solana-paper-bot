@@ -142,6 +142,10 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
   const scannerPath = require.resolve('../src/agents/scanner');
   require.cache[scannerPath] = { id: scannerPath, filename: scannerPath, loaded: true, exports: { scan: async () => [dip('NIO', 'POOL_NIO', 'MINT_NIO'), dip('NIO', 'POOL_NIO2', 'MINT_NIO_CLONE'), dip('FRESH', 'POOL_F', 'MINT_F')] } };
   hb._reset(); hb._setDeps({ http: { get: async () => ({ data: { data: [] } }) }, sleep: async () => {}, now: () => Date.now(), opts: { minGapMs: 0 } });
+  // Main-pool lookup (own limiter): DexScreener answers each mint with its scan pool as the main pool.
+  const pp = require('../src/poolPrice');
+  const mainOf = { MINT_NIO: 'POOL_NIO', MINT_NIO_CLONE: 'POOL_NIO2', MINT_F: 'POOL_F' };
+  pp.mainLimiter._setDeps({ sleep: async () => {}, opts: { minGapMs: 0 }, http: { get: async url => ({ data: url.split('/').pop().split(',').map(m => ({ chainId: 'solana', pairAddress: mainOf[m], baseToken: { address: m }, priceUsd: '0.01', liquidity: { usd: 100000 } })) }) } });
   const idx = require('../src/index');
   await idx.tick();
   const st = idx.getState();

@@ -46,19 +46,22 @@ async function getCandidatePairs() {
   const all = [];
   for (const url of SOURCES) {
     let rows = null;
+    let fromCache = false;
     try {
       const res = await httpBackoff.get(url, { timeout: 12000, headers: { accept: 'application/json;version=20230302' } });
       rows = res.data?.data || [];
       lastGood.set(url, { at: Date.now(), rows });
     } catch (e) {
       const cached = lastGood.get(url);
-      if (cached && Date.now() - cached.at < CACHE_MAX_AGE_MS) rows = cached.rows;
+      if (cached && Date.now() - cached.at < CACHE_MAX_AGE_MS) { rows = cached.rows; fromCache = true; }
       if (e.rateLimited) console.warn('Fetch rate-limited (429 backoff), ' + (rows ? 'using cached page' : 'skipped') + ': ' + url.replace(/^https:\/\/[^/]+/, ''));
       else console.error('Fetch error:', e.message);
     }
     for (const row of rows || []) {
       const pair = mapPool(row);
       if (!pair || seen.has(pair.pairAddress)) continue;
+      // PR8: rows from a cached (429) page are up to 5 min old; never price a fill or a mark from them.
+      if (fromCache) pair.stale = true;
       seen.add(pair.pairAddress);
       all.push(pair);
     }
