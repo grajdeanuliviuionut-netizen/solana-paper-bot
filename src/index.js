@@ -102,7 +102,7 @@ function slotFree(strategyId) {
 // Entry pool check (PR8, fail closed): the entry price (fresh stored-pool price) vs the token's main
 // pool (highest liquidity). Unverified -> skip; more than config.maxPoolDivergencePct (5%) off -> skip.
 function poolChecks() {
-  if (!state.poolChecks || state.poolChecks.v !== 2) state.poolChecks = { v: 2, since: new Date().toISOString(), checked: 0, verified: 0, divergenceSkips: 0, unverifiedSkips: 0, noPriceSkips: 0, lastSkips: [], lastVerified: [] };
+  if (!state.poolChecks || state.poolChecks.v !== 3) state.poolChecks = { v: 3, bySource: {}, since: new Date().toISOString(), checked: 0, verified: 0, divergenceSkips: 0, unverifiedSkips: 0, noPriceSkips: 0, lastSkips: [], lastVerified: [] };
   return state.poolChecks;
 }
 function recordSkip(st, row) {
@@ -114,11 +114,13 @@ function poolGate(sig, entryPrice, pairs) {
   const main = sig.mint ? poolPrice.mainPoolFor(sig.mint, pairs) : { pool: null, verified: false };
   if (!main.verified || !main.pool) {
     st.unverifiedSkips += 1;
-    recordSkip(st, { reason: 'unverified', symbol: sig.symbol, strategyId: sig.strategyId, pairAddress: sig.pairAddress, mint: sig.mint || null });
+    recordSkip(st, { reason: 'unverified', mainSource: main.source || null, symbol: sig.symbol, strategyId: sig.strategyId, pairAddress: sig.pairAddress, mint: sig.mint || null });
     state.decisions.unshift(logDecision('SKIP', sig.symbol, 'main pool unverified'));
     return { ok: false, reason: 'unverified' };
   }
-  const gap = main.pool.pairAddress === sig.pairAddress && main.source === 'scan' ? 0 : poolPrice.divergencePct(entryPrice, main.pool.priceUsd);
+  // Main pool (independently found) == entry pool: no gap to apply. Otherwise the 5% rule.
+  const samePool = main.pool.pairAddress === sig.pairAddress;
+  const gap = samePool ? 0 : poolPrice.divergencePct(entryPrice, main.pool.priceUsd);
   const max = config.maxPoolDivergencePct || 5;
   if (gap == null || gap > max) {
     st.divergenceSkips += 1;
@@ -128,7 +130,9 @@ function poolGate(sig, entryPrice, pairs) {
     return { ok: false, reason: 'divergence', gap };
   }
   st.verified += 1;
-  st.lastVerified = st.lastVerified.concat([{ symbol: sig.symbol, pairAddress: sig.pairAddress, mainPool: main.pool.pairAddress, mainSource: main.source, gapPct: +gap.toFixed(2), at: new Date().toISOString() }]).slice(-10);
+  st.bySource = st.bySource || {};
+  st.bySource[main.source] = (st.bySource[main.source] || 0) + 1;
+  st.lastVerified = st.lastVerified.concat([{ symbol: sig.symbol, pairAddress: sig.pairAddress, mainPool: main.pool.pairAddress, mainSource: main.source, samePool: samePool, gapPct: +gap.toFixed(2), at: new Date().toISOString() }]).slice(-10);
   return { ok: true, gap };
 }
 
@@ -152,7 +156,11 @@ async function tick() {
     // PR7 stored-pool pricing: every mark, exit check and close fill comes ONLY from the pool stored
     // on the position (pos.pairAddress). Pools not in this scan are fetched by address; if the stored
     // pool has no price this tick the position holds (only time exits may fire) and retries next tick.
-    const storedPools = await poolPrice.storedPoolPrices(state.openPositions.map(function (p) { return p.pairAddress; }), pairs);
+    // PR9: off-scan pools are priced by pair address through DexScreener (own budget); positions entered
+    // from DexScreener are only ever marked from DexScreener (same source as their entry fill).
+    const storedPools = await poolPrice.storedPoolPrices(state.openPositions.map(function (p) { return p.pairAddress; }), pairs, {
+      dsOnly: state.openPositions.filter(function (p) { return p.entryPriceSource === 'dexscreener'; }).map(function (p) { return p.pairAddress; })
+    });
     const stillOpen = [];
     for (const pos of state.openPositions) {
       let pair = null;
@@ -170,6 +178,13 @@ async function tick() {
         if (pos.judgedHigh != null) delete pos.judgedHigh;
         state.remarks = (state.remarks || []).concat([{ symbol: pos.symbol, pairAddress: pos.pairAddress, before: before == null ? null : before, after: pair.priceUsd, at: pos.storedPoolPriced }]).slice(-20);
         addActivity('PRICE re-mark ' + pos.symbol + ' from stored pool ' + String(pos.pairAddress).slice(0, 6) + ': ' + (before == null ? 'n/a' : Number(before).toPrecision(5)) + ' -> ' + Number(pair.priceUsd).toPrecision(5));
+      }
+      if (fresh && pos.markSource !== pair.source) {
+        if (pos.markSource || pos.priceStale) {
+          state.remarks = (state.remarks || []).concat([{ symbol: pos.symbol, pairAddress: pos.pairAddress, before: pos.lastPrice == null ? null : pos.lastPrice, after: pair.priceUsd, source: pair.source, prevSource: pos.markSource || null, at: new Date().toISOString() }]).slice(-20);
+          addActivity('PRICE ' + pos.symbol + ' marked from ' + pair.source + ': ' + (pos.lastPrice == null ? 'n/a' : Number(pos.lastPrice).toPrecision(5)) + ' -> ' + Number(pair.priceUsd).toPrecision(5));
+        }
+        pos.markSource = pair.source;
       }
       if (fresh) { pos.lastPrice = pair.priceUsd; pos.lastPricedAt = new Date().toISOString(); pos.priceStale = false; }
       else if (pos.pairAddress) {
@@ -214,7 +229,9 @@ async function tick() {
       const batch = unique.slice(0, 3);
       // Slow main-pool path (own limiter + cache), then fresh stored-pool prices for the entry fills.
       await poolPrice.prefetchMain(batch.map(function (s) { return s.mint; }));
-      const entryPx = await poolPrice.storedPoolPrices(batch.map(function (s) { return s.pairAddress; }), pairs);
+      // PR9: entry fills come from DexScreener by pair address only (the source the marks use).
+      const batchPools = batch.map(function (s) { return s.pairAddress; });
+      const entryPx = await poolPrice.storedPoolPrices(batchPools, pairs, { dsOnly: batchPools });
       const gateSeen = {};
       for (let sig of batch) {
         if (!canOpen()) break;
@@ -245,6 +262,7 @@ async function tick() {
           exec.position.lastPricedAt = new Date().toISOString();
           exec.position.storedPoolPriced = exec.position.lastPricedAt;
           exec.position.entryPriceSource = px.source;
+          exec.position.markSource = px.source;
           state.openPositions.push(exec.position);
           state.balance -= size;
           state.decisions.unshift(logDecision('ENTRY', sig.symbol, exec.reason, { size: size }));
@@ -287,6 +305,7 @@ app.get('/api/trades', function (req, res) {
     reentryCooldowns: state.reentryCooldowns || {},
     fetchStats: state.fetchStats || null,
     poolChecks: state.poolChecks || null,
+    pairPriceLookups: Object.assign({}, poolPrice.pairStats),
     mainPoolLookups: Object.assign({}, poolPrice.mainStats, { limiter: Object.assign({}, poolPrice.mainLimiter.stats) }),
     remarks: state.remarks || [],
     trades: state.trades || []

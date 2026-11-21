@@ -36,7 +36,7 @@ function review(state, config) {
     const prev = state.stratSizeMult[strat.id] || 1;
     if (mult !== prev && !strat.paused) {
       notes.push(mult < 1
-        ? 'MANAGER size x' + mult + ' for ' + strat.id + ': ' + (losing ? row.n + ' trades, pnl ' + row.pnl.toFixed(4) + ' SOL, win ' + Math.round((100 * row.wins) / row.n) + '%' : 'config sizeMult ' + cfgMult)
+        ? 'MANAGER size x' + mult + ' for ' + strat.id + ': ' + (losing && cfgMult >= 0.5 ? row.n + ' trades, pnl ' + row.pnl.toFixed(4) + ' SOL, win ' + Math.round((100 * row.wins) / row.n) + '%' : 'config sizeMult ' + cfgMult)
         : 'MANAGER size restored for ' + strat.id);
     }
     state.stratSizeMult[strat.id] = mult;

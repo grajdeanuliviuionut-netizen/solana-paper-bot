@@ -145,7 +145,12 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
   // Main-pool lookup (own limiter): DexScreener answers each mint with its scan pool as the main pool.
   const pp = require('../src/poolPrice');
   const mainOf = { MINT_NIO: 'POOL_NIO', MINT_NIO_CLONE: 'POOL_NIO2', MINT_F: 'POOL_F' };
-  pp.mainLimiter._setDeps({ sleep: async () => {}, opts: { minGapMs: 0 }, http: { get: async url => ({ data: url.split('/').pop().split(',').map(m => ({ chainId: 'solana', pairAddress: mainOf[m], baseToken: { address: m }, priceUsd: '0.01', liquidity: { usd: 100000 } })) }) } });
+  // PR9: the same limiter answers DexScreener pair prices (/latest/dex/pairs) for entry fills and off-scan marks.
+  pp.mainLimiter._setDeps({ sleep: async () => {}, opts: { minGapMs: 0 }, http: { get: async url => {
+    const ids = url.split('/').pop().split(',');
+    if (/\/latest\/dex\/pairs\//.test(url)) return { data: { pairs: ids.map(a => ({ chainId: 'solana', pairAddress: a, priceUsd: '0.01', liquidity: { usd: 100000 } })) } };
+    return { data: ids.map(m => ({ chainId: 'solana', pairAddress: mainOf[m], baseToken: { address: m }, priceUsd: '0.01', liquidity: { usd: 100000 } })) };
+  } } });
   const idx = require('../src/index');
   await idx.tick();
   const st = idx.getState();
