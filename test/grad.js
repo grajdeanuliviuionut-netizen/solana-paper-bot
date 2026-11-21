@@ -150,6 +150,15 @@ test('impact: round trip worse than -8% or sell impact > 5% rejects (category im
   assert.strictEqual(p.strategyVersion, 'graduation-sniper v2'); assert.strictEqual(p.bookVersion, 2);
   assert.ok(p.holderCheck && p.holderCheck.pass);
   assert.strictEqual(h3.books.gradView(h3.state).entries, 1);
+  // per-candidate log (Results Analyst): lp, holders, age, round trip / impact, result
+  const log1 = h.books.gradView(h.state).candidateLog[0];
+  assert.strictEqual(log1.result, 'rejected'); assert.strictEqual(log1.category, 'impact');
+  assert.ok(Math.abs(log1.roundTripPct - (-9)) < 0.01 && log1.lpLockedPct === 100 && log1.top10Pct === 10 && log1.maxHolderPct === 3 && log1.poolAgeMin === 6, JSON.stringify(log1));
+  const log3 = h3.books.gradView(h3.state).candidateLog[0];
+  assert.strictEqual(log3.result, 'entered'); assert.strictEqual(log3.sellImpactPct, 1); assert.ok(log3.buyImpactPct === 0.5);
+  assert.deepStrictEqual(p.v2Checks.lpLockedPct, 100);
+  const rep = h3.books.report(h3.state).find(x => x.strategyId === 'graduation-sniper');
+  assert.ok(rep.v2.candidateLog.length === 1 && rep.v2.candidateLog[0].result === 'entered', '/api/books exposes the candidate log');
 });
 
 async function openSniper(sellFn) {

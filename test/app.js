@@ -259,7 +259,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     assert.strictEqual(dj2.positionsByStrategy.length, pz.groups.length);
     const page = await get('/');
     assert.ok(!/night/i.test(page.body), 'no Night Shift branding');
-    assert.ok(/stratGroups/.test(page.body) && /renderStrategies/.test(page.body), 'Paper Terminal page has the positions-by-strategy panel');
+    assert.ok(/stratGroups/.test(page.body) && /renderStrategies/.test(page.body) && /stratLegacy/.test(page.body) && /setInterval\(refresh, 5000\)/.test(page.body), 'Paper Terminal page has the positions-by-strategy panel');
     assert.ok(/Dip and hold/.test(d.body), 'strategy name on close rows (classic dashboard)');
     // Paper Terminal dashboard: static page at '/', assets, equity history and the aggregate endpoint
     const home = await get('/');

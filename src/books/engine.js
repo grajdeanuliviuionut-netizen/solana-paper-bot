@@ -133,6 +133,7 @@ function bookStats(trades, open, target) {
 // ---------- runtime ----------
 function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep }) {
   const sleepFn = sleep || (ms => new Promise(r => setTimeout(r, ms)));
+  let curV2 = null;   // grad sniper v2: checks gathered for the candidate being evaluated (logged on reject/entry)
   const C = config.books;
   const nowFn = clock || Date.now;
   let chain = Promise.resolve();
@@ -163,7 +164,10 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     bb[key] = (bb[key] || 0) + 1;
     b.rejects.recent = [Object.assign({ at: new Date(nowFn()).toISOString(), book: book ? label(book) : null, symbol: row && row.symbol, mint: row && row.mint, reason }, extra || {})].concat(b.rejects.recent).slice(0, 50);
     if (log) log('SKIP', row && row.symbol, (book ? label(book) + ' ' : '') + reason);
-    if (book && book.id === 'graduation-sniper' && !/^re-entry cooldown/.test(String(reason))) gradCount(state, gradCategory(reason), reason, row && row.mint);
+    if (book && book.id === 'graduation-sniper' && !/^re-entry cooldown/.test(String(reason))) {
+      gradCount(state, gradCategory(reason), reason, row && row.mint);
+      gradLog(state, Object.assign({ symbol: row && row.symbol, mint: row && row.mint, pairAddress: row && row.pairAddress }, curV2 || {}, extra && extra.holderCheck ? {} : (extra || {}), { result: 'rejected', category: gradCategory(reason), reason }));
+    }
   }
   // Graduation sniper v2 counters (by category: lp, holders, age, impact, other; attempts + distinct mints).
   function gradCount(state, category, reason, mint) {
@@ -174,6 +178,12 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     g.rejectsByReason[key] = (g.rejectsByReason[key] || 0) + 1;
     const l = g.rejectedMintsByCategory[category] || (g.rejectedMintsByCategory[category] = []);
     if (mint && !l.includes(mint)) { l.push(mint); if (l.length > 300) l.shift(); }
+  }
+  function gradLog(state, entry) {
+    const g = ensure(state).gradSniper;
+    if (!g) return;
+    if (!g.candidateLog) g.candidateLog = [];
+    g.candidateLog = [Object.assign({ at: new Date(nowFn()).toISOString() }, entry)].concat(g.candidateLog).slice(0, 60);
   }
   function gradCategory(reason) {
     const r = String(reason);
@@ -221,7 +231,10 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           const g = b.gradSniper;
           if (!g.candidateMints.includes(row.mint)) { g.candidateMints.push(row.mint); if (g.candidateMints.length > 300) g.candidateMints.shift(); g.candidates++; }
           // age: counted once per mint (it is re-seen every scan until it is 3 min old)
-          if (why && !(g.rejectedMintsByCategory.age || []).includes(row.mint)) gradCount(state, 'age', why, row.mint);
+          if (why && !(g.rejectedMintsByCategory.age || []).includes(row.mint)) {
+            gradCount(state, 'age', why, row.mint);
+            gradLog(state, { symbol: row.symbol, mint: row.mint, pairAddress: row.pairAddress, poolAgeMin: +num(poolAgeMin(row, t)).toFixed(2), liquidityUsd: row.liquidityUsd, result: 'rejected', category: 'age', reason: why });
+          }
         }
         if (!why) out.push({ book, row, fields: signalFields(book, row, ctx) });
       }
@@ -244,6 +257,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       for (const { book, row, fields } of sigs) {
         if (tried >= C.maxEntriesPerTick) break;
         const t = nowFn();
+        curV2 = book.id === 'graduation-sniper' ? { poolAgeMin: +num(poolAgeMin(row, t)).toFixed(2), liquidityUsd: row.liquidityUsd, txnsM5: row.txnsM5 || null } : null;
         const openHere = b.open.filter(p => p.book === book.id);
         if (openHere.length >= C.maxOpenPerBook) continue;                  // capacity: not a reject
         if (b.open.some(p => p.mint === row.mint)) continue;               // one book position per mint
@@ -266,6 +280,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           // v2: LP lock/burn + holder concentration (RugCheck), fail closed.
           const hc = holderCheck ? await holderCheck.check(row.mint, row.pairAddress, E, t) : { pass: false, reason: 'lp: no holder check configured' };
           holder = { pass: hc.pass, reason: hc.reason, lpLockedPct: hc.lpLockedPct, top10Pct: hc.top10Pct, maxHolderPct: hc.maxHolderPct, maxHolderOwner: hc.maxHolderOwner, creator: hc.creator, creatorPct: hc.creatorPct, checkedAt: hc.checkedAt, source: hc.source };
+          if (curV2) Object.assign(curV2, { lpLockedPct: hc.lpLockedPct == null ? null : hc.lpLockedPct, top10Pct: hc.top10Pct == null ? null : hc.top10Pct, maxHolderPct: hc.maxHolderPct == null ? null : hc.maxHolderPct, creatorPct: hc.creatorPct == null ? null : hc.creatorPct, holderCheckSource: hc.source || null });
           if (!hc.pass) { reject(state, book, row, hc.reason, { holderCheck: holder }); continue; }
         }
         const buy = await quotes.buyQuote(row.mint, C.sizeSol);
@@ -276,6 +291,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (!quoteFresh(buy, t2, C.maxPriceAgeSec)) { reject(state, book, row, 'stale buy quote (> ' + C.maxPriceAgeSec + 's)'); continue; }
         const lamportsIn = Number(buy.inAmount);
         const roundTripPct = (Number(sell.outAmount) / lamportsIn - 1) * 100;
+        if (curV2) Object.assign(curV2, { roundTripPct: +roundTripPct.toFixed(3), buyImpactPct: buy.priceImpactPct, sellImpactPct: sell.priceImpactPct });
         const maxRt = E.maxRoundTripLossPct != null ? E.maxRoundTripLossPct : C.maxRoundTripLossPct;
         if (roundTripPct < -maxRt) { reject(state, book, row, (E.maxRoundTripLossPct != null ? 'impact: ' : '') + 'round trip ' + roundTripPct.toFixed(1) + '%'); continue; }
         if (E.maxSellImpactPct != null && !(Number(sell.priceImpactPct) <= E.maxSellImpactPct)) { reject(state, book, row, 'impact: sell quote impact > ' + E.maxSellImpactPct + '%', { sellImpactPct: sell.priceImpactPct }); continue; }
@@ -300,7 +316,11 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         b.open.push(pos);
         state.balance -= C.sizeSol;
         b.entries.opened++;
-        if (book.id === 'graduation-sniper' && b.gradSniper && book.version === b.gradSniper.version) b.gradSniper.entries++;
+        if (book.id === 'graduation-sniper' && b.gradSniper && book.version === b.gradSniper.version) {
+          b.gradSniper.entries++;
+          pos.v2Checks = Object.assign({}, curV2);
+          gradLog(state, Object.assign({ symbol: row.symbol, mint: row.mint, pairAddress: row.pairAddress }, curV2, { result: 'entered', positionId: pos.id }));
+        }
         if (log) log('ENTRY', row.symbol, label(book) + ' size ' + C.sizeSol + ' SOL, Jupiter fill, impact ' + buy.priceImpactPct + '%, round trip ' + roundTripPct.toFixed(2) + '%');
       }
     });
@@ -464,7 +484,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   function gradView(g) {
     return { label: g.label, since: g.since, candidates: g.candidates, rejectsByCategory: g.rejectsByCategory,
       rejectedMintsByCategory: Object.fromEntries(Object.entries(g.rejectedMintsByCategory).map(([k, v]) => [k, v.length])),
-      rejectsByReason: g.rejectsByReason, entries: g.entries, closes: g.closes, confirmsTriggered: g.confirmsTriggered, confirmsConfirmed: g.confirmsConfirmed, confirms: g.confirms.slice(0, 10) };
+      rejectsByReason: g.rejectsByReason, entries: g.entries, closes: g.closes, confirmsTriggered: g.confirmsTriggered, confirmsConfirmed: g.confirmsConfirmed, confirms: g.confirms.slice(0, 10), candidateLog: (g.candidateLog || []).slice(0, 30) };
   }
   function lockedSol(state) { return ensure(state).open.reduce((a, p) => a + num(p.costBasisRemainingSol), 0); }
 
