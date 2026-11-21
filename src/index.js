@@ -41,24 +41,46 @@ function equity() {
   return (Number(state.balance) || 0) + lockedSol();
 }
 
-function realizedToday() {
-  const start = new Date();
-  start.setUTCHours(0, 0, 0, 0);
+function sessionPnl() {
+  const since = state.riskResetAt || 0;
   return (state.trades || []).reduce((sum, trade) => {
-    if (new Date(trade.closedAt).getTime() < start.getTime()) return sum;
+    if (new Date(trade.closedAt).getTime() < since) return sum;
     return sum + (Number(trade.pnlSol) || 0);
   }, 0);
 }
 
 function canOpen() {
-  if (equity() < config.fullStopBalance) return false;
-  if ((state.openPositions || []).length >= config.maxOpen) return false;
-  if (realizedToday() <= -config.dailyLossLimitSol) return false;
+  if (equity() < config.fullStopBalance) {
+    state.blockReason = 'equity under 2.5';
+    return false;
+  }
+  if ((state.openPositions || []).length >= config.maxOpen) {
+    state.blockReason = 'slots full';
+    return false;
+  }
+  if (state.coolUntil && Date.now() < state.coolUntil) {
+    state.blockReason = 'cooldown';
+    return false;
+  }
+  if (sessionPnl() <= -config.dailyLossLimitSol) {
+    state.coolUntil = Date.now() + 15 * 60 * 1000;
+    state.riskResetAt = state.coolUntil;
+    state.blockReason = 'cooldown 15m after -0.2';
+    return false;
+  }
+  state.blockReason = '';
   return true;
 }
 
 async function tick() {
   try {
+    if (state.paperReset !== 'work-1') {
+      state.paperReset = 'work-1';
+      state.riskResetAt = Date.now();
+      state.coolUntil = 0;
+      addActivity('MANAGER old losses no longer freeze new paper trades');
+    }
+
     const notes = review(state, config).notes;
     for (const note of notes) addActivity(note);
 
@@ -94,29 +116,37 @@ async function tick() {
 
     if (canOpen()) {
       const result = generateSignals(pairs) || { signals: [], rejections: [] };
+      let opened = 0;
       for (const sig of (result.signals || []).slice(0, 3)) {
         if (!canOpen()) break;
-        const already = state.openPositions.some(p => p.symbol === sig.symbol);
+        const already = state.openPositions.some(function (p) { return p.symbol === sig.symbol; });
         if (already) continue;
         if ((state.pausedIds || []).includes(sig.strategyId)) continue;
 
-        const check = rugCheck(sig.pair || pairs.find(p => p.pairAddress === sig.pairAddress));
+        const check = rugCheck(sig.pair || pairs.find(function (p) { return p.pairAddress === sig.pairAddress; }));
         if (!check.pass) {
-          const dec = logDecision('SKIP', sig.symbol, 'rug check: ' + check.reason);
-          state.decisions.unshift(dec);
+          state.decisions.unshift(logDecision('SKIP', sig.symbol, 'rug check: ' + check.reason));
           continue;
         }
 
         const size = Math.max(0.05, sizePosition(state.balance) * (state.sizeMult || 1));
         const exec = executeEntry(sig, size, state.balance);
         if (exec.ok) {
+          opened += 1;
           state.openPositions.push(exec.position);
           state.balance -= size;
-          const dec = logDecision('ENTRY', sig.symbol, exec.reason, { size });
-          state.decisions.unshift(dec);
-          addActivity('ENTRY ' + sig.symbol + ' size ' + size.toFixed(3));
+          state.decisions.unshift(logDecision('ENTRY', sig.symbol, exec.reason, { size: size }));
+          addActivity('ENTRY ' + sig.symbol + ' size ' + size.toFixed(3) + ' ' + (sig.strategyName || ''));
         }
       }
+      if (opened) state.lastBlock = '';
+      else if (state.lastBlock !== 'no-signal') {
+        addActivity('SCAN no setup in ' + pairs.length + ' pairs');
+        state.lastBlock = 'no-signal';
+      }
+    } else if (state.lastBlock !== state.blockReason) {
+      addActivity('HOLD ' + state.blockReason);
+      state.lastBlock = state.blockReason;
     }
 
     if (state.decisions.length > 100) state.decisions = state.decisions.slice(0, 100);
@@ -128,12 +158,12 @@ async function tick() {
   saveState(state);
 }
 
-app.get('/', (req, res) => {
+app.get('/', function (req, res) {
   res.set('Cache-Control', 'no-store');
   res.type('html').send(render(state, config));
 });
 
-app.listen(config.port, () => {
+app.listen(config.port, function () {
   console.log('Dashboard running on port ' + config.port);
   tick();
   setInterval(tick, config.pollIntervalMs);
