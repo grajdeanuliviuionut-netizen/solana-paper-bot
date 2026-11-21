@@ -1,6 +1,14 @@
 const express = require('express');
 const config = require('./config');
-const { loadState, saveState, logTrade } = require('./logger');
+const loggerMod = require('./logger');
+const { loadState } = loggerMod;
+const botsMod = require('./bots');
+// t79u Bots panel: real activity signals per runtime component (read-only bookkeeping).
+const botTracker = botsMod.makeTracker();
+let tradesWritten = 0;
+function saveState(s) { const ok = loggerMod.saveState(s); if (ok === false) botTracker.error('logger', 'state.json write failed'); else botTracker.work('logger', 1); return ok; }
+function logTrade(t) { const ok = loggerMod.logTrade(t); if (ok === false) botTracker.error('logger', 'trades.jsonl append failed'); else tradesWritten += 1; return ok; }
+const legacyRug = { checks: 0, passed: 0, rejected: 0 };
 const { scan } = require('./agents/scanner');
 const { rugCheck } = require('./agents/rugCheck');
 const { sizePosition } = require('./agents/sizer');
@@ -237,6 +245,8 @@ let ticking = false;
 async function tick() {
   if (ticking) return; // a slow (backed-off) pass must not overlap the next one
   ticking = true;
+  const tickT0 = Date.now();
+  botTracker.beat('manager');
   try {
     if (state.paperReset !== 'work-1') {
       state.paperReset = 'work-1';
@@ -248,6 +258,8 @@ async function tick() {
     for (const note of notes) addActivity(note);
     const pairs = await scan();
     addActivity('SCAN: ' + pairs.length + ' pairs');
+    botTracker.get('scanner').lastPairs = pairs.length;
+    if (pairs.length > 0) botTracker.work('scanner', pairs.length); else botTracker.error('scanner', 'scan returned 0 pairs');
     const byAddr = {};
     for (const p of pairs) if (p && p.pairAddress) byAddr[p.pairAddress] = p;
     // PR14: legacy positions are no longer marked or exited here. The exit loop (startExitLoop, ~5 s)
@@ -306,6 +318,7 @@ async function tick() {
         if (!gate.ok) continue;
         sig = Object.assign({}, sig, { price: px.priceUsd });
         const check = rugCheck(sig.pair || pairs.find(function (p) { return p.pairAddress === sig.pairAddress; }));
+        legacyRug.checks += 1; if (check.pass) legacyRug.passed += 1; else legacyRug.rejected += 1;
         if (!check.pass) {
           state.decisions.unshift(logDecision('SKIP', sig.symbol, 'rug check: ' + check.reason));
           continue;
@@ -359,10 +372,21 @@ async function tick() {
       }, { 'graduation-sniper': gradRows }, function () { newPools.stats.candidatesPassed += 1; });
     } catch (e) { addActivity('Books entry error: ' + e.message); console.error(e); }
     if (state.decisions.length > 100) state.decisions = state.decisions.slice(0, 100);
+    // t79u: strategist evaluated legacy signals + book candidates this tick.
+    const bscan = books.ensure(state).lastScan;
+    const bookCand = bscan && bscan.candidatesByBook ? Object.values(bscan.candidatesByBook).reduce(function (a, v) { return a + (Number(v) || 0); }, 0) : 0;
+    const legacySig = (result.signals || []).length;
+    botTracker.beat('strategist');
+    botTracker.get('strategist').lastEval = (legacySig + bookCand) + ' candidates in ' + pairs.length + ' pairs';
+    if (legacySig + bookCand > 0) botTracker.work('strategist', legacySig + bookCand);
+    botTracker.work('manager', 1);
   } catch (e) {
     addActivity('Tick error: ' + e.message);
+    botTracker.error('manager', 'tick error: ' + e.message);
     console.error(e);
   }
+  botTracker.get('manager').lastTickMs = Date.now() - tickT0;
+  sampleBotCounters();
   state.lastUpdate = new Date().toISOString();
   state.fetchStats = fetchStats();
   try { saveState(state); } finally { ticking = false; }
@@ -421,13 +445,17 @@ app.get('/api/trades', function (req, res) {
 let dashApiInst = null; // built lazily (exitLoopStats is declared further down)
 function dashApi() { return dashApiInst || (dashApiInst = makeDashboardApi({ getState: function () { return state; }, config, books, equity, lockedSol, fetchStats, jupiterStats, mintAuth, exitLoopStats, exitLoopView, stopFillsView, booksLimiter, build: BUILD, startedAt: SERVER_STARTED_AT })); }
 // PR14 (Liviu t74u): open positions grouped by strategy/book (4 books + every legacy strategy).
+app.get('/api/bots', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(botsView()); } catch (e) { console.error('bots view', e); res.status(500).json({ error: String(e.message || e) }); }
+});
 app.get('/api/positions', function (req, res) {
   res.set('Cache-Control', 'no-store');
   res.json({ now: new Date().toISOString(), build: BUILD, liveTrading: false, exitLoop: exitLoopView(), groups: dashApi().positionsByStrategy() });
 });
 app.get('/api/dashboard', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  try { res.json(dashApi().payload()); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
+  try { const p = dashApi().payload(); try { p.bots = botsView(); } catch (e) { p.bots = { error: String(e.message || e) }; } res.json(p); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
 });
 // Equity curve: snapshots from equity.jsonl on the volume (1/min) plus the current live point.
 // ?hours=N (default 24, max 720) or ?since=scoreboard; ?max=N points (default 600).
@@ -500,13 +528,17 @@ async function exitLoop() {
     n += await legacyExits.run(state, exitLoopStats);
     exitLoopStats.passes += 1;
     exitLoopStats.positionsChecked += n;
+    botTracker.beat('executor');
+    if (n > 0) botTracker.work('executor', n);
     if ((changed || n) && !ticking) saveState(state);
   } catch (e) {
     exitLoopStats.errors += 1;
     exitLoopStats.lastError = String(e.message || e).slice(0, 120);
+    botTracker.error('executor', 'exit loop: ' + exitLoopStats.lastError);
     console.error('exit loop', e);
   } finally { exitPassRunning = false; }
   exitLoopStats.lastPassAt = new Date().toISOString();
+  sampleBotCounters();
   exitLoopStats.lastPassMs = Date.now() - t0;
   exitLoopStats.avgPassMs = exitLoopStats.avgPassMs == null ? exitLoopStats.lastPassMs : Math.round(exitLoopStats.avgPassMs * 0.9 + exitLoopStats.lastPassMs * 0.1);
   return n;
@@ -514,6 +546,46 @@ async function exitLoop() {
 function exitLoopView() {
   return Object.assign(exitLoopStats.view({ targetMs: config.books.exitLoopMs, exitQuotesPerMin: config.books.exitQuotesPerMin, maxExitQuoteAgeSec: config.books.maxExitQuoteAgeSec },
     (state.openPositions || []).length + books.ensure(state).open.length), { legacy: Object.assign({}, legacyExits.stats), markSource: 'jupiter-sell-quote (all open trades)' });
+}
+// t79u: cumulative counters -> activity events (work when a counter rises, errors when an error counter rises).
+function sampleBotCounters() {
+  try {
+    const ls = booksLimiter.stats();
+    const jl = ls.jupiter || {}, rc = ls.rugcheck || {}, rpc = ls.rpc || {};
+    botTracker.counter('executor.quotes', 'jupiter.requests', jl.requests);
+    if (botTracker.counter('executor', 'jupiter.requests', jl.requests) > 0) botTracker.beat('executor');
+    botTracker.counter('executor', 'jupiter.http429', jl.http429, 'error');
+    botTracker.counter('executor', 'jupiter.errors', jl.errors, 'error');
+    botTracker.beat('rugCheck');
+    const bk = books.ensure(state);
+    botTracker.counter('rugCheck', 'checks', (mintAuth.stats.checks || 0) + (holderCheck.stats.checks || 0) + legacyRug.checks + ((bk.stockBlocks && bk.stockBlocks.count) || 0));
+    botTracker.counter('rugCheck', 'errors', (mintAuth.stats.errors || 0) + (holderCheck.stats.errors || 0) + (rc.http429 || 0) + (rpc.http429 || 0), 'error');
+    const fsx = fetchStats();
+    let s429 = 0;
+    for (const [h, c] of Object.entries(fsx.byHost || {})) if (/dexscreener|geckoterminal/.test(h)) s429 += c.rateLimited || 0;
+    botTracker.counter('scanner', 'http429', s429, 'error');
+    botTracker.counter('scanner', 'newPools.calls', newPools.stats.calls);
+  } catch (e) { console.error('bot counters', e.message); }
+}
+function botsView() {
+  const now = Date.now();
+  const bk = books.ensure(state);
+  const legacyOpen = state.openPositions || [];
+  const allOpen = legacyOpen.concat(bk.open || []);
+  const closed = (bk.trades || []).concat(state.trades || []);
+  const hourAgo = now - 3600000;
+  const entriesLastHour = allOpen.concat(closed).filter(function (p) { return p.entryTime && Date.parse(p.entryTime) >= hourAgo; }).length;
+  const lastTradeAt = closed.reduce(function (a, t) { return t.closedAt && (!a || t.closedAt > a) ? t.closedAt : a; }, null);
+  const { scoreGroup } = require('./dashboardApi');
+  const legacy = (config.strategies || []).map(function (s) {
+    return Object.assign({ id: s.id, name: (s.name || s.id) + ' (legacy)', paused: (state.pausedIds || []).indexOf(s.id) >= 0 || !!s.paused, open: legacyOpen.filter(function (p) { return p.strategyId === s.id; }).length },
+      scoreGroup((state.trades || []).filter(function (t) { return t.strategyId === s.id; })));
+  });
+  const ls = booksLimiter.stats();
+  return botsMod.buildBots({ tracker: botTracker, now, startedAt: SERVER_STARTED_AT, build: BUILD, pollIntervalMs: config.pollIntervalMs, exitLoop: exitLoopView(), fetchStats: fetchStats(),
+    mintAuthStats: mintAuth.stats, holderStats: holderCheck.stats, legacyRug, stockBlocks: bk.stockBlocks, jupiterLimiter: ls.jupiter, rugcheckLimiter: ls.rugcheck, newPools: newPools.stats,
+    entriesLastHour, tradesWritten, tradesTotal: closed.length, lastTradeAt, openCount: allOpen.length, books: books.report(state), legacy, legacyOpenTotal: legacyOpen.length, maxOpen: config.maxOpen,
+    lastScan: bk.lastScan || null, lastLegacyScan: state.lastLegacyScan || null });
 }
 function stopFillsView() { return { summary: stopFillsMod.summary(state), latest: (state.stopFills || []).slice(0, 50) }; }
 function startExitLoop() {
@@ -555,4 +627,4 @@ if (require.main === module) app.listen(config.port, function () {
   setInterval(recordEquity, 60000);
 });
 
-module.exports = { app, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };
+module.exports = { app, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };

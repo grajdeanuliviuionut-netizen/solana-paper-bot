@@ -60,8 +60,10 @@ function saveState(state) {
     const tmp = STATE_FILE + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
     fs.renameSync(tmp, STATE_FILE);
+    return true;
   } catch (e) {
     console.error('Save failed', e.message);
+    return false;
   }
 }
 
@@ -69,8 +71,10 @@ function logTrade(trade) {
   ensureDir();
   try {
     fs.appendFileSync(TRADES_FILE, JSON.stringify(trade) + '\n');
+    return true;
   } catch (e) {
     console.error('Trade log failed', e.message);
+    return false;
   }
 }
 
