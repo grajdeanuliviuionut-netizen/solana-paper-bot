@@ -93,7 +93,17 @@ test('exits per book: stops, targets, trails, max hold', () => {
 });
 
 test('stock block: TTWO, NIO, SPCX, SQQQ, AMC, DJT, xStocks, stables and wrapped majors', () => {
-  for (const s of ['TTWO', 'NIO', 'SPCX', 'SQQQ', 'AMC', 'DJT', 'TSLAx', 'NVDAx']) assert.ok(classifyBlocked({ symbol: s, mint: 'Xs' + s }), s);
+  // PR13 (t70u): by mint or full name. Real Backpack / xStocks mints:
+  const real = { TTWO: 'TTWofwAge91oFhZs7kpQdyrVRkmevgM88xijGvQFbKo', SPCX: 'SPCXxcqXj6e5dJDVNovHN8744zkbhM2bYudU45BimGb', SQQQ: 'SQQQAa3gUxgnqcEsdjPA4RQNQBgB97TnG2hJhk2WaGE',
+    AMC: 'AMC1qwR9KhiyrQBRPrxnfo4JfMeMZqEBvt5tgTytNNoc', DJT: 'DJTu7vi8norVzdVAffgvb39VP7wjKeTsgaMBJrzfxvoF', TSLAx: 'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB', NVDAx: 'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh' };
+  for (const [s, m] of Object.entries(real)) assert.ok(/tokenised-stock/.test(classifyBlocked({ symbol: s, mint: m })), s);
+  assert.ok(/tokenised-stock/.test(classifyBlocked({ symbol: 'NIO', mint: 'SomeOtherMint111', name: 'NIO Inc' })), 'NIO by full name');
+  assert.ok(/tokenised-stock/.test(classifyBlocked({ symbol: 'NIOx', mint: 'XsNIOxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', name: 'NIO xStock' })), 'NIO xStock');
+  assert.ok(/tokenised-stock/.test(classifyBlocked({ symbol: 'TTWO', mint: 'Abc', name: 'Take-Two Interactive' })), 'TTWO by full name');
+  // ticker alone never blocks: the memecoin Max coin (MAX) and a pump.fun "TTWO" ticker
+  assert.strictEqual(classifyBlocked({ symbol: 'Max', mint: '5qaP7oKUqKffwwo5DaEqDoTtsBLMpdbQTxEkCDaTpump', name: 'Max coin' }), null, 'Max coin not blocked');
+  assert.strictEqual(classifyBlocked({ symbol: 'MAX', mint: '5qaP7oKUqKffwwo5DaEqDoTtsBLMpdbQTxEkCDaTpump', name: 'Max coin' }), null);
+  assert.strictEqual(classifyBlocked({ symbol: 'TTWO', mint: 'TTWOfakepump', name: 'ttwo meme' }), null, 'pump.fun ticker alone is not a stock');
   assert.ok(/tokenised-stock/.test(classifyBlocked({ symbol: 'ABC', name: 'Apple xStock' })));
   assert.ok(/stablecoin/.test(classifyBlocked({ symbol: 'USDC' })));
   assert.ok(/wrapped/.test(classifyBlocked({ symbol: 'WETH' })));

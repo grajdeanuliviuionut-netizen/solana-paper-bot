@@ -29,16 +29,42 @@ const WRAPPED_MINTS = new Set(['So11111111111111111111111111111111111111112', '3
   '7dHbWXmci3dT8UFYWYZweBLXgycu7Y3iL6trKn1Y7ARj', 'he1iusmfkpAdwvxLNGV8Y1iSbj4rUy6yMhEA3fotn9A', 'BNso1VUJnh4zcfpZa6986Ea66P6TCp59hvtNJ8b1X85',
   'zBTCug3er3tLyffELcvDNrKkCymbPWysGcWihESYfLg', 'LBTCgU4b3wsFKsPwBn1rRZDx5DoFutM6RPiEt1TPDsY']);
 
-function classifyBlocked({ mint, symbol, name }) {
+// PR13 (Liviu t70u): stocks are matched by MINT or by full NAME, never by ticker alone (the pump.fun
+// memecoin "Max coin" / MAX, mint 5qaP...pump, was blocked as Mastercard "MA" + x). Stock rules:
+//   1. denylist.staticCheck: known tokenised-stock mints (Backpack, xStocks), issuer names, and an
+//      xStocks-style ticker ON an Xs... vanity mint (mint-based);
+//   2. EXTRA_STOCK_MINTS below (mint-based);
+//   3. issuer vanity mint: a stock ticker whose (non-pump.fun) mint starts with that ticker, e.g.
+//      TTWofw... for TTWO (mint-based);
+//   4. full-name rules: STOCK_NAME_RE (xStock / tokenized stock / issuer / "... Inc." style names) and
+//      STOCK_COMPANY_RE (company / fund names such as "Take-Two Interactive", "NIO Inc").
+// Stablecoin / wrapped-major / LST rules are unchanged.
+const EXTRA_STOCK_MINTS = {};
+const STOCK_COMPANY_RE = /\b(take[- ]?two interactive|nio inc|proshares|ultrapro short|amc entertainment|trump media|gamestop corp|tesla,? inc|nvidia corp|apple inc|alphabet inc|amazon\.com|meta platforms|microsoft corp|microstrategy|coinbase global|robinhood markets|spdr s&p|invesco qqq)\b/i;
+
+function stockReason({ mint, symbol, name }) {
   const sym = String(symbol || '').trim().toUpperCase().replace(/^\$/, '');
   const nm = String(name || '');
   const st = denylist.staticCheck({ mint, symbol, name });
+  if (st) return st;
+  if (mint && EXTRA_STOCK_MINTS[mint]) return 'mint ' + EXTRA_STOCK_MINTS[mint];
+  const m = String(mint || '');
+  const base = sym.endsWith('X') && /x$/.test(String(symbol || '').trim()) ? sym.slice(0, -1) : sym;
+  for (const t of [sym, base]) {
+    if (t.length >= 2 && STOCK_SYMBOLS.has(t) && !/pump$/i.test(m) && m.toUpperCase().startsWith(t)) return 'issuer vanity mint ' + m.slice(0, 8) + '... for ' + t;
+  }
+  if (STOCK_NAME_RE.test(nm)) return 'name "' + nm.slice(0, 40) + '"';
+  if (STOCK_COMPANY_RE.test(nm)) return 'company name "' + nm.slice(0, 40) + '"';
+  return null;
+}
+
+function classifyBlocked({ mint, symbol, name }) {
+  const sym = String(symbol || '').trim().toUpperCase().replace(/^\$/, '');
+  const st = stockReason({ mint, symbol, name });
   if (st) return 'tokenised-stock: ' + st;
-  if (STOCK_SYMBOLS.has(sym) || (sym.endsWith('X') && STOCK_SYMBOLS.has(sym.slice(0, -1)) && /x$/.test(String(symbol || '').trim()))) return 'tokenised-stock: symbol ' + sym;
-  if (STOCK_NAME_RE.test(nm)) return 'tokenised-stock: name "' + nm.slice(0, 40) + '"';
   if (STABLE_MINTS.has(mint) || STABLE_SYMBOLS.has(sym)) return 'stablecoin: ' + sym;
   if (WRAPPED_MINTS.has(mint) || WRAPPED_SYMBOLS.has(sym)) return 'wrapped-major/LST: ' + sym;
   return null;
 }
 
-module.exports = { classifyBlocked, STOCK_SYMBOLS, STABLE_SYMBOLS, WRAPPED_SYMBOLS };
+module.exports = { classifyBlocked, stockReason, EXTRA_STOCK_MINTS, STOCK_COMPANY_RE, STOCK_SYMBOLS, STABLE_SYMBOLS, WRAPPED_SYMBOLS };
