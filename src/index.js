@@ -70,7 +70,7 @@ async function tick() {
       }
       for (const sig of signals.slice(0, 5)) {
         if (!canOpen()) break;
-        const already = state.openPositions.some(p => p.pairAddress === sig.pairAddress && p.strategyId === sig.strategyId);
+        const already = state.openPositions.some(p => p.symbol === sig.symbol || (p.pairAddress === sig.pairAddress && p.strategyId === sig.strategyId));
         if (already) continue;
         const pos = {
           id: Date.now() + Math.random(),

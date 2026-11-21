@@ -1,37 +1,30 @@
 const axios = require('axios');
 
-const SEARCH_TERMS = ['bonk', 'wif', 'popcat', 'mew', 'myro', 'sol', 'jup', 'ray', 'jito'];
-
-async function fetchSearch(term) {
-  try {
-    const res = await axios.get(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(term)}`, {
-      timeout: 10000
-    });
-    const pairs = res.data?.pairs;
-    if (!Array.isArray(pairs)) return [];
-    return pairs.filter(p => p && p.chainId === 'solana' && (p.liquidity?.usd || 0) >= 10000);
-  } catch (e) {
-    return [];
-  }
-}
-
 async function getCandidatePairs() {
   try {
+    const endpoints = [
+      'https://api.dexscreener.com/latest/dex/search?q=solana',
+      'https://api.dexscreener.com/latest/dex/search?q=raydium',
+      'https://api.dexscreener.com/latest/dex/search?q=pump'
+    ];
+
     const all = [];
     const seen = new Set();
-    for (const term of SEARCH_TERMS) {
-      const batch = await fetchSearch(term);
-      if (!Array.isArray(batch)) continue;
-      for (const p of batch) {
-        if (p && p.pairAddress && !seen.has(p.pairAddress)) {
-          seen.add(p.pairAddress);
-          all.push(p);
+
+    for (const url of endpoints) {
+      try {
+        const res = await axios.get(url, { timeout: 10000 });
+        const pairs = res.data?.pairs || [];
+        for (const p of pairs) {
+          if (p && p.chainId === 'solana' && p.pairAddress && !seen.has(p.pairAddress) && (p.liquidity?.usd || 0) >= 8000) {
+            seen.add(p.pairAddress);
+            all.push(p);
+          }
         }
-      }
-      if (all.length >= 60) break;
+      } catch (e) {}
     }
 
-    const pairs = all.slice(0, 40).map(p => ({
+    const pairs = all.slice(0, 50).map(p => ({
       pairAddress: p.pairAddress,
       symbol: p.baseToken?.symbol || 'UNK',
       priceUsd: parseFloat(p.priceUsd) || 0,
