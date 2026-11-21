@@ -29,6 +29,7 @@ module.exports = {
     {
       id: 'momentum-entry',
       name: 'Momentum entry',
+      paused: true,
       universe: { minAgeDays: 0, maxAgeDays: 30, minLiquidityUsd: 15000 },
       entry: [
         { field: 'h1', op: '>=', value: 2 },
@@ -37,6 +38,19 @@ module.exports = {
         { field: 'volumeToLiquidity', op: '>=', value: 0.08 }
       ],
       exit: { takeProfitPct: 8, stopLossPct: 6, maxHoldMinutes: 25, earlyFailAfterMin: 8, earlyFailMinPeakPct: 1.5 }
+    },
+    {
+      id: 'dip-buyers',
+      name: 'Dip then buyers',
+      universe: { minAgeDays: 1, maxAgeDays: 45, minLiquidityUsd: 20000, maxLiquidityUsd: 400000 },
+      entry: [
+        { field: 'h1', op: '<=', value: -4 },
+        { field: 'h1', op: '>=', value: -12 },
+        { field: 'm5', op: '>=', value: 0.5 },
+        { field: 'buySellRatioH1', op: '>=', value: 1.4 },
+        { field: 'volumeToLiquidity', op: '>=', value: 0.06 }
+      ],
+      exit: { takeProfitPct: 8, stopLossPct: 6, maxHoldMinutes: 20, earlyFailAfterMin: 8, earlyFailMinPeakPct: 1.5 }
     }
   ]
 };
