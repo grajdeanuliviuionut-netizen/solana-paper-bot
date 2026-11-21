@@ -7,15 +7,17 @@ module.exports = {
   startingSol: parseFloat(process.env.STARTING_SOL || '4'),
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '45000', 10),
   positionSizeSol: 0.15,
-  maxOpen: 5,
+  maxOpen: 3,
   dailyLossLimitSol: 0.2,
   fullStopBalance: 2.5,
+  pauseAfterTrades: 8,
   costRoundtripPct: 1.1,
   brokenGapPct: 15,
   strategies: [
     {
       id: 'aggressive-flow',
       name: 'Aggressive flow scalp',
+      paused: true,
       universe: { minAgeDays: 0, maxAgeDays: null, minLiquidityUsd: 8000, maxLiquidityUsd: 2000000 },
       entry: [
         { field: 'buySellRatioH1', op: '>=', value: 0.9 },
@@ -27,12 +29,14 @@ module.exports = {
     {
       id: 'momentum-entry',
       name: 'Momentum entry',
-      universe: { minAgeDays: 0, maxAgeDays: 30, minLiquidityUsd: 10000 },
+      universe: { minAgeDays: 0, maxAgeDays: 30, minLiquidityUsd: 15000 },
       entry: [
-        { field: 'h1', op: '>=', value: 1 },
-        { field: 'm5', op: '>=', value: -1 }
+        { field: 'h1', op: '>=', value: 2 },
+        { field: 'm5', op: '>=', value: 0 },
+        { field: 'buySellRatioH1', op: '>=', value: 1.2 },
+        { field: 'volumeToLiquidity', op: '>=', value: 0.08 }
       ],
-      exit: { takeProfitPct: 8, stopLossPct: 5, maxHoldMinutes: 30 }
+      exit: { takeProfitPct: 8, stopLossPct: 6, maxHoldMinutes: 25, earlyFailAfterMin: 8, earlyFailMinPeakPct: 1.5 }
     }
   ]
 };
