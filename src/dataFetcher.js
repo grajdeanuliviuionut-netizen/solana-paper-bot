@@ -2,7 +2,9 @@ const axios = require('axios');
 
 const SOURCES = [
   'https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?page=1',
-  'https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=1'
+  'https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?page=2',
+  'https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=1',
+  'https://api.geckoterminal.com/api/v2/networks/solana/pools?page=1'
 ];
 
 function num(value) {
@@ -23,14 +25,9 @@ function mapPool(row) {
     pairAddress: a.address,
     symbol: name.split('/')[0].trim() || 'UNK',
     priceUsd: num(a.base_token_price_usd),
-    liquidityUsd,
+    liquidityUsd: liquidityUsd,
     volumeH1: num(a.volume_usd && a.volume_usd.h1),
-    priceChange: {
-      m5: num(pc.m5),
-      h1: num(pc.h1),
-      h6: num(pc.h6),
-      h24: num(pc.h24)
-    },
+    priceChange: { m5: num(pc.m5), h1: num(pc.h1), h6: num(pc.h6), h24: num(pc.h24) },
     txns: { buys: num(tx.buys), sells: num(tx.sells) },
     ageDays: created ? Math.max(0, (Date.now() - created) / 86400000) : 1
   };
@@ -41,10 +38,7 @@ async function getCandidatePairs() {
   const all = [];
   for (const url of SOURCES) {
     try {
-      const res = await axios.get(url, {
-        timeout: 12000,
-        headers: { accept: 'application/json;version=20230302' }
-      });
+      const res = await axios.get(url, { timeout: 12000, headers: { accept: 'application/json;version=20230302' } });
       for (const row of res.data?.data || []) {
         const pair = mapPool(row);
         if (!pair || seen.has(pair.pairAddress)) continue;
@@ -55,7 +49,7 @@ async function getCandidatePairs() {
       console.error('Fetch error:', e.message);
     }
   }
-  return all.slice(0, 60);
+  return all.slice(0, 80);
 }
 
 module.exports = { getCandidatePairs };
