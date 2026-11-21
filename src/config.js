@@ -26,7 +26,10 @@ module.exports = {
     maxOpenPerBook: 2,            // own capacity per book, separate from the legacy maxOpen 4
     targetTrades: 30,             // report each book after 30 trades
     maxPriceAgeSec: 30,           // never act on a scan row or a quote older than 30 s
-    exitLoopMs: 5000,             // pause between exit passes (each pass re-quotes every open book position)
+    exitLoopMs: 5000,             // PR14 target period of the exit loop (ALL open trades, legacy + books)
+    exitQuotesPerMin: 45,         // PR14 Jupiter quotes/min the exit loop may use (bucket max ~55); more opens -> longer period
+    maxExitQuoteAgeSec: 10,       // PR14 exit decisions only on a Jupiter sell quote <= 10 s old
+    noRouteConsecutive: 5,        // PR14 no-route total loss needs 5 consecutive no-route answers AND noRouteTotalLossMin
     maxEntriesPerTick: 4,
     maxRoundTripLossPct: 10,      // skip a buy whose immediate Jupiter buy->sell round trip loses more
     maxQuoteGapPct: 15,           // skip a buy whose Jupiter fill is >15% worse than the DexScreener price

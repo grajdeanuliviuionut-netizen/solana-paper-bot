@@ -11,6 +11,7 @@
 // re-quoted every exit pass (a few seconds apart). A decision never uses a quote older than 30 s.
 // pnlSol per leg = solOut - basis - 1.1% x basis (the round-trip cost stays inside pnlSol).
 const { classifyBlocked } = require('./blocklist');
+const stopFills = require('../stopFills');
 
 const MIN = 60000;
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -291,52 +292,68 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   }
 
   // One exit pass: re-quote every open book position (Jupiter sell quote for the tokens held) and act.
-  function runExits(state) {
-    return locked(async () => {
-      const b = ensure(state);
-      let changed = false;
-      for (const pos of b.open.slice()) {
-        const ex = pos.exit;
-        const q = await quotes.sellQuote(pos.mint, pos.tokensRemainingRaw);
-        const t = nowFn();
-        const minsOpen = (t - Date.parse(pos.entryTime)) / MIN;
-        pos.quoteChecks = (pos.quoteChecks || 0) + 1;
-        if (!q.ok) {
-          pos.quoteFailures = (pos.quoteFailures || 0) + 1;
-          pos.lastQuoteError = String(q.error || '').slice(0, 80);
-          if (q.noRoute) {
-            if (!pos.noRouteSince) pos.noRouteSince = new Date(t).toISOString();
-            if (t - Date.parse(pos.noRouteSince) >= C.noRouteTotalLossMin * MIN) { bookLeg(state, pos, 'no-route-total-loss', pos.tokensRemainingRaw, null, t); closeTrade(state, pos, 'no-route-total-loss', t); changed = true; }
-          } else if (minsOpen >= ex.maxHoldMinutes + C.noQuoteAfterMaxHoldMin) { bookLeg(state, pos, 'no-quote-total-loss', pos.tokensRemainingRaw, null, t); closeTrade(state, pos, 'no-quote-total-loss', t); changed = true; }
-          continue;
-        }
-        pos.noRouteSince = null;
-        if (!quoteFresh(q, t, C.maxPriceAgeSec)) { pos.staleQuoteRefusals = (pos.staleQuoteRefusals || 0) + 1; continue; }
-        const pct = (Number(q.outAmount) / 1e9 / pos.costBasisRemainingSol - 1) * 100;
-        pos.markPct = +pct.toFixed(3);
-        pos.peakPct = Math.max(num(pos.peakPct), pos.markPct);
-        pos.markAt = new Date(q.at).toISOString();
-        pos.markSource = 'jupiter-sell-quote';
-        pos.lastQuote = { inAmount: q.inAmount, outAmount: q.outAmount, priceImpactPct: q.priceImpactPct, at: pos.markAt };
-        changed = true;
-        const d = decideExit(pos, ex, pct, pos.peakPct, minsOpen);
-        if (!d) continue;
-        if (d.action === 'partial') {
-          const part = (BigInt(pos.tokensRaw) * BigInt(Math.round(d.sellPct * 100))) / 10000n;
-          const pq = part > 0n ? await quotes.sellQuote(pos.mint, String(part)) : null;
-          const t3 = nowFn();
-          if (!pq || !quoteFresh(pq, t3, C.maxPriceAgeSec)) continue; // retry next pass
-          bookLeg(state, pos, 'partial-tp', String(part), pq, t3);
-          pos.partialDone = true;
-          if (log) log('PARTIAL', pos.symbol, pos.strategyVersion + ' sold ' + d.sellPct + '% at +' + pct.toFixed(1) + '%');
-          continue;
-        }
-        bookLeg(state, pos, d.reason, pos.tokensRemainingRaw, q, t);
-        closeTrade(state, pos, d.reason, t);
+  // One exit pass over the open book positions (no lock: callers hold it). PR14 (Liviu t72u): exit
+  // decisions only on a Jupiter sell quote <= maxExitQuoteAgeSec (10 s) old; a missing route books a total
+  // loss only after noRouteConsecutive (5) consecutive no-route answers spanning >= noRouteTotalLossMin;
+  // every stop exit is logged in state.stopFills (stop level, last check before the trigger, fill, overshoot).
+  async function runExitsInner(state, hooks) {
+    const b = ensure(state);
+    const maxAge = C.maxExitQuoteAgeSec || 10;
+    let changed = false;
+    for (const pos of b.open.slice()) {
+      const ex = pos.exit;
+      const q = await quotes.sellQuote(pos.mint, pos.tokensRemainingRaw);
+      const t = nowFn();
+      const minsOpen = (t - Date.parse(pos.entryTime)) / MIN;
+      pos.quoteChecks = (pos.quoteChecks || 0) + 1;
+      if (!q.ok) {
+        pos.quoteFailures = (pos.quoteFailures || 0) + 1;
+        pos.lastQuoteError = String(q.error || '').slice(0, 80);
+        if (q.noRoute) {
+          pos.noRouteCount = (pos.noRouteCount || 0) + 1;
+          if (!pos.noRouteSince) pos.noRouteSince = new Date(t).toISOString();
+          if (pos.noRouteCount >= (C.noRouteConsecutive || 5) && t - Date.parse(pos.noRouteSince) >= C.noRouteTotalLossMin * MIN) { bookLeg(state, pos, 'no-route-total-loss', pos.tokensRemainingRaw, null, t); closeTrade(state, pos, 'no-route-total-loss', t); changed = true; }
+        } else if (minsOpen >= ex.maxHoldMinutes + C.noQuoteAfterMaxHoldMin) { bookLeg(state, pos, 'no-quote-total-loss', pos.tokensRemainingRaw, null, t); closeTrade(state, pos, 'no-quote-total-loss', t); changed = true; }
+        continue;
       }
-      return changed;
-    });
+      pos.noRouteSince = null; pos.noRouteCount = 0;
+      if (!quoteFresh(q, t, maxAge)) { pos.staleQuoteRefusals = (pos.staleQuoteRefusals || 0) + 1; continue; }
+      const pct = (Number(q.outAmount) / 1e9 / pos.costBasisRemainingSol - 1) * 100;
+      const tokensUi = Number(pos.tokensRemainingRaw) / 10 ** (pos.decimals || 0);
+      const price = tokensUi > 0 ? Number(q.outAmount) / 1e9 / tokensUi : null;
+      const prevCheck = pos.lastCheck || null;
+      if (hooks && hooks.onCheck) hooks.onCheck(pos, prevCheck, t);
+      pos.lastCheck = { at: new Date(t).toISOString(), pct: +pct.toFixed(3), price, quoteAgeSec: +((t - q.at) / 1000).toFixed(2), priceImpactPct: q.priceImpactPct };
+      pos.markPct = +pct.toFixed(3);
+      pos.peakPct = Math.max(num(pos.peakPct), pos.markPct);
+      pos.markAt = new Date(q.at).toISOString();
+      pos.markSource = 'jupiter-sell-quote';
+      pos.lastQuote = { inAmount: q.inAmount, outAmount: q.outAmount, priceImpactPct: q.priceImpactPct, at: pos.markAt };
+      changed = true;
+      const d = decideExit(pos, ex, pct, pos.peakPct, minsOpen);
+      if (!d) continue;
+      if (d.action === 'partial') {
+        const part = (BigInt(pos.tokensRaw) * BigInt(Math.round(d.sellPct * 100))) / 10000n;
+        const pq = part > 0n ? await quotes.sellQuote(pos.mint, String(part)) : null;
+        const t3 = nowFn();
+        if (!pq || !quoteFresh(pq, t3, maxAge)) continue; // retry next pass
+        bookLeg(state, pos, 'partial-tp', String(part), pq, t3);
+        pos.partialDone = true;
+        if (log) log('PARTIAL', pos.symbol, pos.strategyVersion + ' sold ' + d.sellPct + '% at +' + pct.toFixed(1) + '%');
+        continue;
+      }
+      bookLeg(state, pos, d.reason, pos.tokensRemainingRaw, q, t);
+      if (stopFills.isStop(d.reason)) {
+        const netPct = (pos.legs.reduce((a, l) => a + l.pnlSol, 0) / pos.sizeSol) * 100;
+        pos.stopFill = stopFills.record(state, stopFills.build({ pos, strategyId: pos.book, strategyVersion: pos.strategyVersion, stopLevelPct: ex.stopLossPct, entryPriceSolPerToken: pos.entryPrice,
+          prevCheck, fill: { price, pct, quoteAgeSec: (t - q.at) / 1000, priceImpactPct: q.priceImpactPct }, netPnlPct: netPct,
+          liquidityUsd: pos.lastLiquidityUsd != null ? pos.lastLiquidityUsd : (pos.entrySignal && pos.entrySignal.liquidityUsd), now: t }));
+      }
+      closeTrade(state, pos, d.reason, t);
+    }
+    return changed;
   }
+  function runExits(state, hooks) { return locked(() => runExitsInner(state, hooks)); }
 
   function report(state) {
     const b = ensure(state);
@@ -353,7 +370,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   }
   function lockedSol(state) { return ensure(state).open.reduce((a, p) => a + num(p.costBasisRemainingSol), 0); }
 
-  return { ensure, runEntries, runExits, report, lockedSol, stockBlock, recordSnaps, signals, locked };
+  return { ensure, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked };
 }
 
 module.exports = { makeBooks, entryFails, decideExit, quoteFresh, bookStats, high24Estimate, dropFromHighPct, m5VolumeVsHourAvg, isPumpOrigin, label };
