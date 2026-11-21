@@ -37,6 +37,18 @@ a{color:var(--cyan);text-decoration:none}
 .books-card{grid-column:span 12}
 .equity-card{grid-column:span 7}.fills-card{grid-column:span 5}
 .rejects-card{grid-column:span 6}.log-card{grid-column:span 6}
+.strat-card{grid-column:span 12}
+.sgroups{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+@media (max-width:1300px){.sgroups{grid-template-columns:repeat(2,minmax(0,1fr))}}@media (max-width:800px){.sgroups{grid-template-columns:1fr}}
+.sg{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:linear-gradient(180deg,var(--panel2),var(--bg2))}
+.sg.empty-g{opacity:.78;border-style:dashed}.sg.paused-g{border-color:rgba(245,158,11,.35)}
+.sg-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px}
+.sg-h b{font-size:13px}.sg-h .tag{font-size:9.5px;padding:1px 6px;border-radius:7px;text-transform:uppercase;letter-spacing:.6px;margin-left:6px}
+.tag.active{background:rgba(34,197,94,.14);color:var(--green)}.tag.paused{background:rgba(245,158,11,.16);color:var(--amber)}
+.sg-s{font-size:11px;color:var(--mute);font-family:"JetBrains Mono",monospace}
+.sg table{width:100%;font-size:11px;border-collapse:collapse}.sg td{padding:4px 5px;border-bottom:1px solid var(--line);font-family:"JetBrains Mono",monospace;white-space:nowrap}
+.sg th{position:static;background:none}
+.sg .idle{font-size:11.5px;color:var(--mute);padding:8px 2px}.sg .idle b{color:var(--dim);letter-spacing:.5px}
 @media (max-width:1100px){.network-card,.positions-card,.equity-card,.fills-card,.rejects-card,.log-card{grid-column:span 12}.topbar{flex-direction:column;align-items:flex-start}}
 /* network */
 .network{position:relative;width:100%;aspect-ratio:600/400}
@@ -159,6 +171,11 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
     <div class="card-h"><h2>Open positions <span class="count" id="openCount">0</span></h2><span class="hint">live PnL % vs entry · stop ▏ target ▏ peak ◆ · net = after 1.1% costs</span></div>
     <div id="posChart" class="pos-chart"></div>
     <div id="posDetail" class="pos-detail"></div>
+  </section>
+
+  <section class="card strat-card" id="stratCard">
+    <div class="card-h"><h2>Positions by strategy <span class="count" id="stratOpen">0</span></h2><span class="hint" id="stratHint">marks = Jupiter sell quote from the exit loop · times London · refresh 5 s</span></div>
+    <div class="sgroups" id="stratGroups"></div>
   </section>
 
   <section class="card books-card">
@@ -576,11 +593,36 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
     tip.style.left = Math.min(x + 12, r.width - 230) + 'px'; tip.style.top = '10px';
   }
 
+
+  // ---------------- PR14: positions by strategy ----------------
+  function renderStrategies() {
+    var gs = D.positionsByStrategy || [];
+    var total = gs.reduce(function (a, g) { return a + (g.openCount || 0); }, 0);
+    $('stratOpen').textContent = total;
+    $('stratGroups').innerHTML = gs.map(function (g) {
+      var head = '<div class="sg-h"><div><b>' + esc(g.name) + '</b><span class="tag ' + (g.status === 'paused' ? 'paused' : 'active') + '">' + esc(g.status) + '</span></div>' +
+        '<div class="sg-s">' + g.openCount + '/' + g.maxOpen + (g.maxOpenShared ? ' shared' : '') + ' · <span class="' + cls(g.openPnlSol) + '">' + sol(g.openPnlSol, 5) + ' SOL · ' + pct(g.openPnlPct) + '</span></div></div>';
+      if (g.empty) {
+        return '<div class="sg empty-g' + (g.status === 'paused' ? ' paused-g' : '') + '">' + head + '<div class="idle"><b>EMPTY — no open trades</b><br>last entry: ' + (g.lastEntryAt ? dtLondon(g.lastEntryAt) + ' (' + dur(Date.now() - Date.parse(g.lastEntryAt)) + ' ago)' : 'none since reset') +
+          '<br>idle: ' + esc(g.idleReason || 'unknown') + (g.idleSince ? ' · ' + tLondon(g.idleSince) : '') + '</div></div>';
+      }
+      var rows = g.positions.map(function (p) {
+        var qa = isNum(p.quoteAgeSec) ? p.quoteAgeSec + 's' : 'n/a';
+        return '<tr><td>' + (p.dexUrl ? '<a href="' + esc(p.dexUrl) + '" target="_blank" rel="noopener">$' + esc(p.symbol) + '</a>' : '$' + esc(p.symbol)) + (p.tokensEstimated ? ' <span class="hint" title="token amount estimated (opened before PR14)">~</span>' : '') + '</td>' +
+          '<td>' + (isNum(p.sizeSol) ? p.sizeSol.toFixed(3) : 'n/a') + '</td><td>' + tLondon(p.entryTime) + '<br><span class="hint">' + (p.entryTime ? dur(Date.now() - Date.parse(p.entryTime)) : '') + '</span></td>' +
+          '<td>' + price(p.entryPrice) + '<br><span class="hint">' + price(p.markPrice) + ' · <span class="' + (isNum(p.quoteAgeSec) && p.quoteAgeSec > 15 ? 'amber' : 'muted') + '">' + qa + '</span></span></td>' +
+          '<td class="' + cls(p.netPnlPct) + '">' + pct(p.netPnlPct, 1) + '<br>' + sol(p.unrealizedSol, 5) + '</td>' +
+          '<td>' + (isNum(p.stopPct) ? p.stopPct + '%' : 'n/a') + '<br><span class="hint">' + (isNum(p.targetPct) ? '+' + p.targetPct + '%' : (isNum(p.trailPct) ? 'trail ' + p.trailPct + '%' : '–')) + '</span></td></tr>';
+      }).join('');
+      return '<div class="sg' + (g.status === 'paused' ? ' paused-g' : '') + '">' + head + '<table><thead><tr><th>Token</th><th>SOL</th><th>Entry · age</th><th>Entry / mark · age</th><th>Net P&amp;L</th><th>Stop / tgt</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    }).join('') || '<div class="empty">no data</div>';
+  }
+
   // ---------------- loops ----------------
   function refresh() {
     return get('/api/dashboard').then(function (d) {
       D = d; lastOk = Date.now();
-      [renderTop, renderNet, renderPositions, renderBooks, renderFills, renderFeeds].forEach(function (f) { try { f(); } catch (e) { console.error(f.name, e); } });
+      [renderTop, renderNet, renderPositions, renderStrategies, renderBooks, renderFills, renderFeeds].forEach(function (f) { try { f(); } catch (e) { console.error(f.name, e); } });
       tickClock();
     }).catch(function (e) { console.error(e); var c = $('conn'); c.textContent = 'API error, retrying'; c.className = 'conn bad'; });
   }

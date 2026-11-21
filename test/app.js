@@ -240,6 +240,25 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     for (const k of ['requests', 'rateLimited', 'retries', 'skipped', 'last429At', 'since', 'byHost', 'scan']) assert.ok(k in j.fetchStats, 'fetchStats.' + k);
     const d = await get('/classic');
     assert.strictEqual(d.status, 200);
+    // PR14 (Liviu t74u): positions grouped per book + every legacy strategy; empty groups say why.
+    const pz = JSON.parse((await get('/api/positions')).body);
+    const ids = pz.groups.map(g => g.id);
+    for (const id of ['graduation-sniper', 'runner-hunter', 'volume-explosion', 'trending-pullback', 'dip-hold', 'momentum-entry', 'dip-buyers', 'buyer-turn', 'aggressive-flow']) assert.ok(ids.includes(id), 'group ' + id);
+    const af = pz.groups.find(g => g.id === 'aggressive-flow');
+    assert.strictEqual(af.status, 'paused'); assert.ok(af.empty && /PAUSED/.test(af.idleReason));
+    const dh = pz.groups.find(g => g.id === 'dip-hold');
+    assert.strictEqual(dh.openCount, dh.positions.length); assert.ok(dh.openCount >= 1); assert.strictEqual(dh.status, 'active');
+    const row = dh.positions.find(p => p.pairAddress === 'POOL_F');
+    for (const k of ['symbol', 'dexUrl', 'sizeSol', 'entryTime', 'ageMin', 'entryPrice', 'markPrice', 'quoteAgeSec', 'netPnlPct', 'unrealizedSol', 'stopPct', 'targetPct']) assert.ok(k in row, 'row.' + k);
+    assert.strictEqual(row.stopPct, -5); assert.strictEqual(row.targetPct, 12);
+    assert.ok(/dexscreener\.com\/solana\/POOL_F/.test(row.dexUrl));
+    const gs = pz.groups.find(g => g.id === 'graduation-sniper');
+    assert.ok(gs.empty && gs.idleReason && gs.maxOpen === 2, JSON.stringify(gs));
+    assert.ok('exitLoop' in pz);
+    const dj2 = JSON.parse((await get("/api/dashboard")).body);
+    assert.strictEqual(dj2.positionsByStrategy.length, pz.groups.length);
+    const page = await get('/');
+    assert.ok(/stratGroups/.test(page.body) && /renderStrategies/.test(page.body), 'Night Shift page has the positions-by-strategy panel');
     assert.ok(/Dip and hold/.test(d.body), 'strategy name on close rows (classic dashboard)');
     // Night Shift dashboard: static page at '/', assets, equity history and the aggregate endpoint
     const home = await get('/');
