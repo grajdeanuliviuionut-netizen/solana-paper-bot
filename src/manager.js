@@ -58,7 +58,10 @@ function review(state, config) {
 // Position size for a strategy: sizer base x book multiplier x strategy multiplier, floored.
 function sizeFor(base, state, config, strategyId) {
   const floor = Number(config.minPositionSol) > 0 ? Number(config.minPositionSol) : 0.02;
-  const strat = (state.stratSizeMult && state.stratSizeMult[strategyId]) || 1;
+  const cut = (state.stratSizeMult && state.stratSizeMult[strategyId]) || 1;
+  const def = (config.strategies || []).find(s => s.id === strategyId);
+  const cfg = def && Number(def.sizeMult) > 0 ? Number(def.sizeMult) : 1;
+  const strat = Math.min(cut, cfg); // half size from config and the manager cut do not stack
   return Math.max(floor, base * (state.sizeMult || 1) * strat);
 }
 

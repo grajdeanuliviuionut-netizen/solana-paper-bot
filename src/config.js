@@ -7,7 +7,9 @@ module.exports = {
   startingSol: parseFloat(process.env.STARTING_SOL || '4'),
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '45000', 10),
   positionSizeSol: 0.15,
-  maxOpen: 3,
+  maxOpen: 4,                   // PR7: 3 -> 4 with the four books unpaused; 1 slot reserved for dip-hold
+  slotReserve: { 'dip-hold': 1 },
+  maxPoolDivergencePct: 5,      // skip a buy when the chosen pool is >5% off the token's main pool
   dailyLossLimitSol: 0.2,
   fullStopBalance: 2.5,
   pauseAfterTrades: 8,          // manager: a strategy net negative after this many trades trades at half size (never paused)
@@ -19,7 +21,8 @@ module.exports = {
     {
       id: 'aggressive-flow',
       name: 'Aggressive flow scalp',
-      paused: true,
+      paused: false,
+      sizeMult: 0.5,            // PR7 (Liviu 17:10): unpaused at half size
       universe: { minAgeDays: 0, maxAgeDays: null, minLiquidityUsd: 8000, maxLiquidityUsd: 2000000 },
       entry: [
         { field: 'buySellRatioH1', op: '>=', value: 0.9 },
@@ -31,7 +34,8 @@ module.exports = {
     {
       id: 'momentum-entry',
       name: 'Momentum entry',
-      paused: true,
+      paused: false,
+      sizeMult: 0.5,            // PR7 (Liviu 17:10): unpaused at half size
       universe: { minAgeDays: 0, maxAgeDays: 30, minLiquidityUsd: 15000 },
       entry: [
         { field: 'h1', op: '>=', value: 2 },
@@ -44,7 +48,8 @@ module.exports = {
     {
       id: 'dip-buyers',
       name: 'Dip then buyers',
-      paused: true,
+      paused: false,
+      sizeMult: 0.5,            // PR7 (Liviu 17:10): unpaused at half size
       universe: { minAgeDays: 1, maxAgeDays: 45, minLiquidityUsd: 20000, maxLiquidityUsd: 400000 },
       entry: [
         { field: 'h1', op: '<=', value: -4 },
@@ -58,7 +63,8 @@ module.exports = {
     {
       id: 'buyer-turn',
       name: 'Buyers in control',
-      paused: true,
+      paused: false,
+      sizeMult: 0.5,            // PR7 (Liviu 17:10): unpaused at half size
       universe: { minAgeDays: 0.05, maxAgeDays: 60, minLiquidityUsd: 20000, maxLiquidityUsd: 800000 },
       entry: [
         { field: 'h1', op: '>=', value: -15 },

@@ -22,9 +22,11 @@ const losing = (id, n) => Array.from({ length: n }, (_, i) => ({ strategyId: id,
 // ---------- manager: cut size, never pause for results ----------
 test('manager: dip-hold auto-paused at 13:33 is unpaused; losing strategy gets half size, not a pause', () => {
   const state = { pausedIds: ['aggressive-flow', 'momentum-entry', 'dip-buyers', 'buyer-turn', 'dip-hold'], trades: [{ strategyId: 'dip-hold', pnlSol: 0.001 }].concat(losing('dip-hold', 9)) };
-  const r = review(state, config);
+  // A hand-set config pause (paused:true) is kept; results never pause (PR7 unpaused the four books in config).
+  const cfg = Object.assign({}, config, { strategies: config.strategies.map(s => s.id === 'aggressive-flow' ? Object.assign({}, s, { paused: true }) : s) });
+  const r = review(state, cfg);
   assert.ok(!state.pausedIds.includes('dip-hold'), 'dip-hold unpaused');
-  for (const id of ['aggressive-flow', 'momentum-entry', 'dip-buyers', 'buyer-turn']) assert.ok(state.pausedIds.includes(id), id + ' stays paused (config)');
+  assert.deepStrictEqual(state.pausedIds, ['aggressive-flow'], 'only the config pause stays');
   assert.strictEqual(state.stratSizeMult['dip-hold'], 0.5);
   assert.ok(r.notes.some(n => /unpause dip-hold/.test(n)));
   assert.ok(!r.notes.some(n => /MANAGER pause dip-hold/.test(n)));
@@ -139,11 +141,12 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
   const dip = (sym, pool, mint) => ({ pairAddress: pool, mint, symbol: sym, priceUsd: 0.01, liquidityUsd: 100000, volumeH1: 20000, priceChange: { m5: 1, h1: -6, h6: 0, h24: 0 }, txns: { buys: 200, sells: 100 }, ageDays: 5 });
   const scannerPath = require.resolve('../src/agents/scanner');
   require.cache[scannerPath] = { id: scannerPath, filename: scannerPath, loaded: true, exports: { scan: async () => [dip('NIO', 'POOL_NIO', 'MINT_NIO'), dip('NIO', 'POOL_NIO2', 'MINT_NIO_CLONE'), dip('FRESH', 'POOL_F', 'MINT_F')] } };
+  hb._reset(); hb._setDeps({ http: { get: async () => ({ data: { data: [] } }) }, sleep: async () => {}, now: () => Date.now(), opts: { minGapMs: 0 } });
   const idx = require('../src/index');
   await idx.tick();
   const st = idx.getState();
   assert.ok(!st.pausedIds.includes('dip-hold'), 'dip-hold unpaused');
-  assert.ok(st.pausedIds.includes('momentum-entry') && st.pausedIds.includes('aggressive-flow'), 'old books stay paused');
+  assert.deepStrictEqual(st.pausedIds, [], 'PR7: all five books unpaused');
   const opened = st.openPositions.map(p => p.pairAddress);
   assert.ok(!opened.includes('POOL_NIO'), 'NIO pool in 45-min cooldown');
   assert.ok(opened.includes('POOL_F'), 'fresh dip-hold entry opened: ' + JSON.stringify(st.activity.slice(0, 8)));

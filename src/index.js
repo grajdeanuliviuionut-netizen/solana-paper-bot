@@ -12,6 +12,7 @@ const { render } = require('./dashboard');
 const { review, sizeFor } = require('./manager');
 const reentry = require('./reentry');
 const httpBackoff = require('./httpBackoff');
+const poolPrice = require('./poolPrice');
 const { step: labStep } = require('./lab');
 
 const shouldExit = sellAgent.shouldExit;
@@ -81,6 +82,43 @@ function canOpen() {
   return true;
 }
 
+// Slot reserve: strategies without a reserve may not take the slots reserved for others
+// (config.slotReserve, e.g. { 'dip-hold': 1 }); the global config.maxOpen cap is unchanged.
+function slotFree(strategyId) {
+  const reserve = config.slotReserve || {};
+  const open = state.openPositions || [];
+  let held = 0;
+  for (const [id, n] of Object.entries(reserve)) {
+    if (id === strategyId) continue;
+    held += Math.max(0, n - open.filter(function (p) { return p.strategyId === id; }).length);
+  }
+  if (open.length + 1 + held > config.maxOpen) {
+    state.decisions.unshift(logDecision('SKIP', '-', 'slot reserved for ' + Object.keys(reserve).join(',')));
+    return false;
+  }
+  return true;
+}
+
+// Entry pool check: the chosen pool's price vs the token's main pool (highest liquidity).
+async function poolGate(sig, pairs) {
+  const st = state.poolChecks || (state.poolChecks = { checked: 0, divergenceSkips: 0, unverified: 0, lastSkips: [] });
+  st.checked += 1;
+  if (!sig.mint) { st.unverified += 1; return { ok: true }; }
+  const main = await poolPrice.mainPoolFor(sig.mint, pairs);
+  if (!main.pool) { st.unverified += 1; return { ok: true }; }
+  if (!main.verified && main.pool.pairAddress === sig.pairAddress) st.unverified += 1;
+  const gap = poolPrice.divergencePct(sig.price, main.pool.priceUsd);
+  const max = config.maxPoolDivergencePct || 5;
+  if (gap != null && gap > max) {
+    st.divergenceSkips += 1;
+    st.lastSkips = st.lastSkips.concat([{ symbol: sig.symbol, strategyId: sig.strategyId, pairAddress: sig.pairAddress, mainPool: main.pool.pairAddress, price: sig.price, mainPrice: main.pool.priceUsd, gapPct: +gap.toFixed(2), at: new Date().toISOString() }]).slice(-20);
+    state.decisions.unshift(logDecision('SKIP', sig.symbol, 'pool price ' + gap.toFixed(1) + '% off main pool'));
+    addActivity('SKIP ' + sig.symbol + ' pool price ' + gap.toFixed(1) + '% off main pool ' + String(main.pool.pairAddress).slice(0, 6));
+    return { ok: false, gap };
+  }
+  return { ok: true, gap };
+}
+
 let ticking = false;
 async function tick() {
   if (ticking) return; // a slow (backed-off) pass must not overlap the next one
@@ -98,13 +136,37 @@ async function tick() {
     addActivity('SCAN: ' + pairs.length + ' pairs');
     const byAddr = {};
     for (const p of pairs) if (p && p.pairAddress) byAddr[p.pairAddress] = p;
+    // PR7 stored-pool pricing: every mark, exit check and close fill comes ONLY from the pool stored
+    // on the position (pos.pairAddress). Pools not in this scan are fetched by address; if the stored
+    // pool has no price this tick the position holds (only time exits may fire) and retries next tick.
+    const notScanned = state.openPositions.filter(function (p) { return p.pairAddress && !byAddr[p.pairAddress]; }).map(function (p) { return p.pairAddress; });
+    const storedPools = notScanned.length ? await poolPrice.fetchPools(notScanned) : {};
     const stillOpen = [];
     for (const pos of state.openPositions) {
-      const pair = byAddr[pos.pairAddress];
-      const price = pair ? pair.priceUsd : pos.entryPrice;
-      if (pair && pair.priceUsd) pos.lastPrice = pair.priceUsd;
-      if (price > (pos.highest || 0)) pos.highest = price;
-      const exit = shouldExit(pos, price);
+      let pair = null;
+      if (pos.pairAddress) pair = byAddr[pos.pairAddress] || storedPools[pos.pairAddress] || null;
+      else if (!pos.noPoolLogged) {
+        pos.noPoolLogged = true;
+        addActivity('PRICE ' + pos.symbol + ': no stored pool on this position, kept old pricing (entry price)');
+      }
+      const fresh = !!(pair && pair.priceUsd > 0);
+      if (fresh && !pos.storedPoolPriced) {
+        // First tick on stored-pool pricing: re-mark from the stored pool and drop marks taken elsewhere.
+        const before = pos.lastPrice;
+        pos.storedPoolPriced = new Date().toISOString();
+        pos.highest = Math.max(Number(pos.entryPrice) || 0, pair.priceUsd);
+        if (pos.judgedHigh != null) delete pos.judgedHigh;
+        state.remarks = (state.remarks || []).concat([{ symbol: pos.symbol, pairAddress: pos.pairAddress, before: before == null ? null : before, after: pair.priceUsd, at: pos.storedPoolPriced }]).slice(-20);
+        addActivity('PRICE re-mark ' + pos.symbol + ' from stored pool ' + String(pos.pairAddress).slice(0, 6) + ': ' + (before == null ? 'n/a' : Number(before).toPrecision(5)) + ' -> ' + Number(pair.priceUsd).toPrecision(5));
+      }
+      if (fresh) { pos.lastPrice = pair.priceUsd; pos.lastPricedAt = new Date().toISOString(); pos.priceStale = false; }
+      else if (pos.pairAddress) {
+        if (!pos.priceStale) addActivity('PRICE ' + pos.symbol + ': stored pool price unavailable, holding (retry next tick)');
+        pos.priceStale = true;
+      }
+      const price = fresh ? pair.priceUsd : (pos.pairAddress ? (Number(pos.lastPrice) || pos.entryPrice) : pos.entryPrice);
+      if (fresh && price > (pos.highest || 0)) pos.highest = price;
+      const exit = shouldExit(pos, price, fresh || !pos.pairAddress);
       if (exit) {
         const pnl = computePnl(pos, exit.fillPrice);
         state.balance += pos.sizeSol + pnl;
@@ -131,10 +193,21 @@ async function tick() {
         if (cool) state.decisions.unshift(logDecision('SKIP', sig.symbol, 're-entry cooldown ' + cool.minsLeft + 'm (' + cool.key.split(':')[0] + ')'));
         return !cool;
       });
-      for (const sig of candidates.slice(0, 3)) {
+      // Reserved strategies (dip-hold) are served first so the unpaused books can't crowd them out.
+      const reserve = config.slotReserve || {};
+      candidates.sort(function (a, b) { return (reserve[b.strategyId] ? 1 : 0) - (reserve[a.strategyId] ? 1 : 0); });
+      // one candidate per pool per pass (several strategies can signal the same pool)
+      const seenPool = {};
+      const unique = candidates.filter(function (sig) { if (seenPool[sig.pairAddress]) return false; seenPool[sig.pairAddress] = true; return true; });
+      const gateSeen = {};
+      for (const sig of unique.slice(0, 3)) {
         if (!canOpen()) break;
         if (state.openPositions.some(function (p) { return p.symbol === sig.symbol; })) continue;
         if ((state.pausedIds || []).includes(sig.strategyId)) continue;
+        if (!slotFree(sig.strategyId)) continue;
+        // one pool check per pool per pass (several strategies can signal the same pool)
+        const gate = gateSeen[sig.pairAddress] || (gateSeen[sig.pairAddress] = await poolGate(sig, pairs));
+        if (!gate.ok) continue;
         const check = rugCheck(sig.pair || pairs.find(function (p) { return p.pairAddress === sig.pairAddress; }));
         if (!check.pass) {
           state.decisions.unshift(logDecision('SKIP', sig.symbol, 'rug check: ' + check.reason));
@@ -185,6 +258,8 @@ app.get('/api/trades', function (req, res) {
     stratSizeMult: state.stratSizeMult || {},
     reentryCooldowns: state.reentryCooldowns || {},
     fetchStats: state.fetchStats || null,
+    poolChecks: state.poolChecks || null,
+    remarks: state.remarks || [],
     trades: state.trades || []
   });
 });
