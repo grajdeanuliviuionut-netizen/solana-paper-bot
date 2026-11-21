@@ -78,7 +78,7 @@ module.exports = {
         { field: 'buySellRatioH1', op: '>=', value: 1.35 },
         { field: 'volumeToLiquidity', op: '>=', value: 0.05 }
       ],
-      exit: { takeProfitPct: 7, stopLossPct: 6, maxHoldMinutes: 90, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0, breakevenArmPct: 4, breakevenLockPct: 2.2 }
+      exit: { takeProfitPct: 12, stopLossPct: 5, maxHoldMinutes: 90, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0, breakevenArmPct: 6, breakevenLockPct: 4, trailAfterPct: 6, trailPct: 2.5 }
     }
   ]
 };
