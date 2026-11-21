@@ -279,7 +279,8 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
     if (ss === 'ok' && recent429) ss = 'warn';
     out.scanner = { name: 'Scanner', status: ss, last: scan.lastScanAt,
       metric: (isNum(scan.lastCandidates) ? scan.lastCandidates : 'n/a') + ' candidates · ' + (sc.scanSource || 'n/a'),
-      sub: (isNum(sc.requests) ? sc.requests : 'n/a') + ' req · ' + (isNum(sc.rateLimited) ? sc.rateLimited : 'n/a') + '×429 since ' + tLondon(sc.since) };
+      sub: (isNum(sc.requests) ? sc.requests : 'n/a') + ' req · ' + (isNum(sc.rateLimited) ? sc.rateLimited : 'n/a') + '×429 since ' + tLondon(sc.since) +
+        (sc.newPoolsFeed ? ' · new_pools ' + sc.newPoolsFeed.calls + ' calls, ' + sc.newPoolsFeed.rateLimited + '×429, ' + sc.newPoolsFeed.pumpfunUnder15m + ' pump <15m' : '') };
     // Rug check
     var ma = rc.mintAuthority || {}, sbk = rc.stockBlocks || {};
     var rlast = null;

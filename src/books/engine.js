@@ -176,11 +176,17 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     for (const m of Object.keys(b.snaps)) if (!b.snaps[m].length || t - b.snaps[m][b.snaps[m].length - 1][0] > 24 * 3600000) delete b.snaps[m];
   }
 
-  function signals(state, pairs) {
+  // extraByBook: { bookId: rows } extra candidate rows for one book only (PR13: new-pools feed rows
+  // go to the graduation sniper only). onExtraPass(book, row) is called for each extra row that passes.
+  function signals(state, pairs, extraByBook, onExtraPass) {
     const b = ensure(state), t = nowFn(), out = [];
     const ctx = { now: t, snaps: b.snaps };
     for (const book of C.list) {
-      for (const row of pairs || []) {
+      const extra = (extraByBook && extraByBook[book.id]) || [];
+      const seen = new Set((pairs || []).map(r => r && r.mint));
+      const extraOnly = extra.filter(r => r && !seen.has(r.mint));
+      for (const r of extra) if (r && !entryFails(book, r, ctx) && onExtraPass) onExtraPass(book, r);
+      for (const row of (pairs || []).concat(extraOnly)) {
         if (!row || !row.mint) continue;
         if (!entryFails(book, row, ctx)) out.push({ book, row, fields: signalFields(book, row, ctx) });
       }
@@ -189,11 +195,11 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   }
 
   // Entries for one tick. gate(sig) = PR9 main-pool check (async, fail closed).
-  function runEntries(state, pairs, gate) {
+  function runEntries(state, pairs, gate, extraByBook, onExtraPass) {
     return locked(async () => {
       const b = ensure(state);
       recordSnaps(state, pairs);
-      const sigs = signals(state, pairs);
+      const sigs = signals(state, pairs, extraByBook, onExtraPass);
       let tried = 0;
       for (const { book, row, fields } of sigs) {
         if (tried >= C.maxEntriesPerTick) break;
