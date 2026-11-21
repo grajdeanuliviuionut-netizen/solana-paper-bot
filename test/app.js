@@ -282,6 +282,16 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     for (const k of ['manager', 'scanner', 'rugCheck', 'strategist', 'executor', 'logger']) assert.ok(k in dj.agents, 'agent ' + k);
     for (const k of ['balance', 'equity', 'markEquity', 'realizedTodaySol', 'realizedSinceResetSol']) assert.ok(k in dj.account, 'account.' + k);
     assert.ok(Array.isArray(dj.openPositions) && Array.isArray(dj.recentTrades));
+    // t79u Bots panel: /api/bots + dashboard.bots, statuses from real signals (a tick has run here).
+    const bj = JSON.parse((await get('/api/bots')).body);
+    assert.deepStrictEqual(bj.agents.map(x => x.id), ['manager', 'scanner', 'rugCheck', 'strategist', 'executor', 'logger']);
+    for (const x of bj.agents) assert.ok(['RUNNING', 'IDLE', 'PAUSED', 'ERROR', 'STALE'].includes(x.status) && x.metric && 'lastActivityAgeSec' in x, JSON.stringify(x));
+    assert.strictEqual(bj.agents.find(x => x.id === 'manager').status, 'RUNNING', 'tick ran');
+    assert.strictEqual(bj.agents.find(x => x.id === 'logger').status, 'RUNNING', 'state saved');
+    assert.ok(bj.strategies.length >= 9 && bj.strategies.find(x => x.id === 'aggressive-flow').status === 'PAUSED');
+    assert.ok(bj.strategies.every(x => ['RUNNING', 'WATCHING', 'PAUSED', 'EMPTY'].includes(x.status) && 'trades' in x && 'netSol' in x && 'maxOpen' in x));
+    assert.strictEqual(dj.bots.agents.length, 6);
+    assert.ok(/id="bots"/.test(home.body) && /renderBots/.test(home.body), 'Bots panel on the page');
   } finally { server.close(); }
 });
 

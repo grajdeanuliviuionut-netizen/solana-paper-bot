@@ -62,6 +62,30 @@ table{width:100%;border-collapse:collapse}
 .st{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-top:1px solid var(--line);font-size:13.5px}
 .st:first-of-type{border-top:0}.st .w{color:var(--mute);font-size:12px;text-align:right;max-width:62%}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;background:var(--mute)}.dot.a{background:var(--up)}.dot.p{background:var(--warn)}.dot.e{background:#4b5568}
+/* t79u bots */
+.agents{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:16px;padding:20px 28px 0;max-width:3440px;margin:0 auto}
+.ag{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--mute);border-radius:12px;padding:12px 16px;min-width:0}
+.ag.green{border-left-color:var(--up)}.ag.amber{border-left-color:var(--warn)}.ag.red{border-left-color:var(--dn)}
+.agh{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.agh .n{font-size:15px;font-weight:700}
+.sp{font-size:10.5px;font-weight:700;letter-spacing:.7px;padding:2px 8px;border-radius:6px;text-transform:uppercase;white-space:nowrap}
+.sp.green{background:rgba(47,214,123,.15);color:var(--up)}.sp.grey{background:#232b39;color:#c3cad6}.sp.amber{background:rgba(245,178,61,.17);color:var(--warn)}.sp.red{background:rgba(255,92,116,.17);color:var(--dn)}
+.agm{display:flex;align-items:baseline;gap:8px;margin-top:6px}.agm b{font-size:24px;font-weight:600}.agm label{font-size:11px;letter-spacing:.7px;text-transform:uppercase;color:var(--mute)}
+.ags{font-size:12px;color:var(--sub);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agf{font-size:11.5px;color:var(--mute);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bt td{padding:8px 4px;border-top:1px solid var(--line);font-size:13.5px;white-space:nowrap}
+.bt td:first-child{max-width:170px;overflow:hidden;text-overflow:ellipsis}
+.bt th{font-size:10.5px;color:var(--mute);text-transform:uppercase;letter-spacing:.7px;text-align:right;padding:0 4px 6px;font-weight:600}.bt th:first-child,.bt th:nth-child(2){text-align:left}
+.bt .r{text-align:right}
+.bt .sp{font-size:9.5px;padding:1px 6px}
+@media (max-width:1700px){.agents{gap:12px;padding:16px 20px 0}.agm b{font-size:20px}}
+@media (max-width:1400px){.agents{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (min-width:2560px){html,body{font-size:18px}.agents{gap:20px;padding:24px 32px 0}.wrap{gap:24px;padding:24px 32px 32px}.col{gap:24px}.kpi{min-width:230px;padding:12px 24px}.kpi b{font-size:36px}.kpi label{font-size:13px}.brand b{font-size:28px}.brand span{font-size:15px}.meta{font-size:15px}
+  .card{padding:22px 26px}.card h2{font-size:16px}.card h2 small{font-size:14px}.big b{font-size:40px}.big label{font-size:13px}.big small{font-size:14px}canvas{height:520px}
+  .sch .n{font-size:22px}.sch .s{font-size:14.5px}.sch .p b{font-size:30px}.sch .p small{font-size:14.5px}.stats{font-size:15px}.tag{font-size:12px}.pt td{font-size:18px;padding:10px 4px}.pt th{font-size:12.5px}.pt td small{font-size:14px}.idle{font-size:16px}.v2{font-size:14px}
+  .ft td{font-size:17px;padding:10px 4px}.ft td small{font-size:14px}
+  .ag{padding:16px 20px}.agh .n{font-size:19px}.sp{font-size:12.5px}.agm b{font-size:34px}.agm label{font-size:13px}.ags{font-size:15px}.agf{font-size:13.5px}
+  .bt td{font-size:17px;padding:10px 4px}.bt th{font-size:12.5px}.bt .sp{font-size:11.5px}.bt td:first-child{max-width:300px}footer{font-size:14px}.cards.legacy{grid-template-columns:repeat(3,minmax(0,1fr))}}
 footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
 </style>
 </head>
@@ -76,6 +100,8 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
   </div>
   <div class="meta num"><div id="clock">–</div><div><span id="build">–</span> · <span id="conn">connecting</span></div></div>
 </header>
+
+<section class="agents" id="bots" aria-label="Agent bots"></section>
 
 <main class="wrap">
   <section class="col">
@@ -107,12 +133,12 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
 
   <section class="col">
     <div class="card">
-      <h2>Recent fills <small>last 15</small></h2>
-      <table class="ft"><tbody id="fills"></tbody></table>
+      <h2>Strategy bots <small id="botsNote">open/max · trades · win · net SOL</small></h2>
+      <table class="bt"><thead><tr><th>Bot</th><th>Status</th><th>Open</th><th>Trades</th><th>Win</th><th>Net</th></tr></thead><tbody id="botStrats"></tbody></table>
     </div>
     <div class="card">
-      <h2>Status</h2>
-      <div id="status"></div>
+      <h2>Recent fills <small>last 15</small></h2>
+      <table class="ft"><tbody id="fills"></tbody></table>
     </div>
   </section>
 </main>
@@ -193,19 +219,20 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
     }).join('');
     $('fills').innerHTML = rows || '<tr><td class="mu">no closed trades yet</td></tr>';
   }
-  function renderStatus() {
-    var gs = D.positionsByStrategy || [];
-    var ag = D.agents || {}, ex = (ag.executor && ag.executor.exitLoop) || {}, ci = ex.checkIntervalSec || {};
-    var rj = (ag.rugCheck && ag.rugCheck.rejectsByReason) || {};
-    var top = Object.keys(rj).sort(function (a, b) { return rj[b] - rj[a]; }).slice(0, 3).map(function (k) { return esc(k) + ' ' + rj[k]; }).join(' · ');
-    var html = gs.map(function (g) {
-      var st = g.status === 'paused' ? 'p' : g.empty ? 'e' : 'a';
-      var why = g.status === 'paused' ? 'paused' : g.empty ? (g.idleReason || 'empty') : g.openCount + ' open · ' + sol(g.openPnlSol, 4) + ' SOL';
-      return '<div class="st"><span><i class="dot ' + st + '"></i>' + esc(String(g.name).replace(' (legacy)', '')) + '</span><span class="w">' + esc(why) + '</span></div>';
+  function ago(sec) { if (!isNum(sec)) return 'never'; if (sec < 90) return Math.round(sec) + ' s ago'; if (sec < 5400) return Math.round(sec / 60) + ' min ago'; return (sec / 3600).toFixed(1) + ' h ago'; }
+  function renderBots() {
+    var B = D.bots || {}, ags = B.agents || [], ss = B.strategies || [];
+    $('bots').innerHTML = ags.map(function (a) {
+      var m = a.metric || {};
+      return '<div class="ag ' + esc(a.tone) + '" title="' + esc(a.role + (a.lastError ? ' · last error: ' + a.lastError : '')) + '"><div class="agh"><span class="n">' + esc(a.name) + '</span><span class="sp ' + esc(a.tone) + '">' + esc(a.status) + '</span></div>' +
+        '<div class="agm"><b class="num">' + esc(m.value == null ? '–' : m.value) + '</b><label>' + esc(m.label || '') + '</label></div>' +
+        '<div class="ags num">' + esc(m.sub || '') + '</div>' +
+        '<div class="agf">' + esc(a.role) + ' · ' + ago(a.lastActivityAgeSec) + (a.errors10m ? ' · <span class="dn">' + a.errors10m + ' err/10m</span>' : '') + '</div></div>';
     }).join('');
-    html += '<div class="st"><span><i class="dot ' + (ex.errors ? 'p' : 'a') + '"></i>Exit loop</span><span class="w num">check every ' + (isNum(ci.median) ? ci.median + ' s' : '–') + ' · errors ' + (ex.errors || 0) + '</span></div>';
-    html += '<div class="st"><span><i class="dot e"></i>Rejects</span><span class="w">' + (top || 'none') + '</span></div>';
-    $('status').innerHTML = html;
+    $('botStrats').innerHTML = ss.map(function (s) {
+      return '<tr><td>' + esc(String(s.name).replace(' (legacy)', '')) + (s.kind === 'legacy' ? ' <span class="mu">legacy</span>' : '') + '</td><td><span class="sp ' + esc(s.tone) + '">' + esc(s.status) + '</span></td>' +
+        '<td class="r num">' + s.open + '/' + s.maxOpen + '</td><td class="r num">' + s.trades + '</td><td class="r num">' + (isNum(s.winRatePct) ? Math.round(s.winRatePct) + '%' : '–') + '</td><td class="r num ' + cl(s.netSol) + '">' + sol(s.netSol, 4) + '</td></tr>';
+    }).join('') || '<tr><td class="mu">no bots data</td></tr>';
   }
 
   function renderEquity() {
@@ -239,7 +266,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
   function refresh() {
     return get('/api/dashboard').then(function (d) {
       D = d; lastOk = Date.now();
-      [renderTop, renderStrategies, renderFills, renderStatus].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
+      [renderTop, renderBots, renderStrategies, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
       clock();
     }).catch(function (e) { console.error(e); var c = $('conn'); c.textContent = 'API error, retrying'; c.className = 'bad'; });
   }
