@@ -10,7 +10,9 @@ module.exports = {
   maxOpen: 3,
   dailyLossLimitSol: 0.2,
   fullStopBalance: 2.5,
-  pauseAfterTrades: 8,
+  pauseAfterTrades: 8,          // manager: a strategy net negative after this many trades trades at half size (never paused)
+  minPositionSol: 0.02,         // size floor after manager cuts
+  reentryCooldownMin: 45,       // no re-entry on the same token (mint / pool) for 45 min after any exit
   costRoundtripPct: 1.1,
   brokenGapPct: 15,
   strategies: [

@@ -57,6 +57,7 @@ function generateSignals(pairs) {
           strategyName: strat.name,
           symbol: pair.symbol,
           pairAddress: pair.pairAddress,
+          mint: pair.mint || null,
           price: pair.priceUsd,
           exit: strat.exit,
           pair: pair

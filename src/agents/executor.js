@@ -9,6 +9,7 @@ function executeEntry(signal, size, balance) {
       strategyName: signal.strategyName,
       symbol: signal.symbol,
       pairAddress: signal.pairAddress,
+      mint: signal.mint || (signal.pair && signal.pair.mint) || null,
       entryPrice: signal.price,
       sizeSol: size,
       entryTime: new Date().toISOString(),

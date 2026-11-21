@@ -1,4 +1,4 @@
-const axios = require('axios');
+const httpBackoff = require('./httpBackoff');
 
 const SOURCES = [
   'https://api.geckoterminal.com/api/v2/networks/solana/trending_pools?page=1',
@@ -21,8 +21,11 @@ function mapPool(row) {
   const created = a.pool_created_at ? new Date(a.pool_created_at).getTime() : 0;
   const liquidityUsd = num(a.reserve_in_usd);
   if (liquidityUsd < 10000 || !a.address) return null;
+  const base = row.relationships && row.relationships.base_token && row.relationships.base_token.data;
+  const mint = base && typeof base.id === 'string' && base.id.startsWith('solana_') ? base.id.slice(7) : null;
   return {
     pairAddress: a.address,
+    mint: mint,
     symbol: name.split('/')[0].trim() || 'UNK',
     priceUsd: num(a.base_token_price_usd),
     liquidityUsd: liquidityUsd,
@@ -33,23 +36,34 @@ function mapPool(row) {
   };
 }
 
+// Last good page per source: a rate-limited (429) source reuses its previous page for up to 5 min
+// so a throttled pass still sees (and can manage exits on) the usual pools.
+const lastGood = new Map();
+const CACHE_MAX_AGE_MS = 5 * 60 * 1000;
+
 async function getCandidatePairs() {
   const seen = new Set();
   const all = [];
   for (const url of SOURCES) {
+    let rows = null;
     try {
-      const res = await axios.get(url, { timeout: 12000, headers: { accept: 'application/json;version=20230302' } });
-      for (const row of res.data?.data || []) {
-        const pair = mapPool(row);
-        if (!pair || seen.has(pair.pairAddress)) continue;
-        seen.add(pair.pairAddress);
-        all.push(pair);
-      }
+      const res = await httpBackoff.get(url, { timeout: 12000, headers: { accept: 'application/json;version=20230302' } });
+      rows = res.data?.data || [];
+      lastGood.set(url, { at: Date.now(), rows });
     } catch (e) {
-      console.error('Fetch error:', e.message);
+      const cached = lastGood.get(url);
+      if (cached && Date.now() - cached.at < CACHE_MAX_AGE_MS) rows = cached.rows;
+      if (e.rateLimited) console.warn('Fetch rate-limited (429 backoff), ' + (rows ? 'using cached page' : 'skipped') + ': ' + url.replace(/^https:\/\/[^/]+/, ''));
+      else console.error('Fetch error:', e.message);
+    }
+    for (const row of rows || []) {
+      const pair = mapPool(row);
+      if (!pair || seen.has(pair.pairAddress)) continue;
+      seen.add(pair.pairAddress);
+      all.push(pair);
     }
   }
   return all.slice(0, 80);
 }
 
-module.exports = { getCandidatePairs };
+module.exports = { getCandidatePairs, mapPool, _lastGood: lastGood };

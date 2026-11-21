@@ -9,7 +9,9 @@ const { logDecision } = require('./agents/logger');
 const { generateSignals } = require('./buyAgent');
 const sellAgent = require('./sellAgent');
 const { render } = require('./dashboard');
-const { review } = require('./manager');
+const { review, sizeFor } = require('./manager');
+const reentry = require('./reentry');
+const httpBackoff = require('./httpBackoff');
 const { step: labStep } = require('./lab');
 
 const shouldExit = sellAgent.shouldExit;
@@ -26,6 +28,7 @@ if (!Array.isArray(state.openPositions)) state.openPositions = [];
 if (!Array.isArray(state.trades)) state.trades = [];
 if (typeof state.balance !== 'number') state.balance = config.startingSol;
 if (!Array.isArray(state.decisions)) state.decisions = [];
+console.log('Re-entry cooldowns seeded from closed trades: ' + reentry.seed(state, config));
 
 const app = express();
 
@@ -78,7 +81,10 @@ function canOpen() {
   return true;
 }
 
+let ticking = false;
 async function tick() {
+  if (ticking) return; // a slow (backed-off) pass must not overlap the next one
+  ticking = true;
   try {
     if (state.paperReset !== 'work-1') {
       state.paperReset = 'work-1';
@@ -106,18 +112,26 @@ async function tick() {
         state.trades.unshift(trade);
         if (state.trades.length > 100) state.trades.pop();
         logTrade(trade);
+        reentry.recordExit(state, trade, config);
         state.decisions.unshift(logDecision('EXIT', pos.symbol, exit.reason, { pnl: pnl.toFixed(4) }));
         addActivity('EXIT ' + pos.symbol + ' ' + exit.reason + ' pnl=' + pnl.toFixed(4));
       } else stillOpen.push(pos);
     }
     state.openPositions = stillOpen;
+    reentry.prune(state);
     const labNotes = labStep(state, pairs);
     for (const note of labNotes) addActivity(note);
     const result = generateSignals(pairs) || { signals: [], rejections: [] };
     state.skips = skipSummary(result.rejections);
     if (canOpen()) {
       let opened = 0;
-      for (const sig of (result.signals || []).slice(0, 3)) {
+      // Cooled-down tokens are skipped before the 3-per-pass cut so they don't use up the pass.
+      const candidates = (result.signals || []).filter(function (sig) {
+        const cool = reentry.blocked(state, sig);
+        if (cool) state.decisions.unshift(logDecision('SKIP', sig.symbol, 're-entry cooldown ' + cool.minsLeft + 'm (' + cool.key.split(':')[0] + ')'));
+        return !cool;
+      });
+      for (const sig of candidates.slice(0, 3)) {
         if (!canOpen()) break;
         if (state.openPositions.some(function (p) { return p.symbol === sig.symbol; })) continue;
         if ((state.pausedIds || []).includes(sig.strategyId)) continue;
@@ -126,7 +140,7 @@ async function tick() {
           state.decisions.unshift(logDecision('SKIP', sig.symbol, 'rug check: ' + check.reason));
           continue;
         }
-        const size = Math.max(0.05, sizePosition(state.balance) * (state.sizeMult || 1));
+        const size = sizeFor(sizePosition(state.balance), state, config, sig.strategyId);
         const exec = executeEntry(sig, size, state.balance);
         if (exec.ok) {
           opened += 1;
@@ -151,7 +165,8 @@ async function tick() {
     console.error(e);
   }
   state.lastUpdate = new Date().toISOString();
-  saveState(state);
+  state.fetchStats = Object.assign({}, httpBackoff.stats);
+  try { saveState(state); } finally { ticking = false; }
 }
 
 app.get('/', function (req, res) {
@@ -159,8 +174,25 @@ app.get('/', function (req, res) {
   res.type('html').send(render(state, config));
 });
 
-app.listen(config.port, function () {
+app.get('/api/trades', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    count: (state.trades || []).length,
+    balance: state.balance,
+    equity: equity(),
+    openPositions: state.openPositions,
+    pausedIds: state.pausedIds || [],
+    stratSizeMult: state.stratSizeMult || {},
+    reentryCooldowns: state.reentryCooldowns || {},
+    fetchStats: state.fetchStats || null,
+    trades: state.trades || []
+  });
+});
+
+if (require.main === module) app.listen(config.port, function () {
   console.log('Dashboard running on port ' + config.port);
   tick();
   setInterval(tick, config.pollIntervalMs);
 });
+
+module.exports = { app, tick, getState: function () { return state; } };

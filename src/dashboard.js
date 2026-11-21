@@ -68,7 +68,7 @@ function render(state, config) {
     return '<p class="' + (/error/i.test(a.msg || '') ? 'loss' : '') + '"><span class="mute">' + esc(new Date(a.time).toLocaleTimeString()) + '</span> ' + esc(a.msg) + '</p>';
   }).join('') || '<p class="mute">log empty</p>';
   const closes = trades.slice(0, 8).map(function (t) {
-    return '<li><div class="row"><b>$' + esc(t.symbol) + '</b><span class="' + ((t.pnlSol || 0) >= 0 ? 'win' : 'loss') + '">' + solText(t.pnlSol) + '</span></div><p class="mute">' + esc(new Date(t.closedAt).toLocaleTimeString()) + ' \u00b7 ' + esc(t.exitReason || '') + '</p></li>';
+    return '<li><div class="row"><b>$' + esc(t.symbol) + '</b><span class="' + ((t.pnlSol || 0) >= 0 ? 'win' : 'loss') + '">' + solText(t.pnlSol) + '</span></div><p class="mute">' + esc(new Date(t.closedAt).toLocaleTimeString()) + ' \u00b7 ' + esc(t.exitReason || '') + (t.strategyName || t.strategyId ? ' \u00b7 ' + esc(t.strategyName || t.strategyId) : '') + '</p></li>';
   }).join('') || '<li class="mute">no closes yet</li>';
   const openHtml = positions.length ? positions.map(function (p) {
     return '<h2>$' + esc(p.symbol) + '</h2><p>entry ' + esc(Number(p.entryPrice || 0).toFixed(6)) + '</p><p>size ' + esc(Number(p.sizeSol || 0).toFixed(3)) + ' SOL</p>' + liveLine(p) + '<p class="mute">' + esc(p.strategyName || '') + '</p>';
