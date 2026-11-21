@@ -1,7 +1,11 @@
 const express = require('express');
 const config = require('./config');
 const { loadState, saveState, logTrade } = require('./logger');
-const { getCandidatePairs } = require('./dataFetcher');
+const { scan } = require('./agents/scanner');
+const { rugCheck } = require('./agents/rugCheck');
+const { sizePosition } = require('./agents/sizer');
+const { executeEntry } = require('./agents/executor');
+const { logDecision } = require('./agents/logger');
 const { generateSignals } = require('./buyAgent');
 const sellAgent = require('./sellAgent');
 
@@ -18,6 +22,7 @@ if (!Array.isArray(state.activity)) state.activity = [];
 if (!Array.isArray(state.openPositions)) state.openPositions = [];
 if (!Array.isArray(state.trades)) state.trades = [];
 if (typeof state.balance !== 'number') state.balance = config.startingSol;
+if (!Array.isArray(state.decisions)) state.decisions = [];
 
 const app = express();
 
@@ -34,11 +39,11 @@ function canOpen() {
 
 async function tick() {
   try {
-    const pairs = await getCandidatePairs();
-    const safePairs = Array.isArray(pairs) ? pairs : [];
-    addActivity(`Scanned ${safePairs.length} pairs`);
+    const pairs = await scan();
+    addActivity(`SCAN: ${pairs.length} pairs`);
+
     const byAddr = {};
-    for (const p of safePairs) {
+    for (const p of pairs) {
       if (p && p.pairAddress) byAddr[p.pairAddress] = p;
     }
 
@@ -51,17 +56,13 @@ async function tick() {
       if (exit) {
         const pnl = computePnl(pos, exit.fillPrice);
         state.balance += pos.sizeSol + pnl;
-        const trade = {
-          ...pos,
-          exitReason: exit.reason,
-          exitPrice: exit.fillPrice,
-          pnlSol: pnl,
-          closedAt: new Date().toISOString()
-        };
+        const trade = { ...pos, exitReason: exit.reason, exitPrice: exit.fillPrice, pnlSol: pnl, closedAt: new Date().toISOString() };
         state.trades.unshift(trade);
         if (state.trades.length > 100) state.trades.pop();
         logTrade(trade);
-        addActivity(`EXIT ${pos.symbol} (${pos.strategyName}) ${exit.reason} pnl=${pnl.toFixed(4)} SOL`);
+        const dec = logDecision('EXIT', pos.symbol, exit.reason, { pnl: pnl.toFixed(4) });
+        state.decisions.unshift(dec);
+        addActivity(`EXIT ${pos.symbol} ${exit.reason} pnl=${pnl.toFixed(4)}`);
       } else {
         stillOpen.push(pos);
       }
@@ -69,33 +70,33 @@ async function tick() {
     state.openPositions = stillOpen;
 
     if (canOpen()) {
-      const result = generateSignals(safePairs) || { signals: [], rejections: [] };
-      const signals = result.signals || [];
-      const rejections = result.rejections || [];
-      if (rejections.length) {
-        addActivity(`Rejections: ${rejections.slice(0, 2).join(' | ')}`);
-      }
-      for (const sig of signals.slice(0, 3)) {
+      const result = generateSignals(pairs) || { signals: [], rejections: [] };
+      for (const sig of (result.signals || []).slice(0, 3)) {
         if (!canOpen()) break;
         const already = state.openPositions.some(p => p.symbol === sig.symbol);
         if (already) continue;
-        const pos = {
-          id: Date.now() + Math.random(),
-          strategyId: sig.strategyId,
-          strategyName: sig.strategyName,
-          symbol: sig.symbol,
-          pairAddress: sig.pairAddress,
-          entryPrice: sig.price,
-          sizeSol: config.positionSizeSol,
-          entryTime: new Date().toISOString(),
-          exit: sig.exit,
-          highest: sig.price
-        };
-        state.openPositions.push(pos);
-        state.balance -= config.positionSizeSol;
-        addActivity(`ENTRY ${sig.symbol} (${sig.strategyName}) @ ${sig.price}`);
+
+        const check = rugCheck(sig.pair || pairs.find(p => p.pairAddress === sig.pairAddress));
+        if (!check.pass) {
+          const dec = logDecision('SKIP', sig.symbol, `rug check: ${check.reason}`);
+          state.decisions.unshift(dec);
+          continue;
+        }
+
+        const size = sizePosition(state.balance);
+
+        const exec = executeEntry(sig, size, state.balance);
+        if (exec.ok) {
+          state.openPositions.push(exec.position);
+          state.balance -= size;
+          const dec = logDecision('ENTRY', sig.symbol, exec.reason, { size });
+          state.decisions.unshift(dec);
+          addActivity(`ENTRY ${sig.symbol} size ${size.toFixed(3)}`);
+        }
       }
     }
+
+    if (state.decisions.length > 100) state.decisions = state.decisions.slice(0, 100);
   } catch (e) {
     addActivity(`Tick error: ${e.message}`);
     console.error(e);
@@ -122,7 +123,10 @@ app.get('/', (req, res) => {
       <td>${new Date(t.closedAt).toLocaleTimeString()}</td>
     </tr>`).join('');
 
-  const activityHtml = (state.activity || []).slice(0, 30).map(a => `
+  const decisions = (state.decisions || []).slice(0, 15).map(d => `
+    <div class="log-line">${new Date(d.time).toLocaleTimeString()} — ${d.type} ${d.symbol} — ${d.reason}</div>`).join('');
+
+  const activityHtml = (state.activity || []).slice(0, 20).map(a => `
     <div class="log-line">${new Date(a.time).toLocaleTimeString()} — ${a.msg}</div>`).join('');
 
   res.send(`
@@ -140,14 +144,23 @@ app.get('/', (req, res) => {
         .win { color: #4ade80; }
         .loss { color: #f87171; }
         .balance { font-size: 2em; color: #38bdf8; }
-        .log { background: #1e293b; padding: 12px; border-radius: 8px; max-height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.9em; }
+        .log { background: #1e293b; padding: 12px; border-radius: 8px; max-height: 280px; overflow-y: auto; font-family: monospace; font-size: 0.9em; }
         .log-line { margin: 4px 0; border-bottom: 1px solid #334155; padding-bottom: 4px; }
+        .agents { display: flex; gap: 12px; margin: 16px 0; }
+        .agent { background: #1e293b; padding: 10px 14px; border-radius: 8px; font-size: 0.85em; }
       </style>
     </head>
     <body>
-      <h1>Solana Paper Bot</h1>
+      <h1>Solana Paper Bot — Multi-Agent</h1>
       <div class="balance">Balance: ${(state.balance || 0).toFixed(4)} SOL</div>
-      <p>Open positions: ${(state.openPositions || []).length} / ${config.maxOpen} | Last update: ${new Date(state.lastUpdate || Date.now()).toLocaleString()}</p>
+      <p>Open: ${(state.openPositions || []).length} / ${config.maxOpen} | Last: ${new Date(state.lastUpdate || Date.now()).toLocaleString()}</p>
+      <div class="agents">
+        <div class="agent">SCANNER</div>
+        <div class="agent">RUG CHECK</div>
+        <div class="agent">SIZER</div>
+        <div class="agent">EXECUTOR</div>
+        <div class="agent">LOGGER</div>
+      </div>
       <h2>Open Positions</h2>
       <table>
         <tr><th>Symbol</th><th>Strategy</th><th>Entry</th><th>Size</th><th>Time</th></tr>
@@ -158,11 +171,11 @@ app.get('/', (req, res) => {
         <tr><th>Symbol</th><th>Strategy</th><th>Exit</th><th>PnL (SOL)</th><th>Time</th></tr>
         ${closed || '<tr><td colspan="5">None yet</td></tr>'}
       </table>
-      <h2>Activity Log</h2>
-      <div class="log">
-        ${activityHtml || '<div>No activity yet</div>'}
-      </div>
-      <p style="color:#64748b">Auto-refreshes every 30s. Paper only.</p>
+      <h2>Decision Log (with reasons)</h2>
+      <div class="log">${decisions || '<div>No decisions yet</div>'}</div>
+      <h2>Activity</h2>
+      <div class="log">${activityHtml || '<div>No activity yet</div>'}</div>
+      <p style="color:#64748b">Auto-refreshes every 30s. Paper only. Multi-agent pipeline.</p>
     </body>
     </html>
   `);
