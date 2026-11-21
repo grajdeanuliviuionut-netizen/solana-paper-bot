@@ -234,9 +234,30 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     assert.strictEqual(j.books.list.length, 4);
     assert.ok(j.books.list.every(b => b.sizeSol === 0.05 && b.progress === '0/30'));
     for (const k of ['requests', 'rateLimited', 'retries', 'skipped', 'last429At', 'since', 'byHost', 'scan']) assert.ok(k in j.fetchStats, 'fetchStats.' + k);
-    const d = await get('/');
+    const d = await get('/classic');
     assert.strictEqual(d.status, 200);
-    assert.ok(/Dip and hold/.test(d.body), 'strategy name on close rows');
+    assert.ok(/Dip and hold/.test(d.body), 'strategy name on close rows (classic dashboard)');
+    // Night Shift dashboard: static page at '/', assets, equity history and the aggregate endpoint
+    const home = await get('/');
+    assert.strictEqual(home.status, 200);
+    assert.ok(/Paper Terminal/.test(home.body) && /PAPER/.test(home.body) && /\/api\/dashboard/.test(home.body) && /\/api\/equity/.test(home.body), 'night shift page');
+    const snap = idx.recordEquity();
+    assert.ok(snap && typeof snap.markEquity === 'number' && typeof snap.equity === 'number', 'equity snapshot recorded');
+    const eq = await get('/api/equity?since=scoreboard');
+    assert.strictEqual(eq.status, 200);
+    const ej = JSON.parse(eq.body);
+    assert.ok(Array.isArray(ej.points) && ej.points.length >= 1, 'stored snapshot returned');
+    assert.ok(ej.current && typeof ej.current.markEquity === 'number');
+    assert.strictEqual(ej.scoreboard.epoch, 'books-v1');
+    assert.ok(fs.existsSync(path.join(TMP, 'equity.jsonl')), 'equity.jsonl lives in the data dir (volume)');
+    const db = await get('/api/dashboard');
+    assert.strictEqual(db.status, 200);
+    const dj = JSON.parse(db.body);
+    assert.strictEqual(dj.liveTrading, false);
+    assert.strictEqual(dj.books.length, 4);
+    for (const k of ['manager', 'scanner', 'rugCheck', 'strategist', 'executor', 'logger']) assert.ok(k in dj.agents, 'agent ' + k);
+    for (const k of ['balance', 'equity', 'markEquity', 'realizedTodaySol', 'realizedSinceResetSol']) assert.ok(k in dj.account, 'account.' + k);
+    assert.ok(Array.isArray(dj.openPositions) && Array.isArray(dj.recentTrades));
   } finally { server.close(); }
 });
 

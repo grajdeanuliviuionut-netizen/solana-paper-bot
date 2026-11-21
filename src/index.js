@@ -22,6 +22,8 @@ const { makeQuotes } = require('./books/quotes');
 const { makeMintAuth } = require('./books/mintAuth');
 const { makeBooks } = require('./books/engine');
 const { classifyBlocked } = require('./books/blocklist');
+const { makeDashboardApi, equityLog } = require('./dashboardApi');
+const SERVER_STARTED_AT = new Date().toISOString();
 
 const BUILD = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.SOURCE_COMMIT || null;
 // PR11 books: Jupiter (read-only quote API) and read-only Solana RPC get their own limiter buckets.
@@ -392,7 +394,14 @@ async function tick() {
   try { saveState(state); } finally { ticking = false; }
 }
 
+// Night Shift dashboard (static page polling /api/dashboard + /api/equity); the previous server-rendered
+// dashboard stays at /classic. Read-only: none of these routes change trading state.
+const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.get('/', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(PUBLIC_DIR, 'index.html'));
+});
+app.get('/classic', function (req, res) {
   res.set('Cache-Control', 'no-store');
   const html = render(state, config);
   res.type('html').send(html.indexOf('</body>') >= 0 ? html.replace('</body>', renderBooks() + '</body>') : html + renderBooks());
@@ -430,6 +439,30 @@ app.get('/api/trades', function (req, res) {
     trades: allTrades()
   });
 });
+
+let dashApiInst = null; // built lazily (exitLoopStats is declared further down)
+function dashApi() { return dashApiInst || (dashApiInst = makeDashboardApi({ getState: function () { return state; }, config, books, equity, lockedSol, fetchStats, jupiterStats, mintAuth, exitLoopStats, booksLimiter, build: BUILD, startedAt: SERVER_STARTED_AT })); }
+app.get('/api/dashboard', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(dashApi().payload()); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
+});
+// Equity curve: snapshots from equity.jsonl on the volume (1/min) plus the current live point.
+// ?hours=N (default 24, max 720) or ?since=scoreboard; ?max=N points (default 600).
+app.get('/api/equity', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  const sb = state.scoreboard || null;
+  let sinceMs;
+  if (req.query.since === 'scoreboard' && sb && sb.since) sinceMs = Date.parse(sb.since);
+  else sinceMs = Date.now() - Math.min(720, Math.max(1, Number(req.query.hours) || 24)) * 3600000;
+  const max = Math.min(5000, Math.max(10, Number(req.query.max) || 600));
+  const raw = equityLog.read(sinceMs);
+  let current = null;
+  try { current = dashApi().snapshot(); } catch (e) { current = null; }
+  res.json({ build: BUILD, intervalSec: 60, file: path.basename(equityLog.FILE), since: new Date(sinceMs).toISOString(), scoreboard: sb ? { epoch: sb.epoch, since: sb.since, startEquity: sb.startEquity, startBalance: sb.startBalance } : null, storedPoints: raw.length, points: equityLog.downsample(raw, max), current });
+});
+function recordEquity() {
+  try { const p = dashApi().snapshot(); equityLog.append(p); return p; } catch (e) { console.error('equity snapshot', e.message); return null; }
+}
 
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
@@ -489,6 +522,8 @@ if (require.main === module) app.listen(config.port, function () {
   tick();
   setInterval(tick, config.pollIntervalMs);
   startExitLoop();
+  setTimeout(recordEquity, 5000);
+  setInterval(recordEquity, 60000);
 });
 
-module.exports = { app, tick, exitLoop, books, quotes, mintAuth, booksLimiter, resetScoreboard, getState: function () { return state; } };
+module.exports = { app, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, booksLimiter, resetScoreboard, getState: function () { return state; } };
