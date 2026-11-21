@@ -46,9 +46,22 @@ module.exports = {
       entry: [
         { field: 'h1', op: '<=', value: -4 },
         { field: 'h1', op: '>=', value: -12 },
-        { field: 'm5', op: '>=', value: 0.5 },
+        { field: 'm5', op: '>=', value: 0 },
         { field: 'buySellRatioH1', op: '>=', value: 1.4 },
         { field: 'volumeToLiquidity', op: '>=', value: 0.06 }
+      ],
+      exit: { takeProfitPct: 8, stopLossPct: 6, maxHoldMinutes: 20, earlyFailAfterMin: 8, earlyFailMinPeakPct: 1.5 }
+    },
+    {
+      id: 'buyer-turn',
+      name: 'Buyers in control',
+      universe: { minAgeDays: 0.05, maxAgeDays: 60, minLiquidityUsd: 20000, maxLiquidityUsd: 800000 },
+      entry: [
+        { field: 'h1', op: '>=', value: -15 },
+        { field: 'h1', op: '<=', value: 12 },
+        { field: 'm5', op: '>=', value: -1 },
+        { field: 'buySellRatioH1', op: '>=', value: 1.3 },
+        { field: 'volumeToLiquidity', op: '>=', value: 0.05 }
       ],
       exit: { takeProfitPct: 8, stopLossPct: 6, maxHoldMinutes: 20, earlyFailAfterMin: 8, earlyFailMinPeakPct: 1.5 }
     }
