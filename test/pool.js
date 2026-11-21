@@ -69,52 +69,25 @@ fs.writeFileSync(process.env.STATE_FILE, JSON.stringify({ balance: 2.9, openPosi
 // PR13: the new_pools feed never touches the network in tests.
 require('../src/newPools')._setDeps({ http: { get: async () => ({ status: 200, data: { data: [] } }) } });
 const idx = require('../src/index');
+// PR14: entries take a Jupiter buy quote for the token amount; tests never touch Jupiter (stub: no route).
+const noRoute = async () => { throw Object.assign(new Error('400'), { response: { status: 400, data: { error: 'COULD_NOT_FIND_ANY_ROUTE' } } }); };
+idx.booksLimiter.setHttp({ get: noRoute, post: noRoute });
 const st = idx.getState();
 const floatPos = () => ({ id: 1, strategyId: 'dip-hold', strategyName: 'Dip and hold', symbol: 'FLOAT', pairAddress: FJK9, mint: FLOAT_MINT, entryPrice: 0.002591, sizeSol: 0.1216, entryTime: new Date(Date.now() - 20 * MIN).toISOString(), exit: config.strategies.find(s => s.id === 'dip-hold').exit, highest: 0.002727, lastPrice: 0.002727 });
 const reset = () => { st.openPositions = []; st.trades = []; st.reentryCooldowns = {}; st.poolChecks = undefined; st.remarks = []; st.balance = 2.9; st.coolUntil = 0; st.riskResetAt = Date.now(); gt.pools = {}; gt.tokenPools = {}; gt.calls = []; gt.ds = {}; gt.dsCalls = []; gt.ds429 = false; gt.dsPairs = {}; gt.dsPairCalls = []; gt.dsNoPairs = false; poolPrice._clearCache(); };
 
-test('stored-pool pricing: FLOAT marked only from its stored pool FJk9 (fetched by address), never from the other FLOAT pool in the scan; first tick re-marks', async () => {
-  reset();
-  st.openPositions = [floatPos()];
-  scanPairs = [quietPair(D6Y, FLOAT_MINT, 0.00259, 121000)]; // only the OTHER pool is in the scan
-  gt.pools[FJK9] = gtRow(FJK9, FLOAT_MINT, 0.0028, 315000);
-  await idx.tick();
-  const p = st.openPositions.find(x => x.symbol === 'FLOAT');
-  assert.ok(p, 'still open');
-  assert.strictEqual(p.lastPrice, 0.0028, 'mark from stored pool');
-  assert.strictEqual(p.highest, 0.0028, 'high-water mark rebuilt from the stored pool');
-  assert.ok(p.storedPoolPriced);
-  assert.ok(gt.calls.some(u => u.includes('/pools/multi/' + FJK9)));
-  assert.ok(!gt.calls.some(u => u.includes(D6Y)));
-  assert.deepStrictEqual(st.remarks.map(r => [r.symbol, r.before, r.after]), [['FLOAT', 0.002727, 0.0028]]);
-});
-
-test('stored-pool pricing: the close fill uses the stored pool price (sl at FJk9 price, not the other pool)', async () => {
+// PR14 (Liviu t72u): the scan no longer marks or exits legacy positions; the ~5 s exit loop does, on Jupiter
+// sell quotes only (test/exits.js). The PR7/PR9 stored-pool mark/exit tests were retired with that code.
+test('PR14: a tick never marks or exits a legacy position from DexScreener (even a -60% scan price); it only refreshes pool liquidity', async () => {
   reset();
   st.openPositions = [Object.assign(floatPos(), { storedPoolPriced: 'x' })];
-  scanPairs = [quietPair(D6Y, FLOAT_MINT, 0.0030, 121000), quietPair(FJK9, FLOAT_MINT, 0.0024, 315000)];
+  scanPairs = [quietPair(FJK9, FLOAT_MINT, 0.0010, 222000)];
+  gt.pools[FJK9] = gtRow(FJK9, FLOAT_MINT, 0.0010, 222000);
   await idx.tick();
-  assert.strictEqual(st.openPositions.length, 0);
-  assert.strictEqual(st.trades[0].exitReason, 'sl');
-  assert.strictEqual(st.trades[0].exitPrice, 0.0024);
-  assert.strictEqual(st.trades[0].pairAddress, FJK9);
-});
-
-test('stored pool price unavailable: hold and retry next tick (no exit off another pool), time exit still fires', async () => {
-  reset();
-  st.openPositions = [Object.assign(floatPos(), { storedPoolPriced: 'x' })];
-  scanPairs = [quietPair(D6Y, FLOAT_MINT, 0.0010, 121000)]; // other pool crashed -60%: must be ignored
-  await idx.tick();
-  assert.strictEqual(st.openPositions.length, 1, 'held');
-  assert.strictEqual(st.openPositions[0].priceStale, true);
-  assert.strictEqual(st.openPositions[0].lastPrice, 0.002727, 'mark unchanged');
-  // past max hold while stale and under water -> time-stale exit at the last stored-pool mark
-  st.openPositions[0].entryTime = new Date(Date.now() - 95 * MIN).toISOString();
-  st.openPositions[0].lastPrice = 0.0025;
-  await idx.tick();
-  assert.strictEqual(st.openPositions.length, 0);
-  assert.strictEqual(st.trades[0].exitReason, 'time-stale');
-  assert.strictEqual(st.trades[0].exitPrice, 0.0025);
+  assert.strictEqual(st.openPositions.length, 1, 'no exit from the scan');
+  assert.strictEqual(st.openPositions[0].lastPrice, 0.002727, 'no DexScreener mark');
+  assert.strictEqual(st.openPositions[0].lastLiquidityUsd, 222000);
+  assert.strictEqual(st.trades.length, 0);
 });
 
 test('entry: chosen pool >5% off the main pool (highest liquidity, slow DexScreener path) -> skipped as divergence; <=5% -> bought on the chosen pool', async () => {
@@ -242,34 +215,6 @@ test('unpaused books: momentum/dip-buyers/buyer-turn at half size, aggressive-fl
   for (const id of ['momentum-entry', 'buyer-turn']) assert.strictEqual(state.stratSizeMult[id], 0.5, id);
   assert.strictEqual(state.stratSizeMult['aggressive-flow'], 0.25, 'aggressive-flow stratSizeMult 0.25');
   assert.strictEqual(state.stratSizeMult['dip-hold'], 1);
-});
-
-test('PR9 off-scan pricing: HPD-like position (stored pool not in the scan, stuck) is re-marked from DexScreener by pair address on the next tick and its TP fires', async () => {
-  reset();
-  const hpd = { id: 7, strategyId: 'aggressive-flow', strategyName: 'Aggressive flow scalp', symbol: 'HPD', pairAddress: 'HPDPOOL', mint: 'HPDM', entryPrice: 0.0000133, sizeSol: 0.113, entryTime: new Date(Date.now() - 14 * MIN).toISOString(), exit: config.strategies.find(s => s.id === 'aggressive-flow').exit, highest: 0.0000133, lastPrice: 0.0000133, storedPoolPriced: 'x', entryPriceSource: 'scan', priceStale: true };
-  st.openPositions = [hpd];
-  scanPairs = [];
-  hb._setDeps({ opts: { hostCooldownMs: 30000 } });
-  gt.dsPairs.HPDPOOL = { price: 0.0000141, liq: 50000 }; // +6%: above aggressive-flow TP
-  await idx.tick();
-  assert.ok(gt.dsPairCalls.some(u => u.includes('HPDPOOL')), 'priced through DexScreener pairs');
-  assert.ok(!gt.calls.some(u => u.includes('/pools/multi/HPDPOOL')), 'not GeckoTerminal behind the scan cooldown');
-  assert.strictEqual(st.openPositions.length, 0, 'TP fired');
-  assert.strictEqual(st.trades[0].exitReason, 'tp'); assert.strictEqual(st.trades[0].exitPrice, 0.0000141);
-  const r = st.remarks[st.remarks.length - 1];
-  assert.deepStrictEqual([r.symbol, r.before, r.after, r.source], ['HPD', 0.0000133, 0.0000141, 'dexscreener']);
-});
-
-test('PR9 off-scan pricing: a drained pool (DexScreener liquidity < $1000) gives no mark -> hold, no phantom TP', async () => {
-  reset();
-  st.openPositions = [{ id: 8, strategyId: 'aggressive-flow', symbol: 'RUG', pairAddress: 'RUGPOOL', mint: 'RUGM', entryPrice: 0.0000133, sizeSol: 0.1, entryTime: new Date(Date.now() - 5 * MIN).toISOString(), exit: config.strategies.find(s => s.id === 'aggressive-flow').exit, highest: 0.0000133, lastPrice: 0.0000133, storedPoolPriced: 'x' }];
-  scanPairs = [];
-  gt.dsPairs.RUGPOOL = { price: 0.00001635, liq: 4.57 };
-  await idx.tick();
-  assert.strictEqual(st.openPositions.length, 1, 'held');
-  assert.strictEqual(st.openPositions[0].priceStale, true);
-  assert.strictEqual(st.openPositions[0].lastPrice, 0.0000133);
-  assert.strictEqual(poolPrice.pairStats.lowLiquidity, 1);
 });
 
 test('PR9 independent main-pool check: the entry scan row is never its own verification (GrokCity/HPD case); DexScreener main == entry pool -> verified, mainSource dexscreener', async () => {

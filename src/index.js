@@ -24,6 +24,8 @@ const { makeBooks } = require('./books/engine');
 const { classifyBlocked } = require('./books/blocklist');
 const { makeDashboardApi, equityLog } = require('./dashboardApi');
 const newPools = require('./newPools');
+const { makeLegacyExits, nextDelayMs, makeStats } = require('./exitLoop');
+const stopFillsMod = require('./stopFills');
 const SERVER_STARTED_AT = new Date().toISOString();
 
 const BUILD = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.SOURCE_COMMIT || null;
@@ -241,68 +243,13 @@ async function tick() {
     addActivity('SCAN: ' + pairs.length + ' pairs');
     const byAddr = {};
     for (const p of pairs) if (p && p.pairAddress) byAddr[p.pairAddress] = p;
-    // PR7 stored-pool pricing: every mark, exit check and close fill comes ONLY from the pool stored
-    // on the position (pos.pairAddress). Pools not in this scan are fetched by address; if the stored
-    // pool has no price this tick the position holds (only time exits may fire) and retries next tick.
-    // PR9: off-scan pools are priced by pair address through DexScreener (own budget); positions entered
-    // from DexScreener are only ever marked from DexScreener (same source as their entry fill).
-    const storedPools = await poolPrice.storedPoolPrices(state.openPositions.map(function (p) { return p.pairAddress; }), pairs, {
-      dsOnly: state.openPositions.filter(function (p) { return p.entryPriceSource === 'dexscreener'; }).map(function (p) { return p.pairAddress; })
-    });
-    const stillOpen = [];
-    for (const pos of state.openPositions) {
-      let pair = null;
-      if (pos.pairAddress) pair = storedPools[pos.pairAddress] || null;
-      else if (!pos.noPoolLogged) {
-        pos.noPoolLogged = true;
-        addActivity('PRICE ' + pos.symbol + ': no stored pool on this position, kept old pricing (entry price)');
-      }
-      const fresh = !!(pair && pair.priceUsd > 0);
-      if (fresh && !pos.storedPoolPriced) {
-        // First tick on stored-pool pricing: re-mark from the stored pool and drop marks taken elsewhere.
-        const before = pos.lastPrice;
-        pos.storedPoolPriced = new Date().toISOString();
-        pos.highest = Math.max(Number(pos.entryPrice) || 0, pair.priceUsd);
-        if (pos.judgedHigh != null) delete pos.judgedHigh;
-        state.remarks = (state.remarks || []).concat([{ symbol: pos.symbol, pairAddress: pos.pairAddress, before: before == null ? null : before, after: pair.priceUsd, at: pos.storedPoolPriced }]).slice(-20);
-        addActivity('PRICE re-mark ' + pos.symbol + ' from stored pool ' + String(pos.pairAddress).slice(0, 6) + ': ' + (before == null ? 'n/a' : Number(before).toPrecision(5)) + ' -> ' + Number(pair.priceUsd).toPrecision(5));
-      }
-      if (fresh && pos.markSource !== pair.source) {
-        if (pos.markSource || pos.priceStale) {
-          state.remarks = (state.remarks || []).concat([{ symbol: pos.symbol, pairAddress: pos.pairAddress, before: pos.lastPrice == null ? null : pos.lastPrice, after: pair.priceUsd, source: pair.source, prevSource: pos.markSource || null, at: new Date().toISOString() }]).slice(-20);
-          addActivity('PRICE ' + pos.symbol + ' marked from ' + pair.source + ': ' + (pos.lastPrice == null ? 'n/a' : Number(pos.lastPrice).toPrecision(5)) + ' -> ' + Number(pair.priceUsd).toPrecision(5));
-        }
-        pos.markSource = pair.source;
-      }
-      if (fresh) { pos.lastPrice = pair.priceUsd; pos.lastPricedAt = new Date().toISOString(); pos.priceStale = false; }
-      else if (pos.pairAddress) {
-        if (!pos.priceStale) addActivity('PRICE ' + pos.symbol + ': stored pool price unavailable, holding (retry next tick)');
-        pos.priceStale = true;
-      }
-      const price = fresh ? pair.priceUsd : (pos.pairAddress ? (Number(pos.lastPrice) || pos.entryPrice) : pos.entryPrice);
-      if (fresh && price > (pos.highest || 0)) pos.highest = price;
-      // PR11 stock block: an open legacy position on a tokenised stock (TTWO, NIO, ...) is closed at the
-      // fresh stored-pool price (legacy positions hold no token amount, so no Jupiter sell quote exists).
-      const stockWhy = classifyBlocked({ mint: pos.mint, symbol: pos.symbol, name: pos.name });
-      let exit = null;
-      if (stockWhy && fresh) {
-        exit = { reason: 'stock-block', fillPrice: price };
-        state.stockClosures = (state.stockClosures || []).concat([{ symbol: pos.symbol, mint: pos.mint || null, strategyId: pos.strategyId, reason: stockWhy, price: price, priceSource: pair.source, at: new Date().toISOString() }]).slice(-20);
-      } else if (stockWhy && !pos.stockWaitLogged) { pos.stockWaitLogged = true; addActivity('STOCK ' + pos.symbol + ' blocked (' + stockWhy + '), closing at the next fresh price'); }
-      if (!exit) exit = shouldExit(pos, price, fresh || !pos.pairAddress);
-      if (exit) {
-        const pnl = computePnl(pos, exit.fillPrice);
-        state.balance += pos.sizeSol + pnl;
-        const trade = Object.assign({}, pos, { legacy: true, book: null, strategyVersion: (pos.strategyId || 'legacy') + ' legacy', exitReason: exit.reason, exitPrice: exit.fillPrice, exitPriceSource: pos.markSource || null, pnlSol: pnl, pnlPct: +((pnl / (pos.sizeSol || 1)) * 100).toFixed(3), closedAt: new Date().toISOString() });
-        state.trades.unshift(trade);
-        if (state.trades.length > 100) state.trades.pop();
-        logTrade(trade);
-        reentry.recordExit(state, trade, config);
-        state.decisions.unshift(logDecision('EXIT', pos.symbol, exit.reason, { pnl: pnl.toFixed(4) }));
-        addActivity('EXIT ' + pos.symbol + ' ' + exit.reason + ' pnl=' + pnl.toFixed(4));
-      } else stillOpen.push(pos);
+    // PR14: legacy positions are no longer marked or exited here. The exit loop (startExitLoop, ~5 s)
+    // marks and exits every open trade on Jupiter sell quotes only. The scan only refreshes pool
+    // liquidity on open positions (logged on stop fills).
+    for (const pos of state.openPositions.concat(books.ensure(state).open)) {
+      const row = pos.pairAddress && byAddr[pos.pairAddress];
+      if (row && row.liquidityUsd > 0) { pos.lastLiquidityUsd = row.liquidityUsd; pos.lastLiquidityAt = new Date().toISOString(); }
     }
-    state.openPositions = stillOpen;
     reentry.prune(state);
     const labNotes = labStep(state, pairs);
     for (const note of labNotes) addActivity(note);
@@ -367,6 +314,15 @@ async function tick() {
           exec.position.rugCheck = check;
           exec.position.legacy = true;
           exec.position.strategyVersion = sig.strategyId + ' legacy';
+          exec.position.entryLiquidityUsd = exec.position.entryLiquidityUsd || (sig.pair && sig.pair.liquidityUsd) || null;
+          // PR14: record the token amount from a Jupiter buy quote at size (read-only quote, no swap), so the
+          // exit loop can quote the exact amount. Entry rules and the entry fill are unchanged; if the quote
+          // fails the exit loop estimates tokens from the entry price instead (tokensEstimated: true).
+          if (exec.position.mint) {
+            const bq = await quotes.buyQuote(exec.position.mint, size);
+            if (bq.ok) { exec.position.tokensRaw = bq.outAmount; exec.position.entryQuote = { inAmount: bq.inAmount, outAmount: bq.outAmount, priceImpactPct: bq.priceImpactPct, at: new Date(bq.at).toISOString(), route: bq.route || null }; }
+            else exec.position.entryQuoteError = String(bq.error || '').slice(0, 80);
+          }
           state.openPositions.push(exec.position);
           state.balance -= size;
           state.decisions.unshift(logDecision('ENTRY', sig.symbol, exec.reason, { size: size }));
@@ -443,7 +399,8 @@ app.get('/api/trades', function (req, res) {
     jupiterQuotes: jupiterStats(),
     mintAuthority: Object.assign({}, mintAuth.stats),
     booksLimiter: booksLimiter.stats(),
-    exitLoop: Object.assign({}, exitLoopStats),
+    exitLoop: exitLoopView(),
+    stopFills: stopFillsView(),
     legacyTrades: state.trades || [],
     bookTrades: books.ensure(state).trades,
     trades: allTrades()
@@ -451,7 +408,7 @@ app.get('/api/trades', function (req, res) {
 });
 
 let dashApiInst = null; // built lazily (exitLoopStats is declared further down)
-function dashApi() { return dashApiInst || (dashApiInst = makeDashboardApi({ getState: function () { return state; }, config, books, equity, lockedSol, fetchStats, jupiterStats, mintAuth, exitLoopStats, booksLimiter, build: BUILD, startedAt: SERVER_STARTED_AT })); }
+function dashApi() { return dashApiInst || (dashApiInst = makeDashboardApi({ getState: function () { return state; }, config, books, equity, lockedSol, fetchStats, jupiterStats, mintAuth, exitLoopStats, exitLoopView, stopFillsView, booksLimiter, build: BUILD, startedAt: SERVER_STARTED_AT })); }
 app.get('/api/dashboard', function (req, res) {
   res.set('Cache-Control', 'no-store');
   try { res.json(dashApi().payload()); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
@@ -476,12 +433,12 @@ function recordEquity() {
 
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, rejects: books.ensure(state).rejects, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: Object.assign({}, exitLoopStats), trades: books.ensure(state).trades });
+  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, rejects: books.ensure(state).rejects, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), trades: books.ensure(state).trades });
 });
 
 app.get('/api/health', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, scoreboard: state.scoreboard || null, exitLoop: Object.assign({}, exitLoopStats), fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
+  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, scoreboard: state.scoreboard || null, exitLoop: exitLoopView(), stopFills: stopFillsView().summary, fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
 });
 
 function booksPayload() {
@@ -496,27 +453,73 @@ function allTrades() {
   return b.concat(state.trades || []).sort(function (x, y) { return Date.parse(y.closedAt) - Date.parse(x.closedAt); });
 }
 
-// PR11 exit loop for the books: re-quotes every open book position (Jupiter sell quote) then waits
-// config.books.exitLoopMs, so stops are checked every few seconds instead of every 45 s scan.
-const exitLoopStats = { passes: 0, errors: 0, lastPassAt: null, lastPassMs: null, lastError: null };
+// PR14 (Liviu t72u): ONE exit loop for every open trade (4 books + legacy), separate from the 45 s scan.
+// Each pass sells-quotes every open position on Jupiter (quote API only) and exits on that quote; target
+// period config.books.exitLoopMs (5 s), stretched to n * 60/exitQuotesPerMin s when many trades are open.
+const exitLoopStats = makeStats();
+const legacyExits = makeLegacyExits({
+  config, quotes, mintAuth, sellAgent, computePnl, classifyBlocked,
+  log: function (type, symbol, reason) { state.decisions.unshift(logDecision(type, symbol, reason)); },
+  onClose: function (trade, pos) {
+    state.trades.unshift(trade);
+    if (state.trades.length > 100) state.trades.pop();
+    logTrade(trade);
+    reentry.recordExit(state, trade, config);
+    state.decisions.unshift(logDecision('EXIT', pos.symbol, trade.exitReason, { pnl: trade.pnlSol.toFixed(4) }));
+    const sf = trade.stopFill;
+    addActivity('EXIT ' + pos.symbol + ' ' + trade.exitReason + ' pnl=' + trade.pnlSol.toFixed(4) + (sf ? ' (stop ' + sf.stopLevelPct + '%, fill ' + sf.actualFillPct + '%, overshoot ' + sf.overshootPct + '%)' : ''));
+  }
+});
+let exitPassRunning = false;
 async function exitLoop() {
+  if (exitPassRunning) return 0;
+  exitPassRunning = true;
   const t0 = Date.now();
+  if (exitLoopStats.lastPassStart) { exitLoopStats.passPeriods.push((t0 - exitLoopStats.lastPassStart) / 1000); if (exitLoopStats.passPeriods.length > 300) exitLoopStats.passPeriods.shift(); }
+  exitLoopStats.lastPassStart = t0;
+  let n = 0;
   try {
-    const changed = await books.runExits(state);
+    n = books.ensure(state).open.length;
+    const changed = await books.runExitsInner(state, exitLoopStats);
+    n += await legacyExits.run(state, exitLoopStats);
     exitLoopStats.passes += 1;
-    if (changed && !ticking) saveState(state);
+    exitLoopStats.positionsChecked += n;
+    if ((changed || n) && !ticking) saveState(state);
   } catch (e) {
     exitLoopStats.errors += 1;
     exitLoopStats.lastError = String(e.message || e).slice(0, 120);
-    console.error('books exit loop', e);
-  }
+    console.error('exit loop', e);
+  } finally { exitPassRunning = false; }
   exitLoopStats.lastPassAt = new Date().toISOString();
   exitLoopStats.lastPassMs = Date.now() - t0;
+  exitLoopStats.avgPassMs = exitLoopStats.avgPassMs == null ? exitLoopStats.lastPassMs : Math.round(exitLoopStats.avgPassMs * 0.9 + exitLoopStats.lastPassMs * 0.1);
+  return n;
 }
+function exitLoopView() {
+  return Object.assign(exitLoopStats.view({ targetMs: config.books.exitLoopMs, exitQuotesPerMin: config.books.exitQuotesPerMin, maxExitQuoteAgeSec: config.books.maxExitQuoteAgeSec },
+    (state.openPositions || []).length + books.ensure(state).open.length), { legacy: Object.assign({}, legacyExits.stats), markSource: 'jupiter-sell-quote (all open trades)' });
+}
+function stopFillsView() { return { summary: stopFillsMod.summary(state), latest: (state.stopFills || []).slice(0, 50) }; }
 function startExitLoop() {
-  (async function loop() { await exitLoop(); setTimeout(loop, config.books.exitLoopMs); })();
+  (async function loop() {
+    const t0 = Date.now();
+    const n = await exitLoop();
+    const d = nextDelayMs(Date.now() - t0, n, { targetMs: config.books.exitLoopMs, exitQuotesPerMin: config.books.exitQuotesPerMin });
+    exitLoopStats.lastDelayMs = d;
+    setTimeout(loop, d);
+  })();
 }
 
+function renderStopFills() {
+  const v = stopFillsView();
+  const sm = v.summary;
+  const rows = v.latest.slice(0, 10).map(function (f) {
+    return '<tr><td>' + f.strategyId + '</td><td>' + f.symbol + '</td><td>' + f.stopLevelPct + '%</td><td>' + (f.lastCheckPnlPct == null ? '-' : f.lastCheckPnlPct + '%') + '</td><td>' + f.actualFillPct + '%</td><td class="loss">' + f.overshootPct + '%</td><td>' + (f.sinceLastCheckSec == null ? '-' : f.sinceLastCheckSec + 's') + '</td><td>' + (f.priceImpactPct == null ? '-' : f.priceImpactPct + '%') + '</td></tr>';
+  }).join('');
+  const el = exitLoopView();
+  return '<h3 style="margin:10px 0 4px">Stop fills (Jupiter sell quotes) \u00b7 ' + sm.count + ' \u00b7 avg overshoot ' + (sm.avgOvershootPct == null ? '-' : sm.avgOvershootPct + '%') + ' \u00b7 worst ' + (sm.maxOvershootPct == null ? '-' : sm.maxOvershootPct + '%') + '</h3><p class="mute">exit loop: check every ' + (el.checkIntervalSec.median == null ? '-' : el.checkIntervalSec.median + 's') + ' (median), ' + el.openPositions + ' open, ' + el.errors + ' errors</p>' +
+    '<table style="width:100%;font-size:13px"><tr class="mute"><th align="left">strategy</th><th>token</th><th>stop</th><th>last check</th><th>fill</th><th>overshoot</th><th>since check</th><th>impact</th></tr>' + rows + '</table>';
+}
 function renderBooks() {
   const rows = books.report(state).map(function (b) {
     const cls = (b.profitPerTradeSol || 0) >= 0 ? 'win' : 'loss';
@@ -524,7 +527,7 @@ function renderBooks() {
   }).join('');
   const sb = state.scoreboard || {};
   return '<section class="card" style="margin:12px auto;max-width:1180px;padding:12px"><h2 style="margin:0 0 6px">Books (paper, ' + config.books.sizeSol + ' SOL each, Jupiter-quoted fills)</h2><p class="mute">scoreboard ' + (sb.epoch || '') + ' since ' + (sb.since || '') + ' \u00b7 build ' + String(BUILD || 'local').slice(0, 7) + ' \u00b7 profit per trade after 1.1% costs</p>' +
-    '<table style="width:100%;font-size:13px"><tr class="mute"><th align="left">book</th><th>trades</th><th>win</th><th>SOL/trade</th><th>net w/o best</th><th>worst</th><th>open</th></tr>' + rows + '</table></section>';
+    '<table style="width:100%;font-size:13px"><tr class="mute"><th align="left">book</th><th>trades</th><th>win</th><th>SOL/trade</th><th>net w/o best</th><th>worst</th><th>open</th></tr>' + rows + '</table>' + renderStopFills() + '</section>';
 }
 
 if (require.main === module) app.listen(config.port, function () {

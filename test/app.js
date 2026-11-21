@@ -206,6 +206,8 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
   // PR13: the new_pools feed never touches the network in tests.
   require('../src/newPools')._setDeps({ http: { get: async () => ({ status: 200, data: { data: [] } }) } });
   const idx = require('../src/index');
+  const noRoute = async () => { throw Object.assign(new Error('400'), { response: { status: 400, data: { error: 'COULD_NOT_FIND_ANY_ROUTE' } } }); };
+  idx.booksLimiter.setHttp({ get: noRoute, post: noRoute }); // PR14: no Jupiter in tests
   await idx.tick();
   const st = idx.getState();
   assert.ok(!st.pausedIds.includes('dip-hold'), 'dip-hold unpaused');

@@ -172,7 +172,7 @@ function makeDashboardApi(deps) {
         scanner: deps.fetchStats(),
         rugCheck: { mintAuthority: Object.assign({}, deps.mintAuth.stats), stockBlocks: b.stockBlocks || null, rejectsByReason: rejects.byReason || {}, recentRejects: (rejects.recent || []).slice(0, 12), poolChecks: state.poolChecks ? { checked: state.poolChecks.checked, verified: state.poolChecks.verified, divergenceSkips: state.poolChecks.divergenceSkips, unverifiedSkips: state.poolChecks.unverifiedSkips } : null },
         strategist: { rejectsByBook: rejects.byBook || {}, entries: b.entries || null, recentDecisions: (state.decisions || []).slice(0, 12) },
-        executor: { exitLoop: Object.assign({}, deps.exitLoopStats), jupiterQuotes: deps.jupiterStats(), booksLimiter: deps.booksLimiter ? deps.booksLimiter.stats() : null },
+        executor: { exitLoop: deps.exitLoopView ? deps.exitLoopView() : Object.assign({}, deps.exitLoopStats), stopFills: deps.stopFillsView ? deps.stopFillsView().summary : null, jupiterQuotes: deps.jupiterStats(), booksLimiter: deps.booksLimiter ? deps.booksLimiter.stats() : null },
         logger: { tradesLogged: all.length, lastTradeAt: all[0] ? all[0].closedAt : null, lastSaveAt: state.lastUpdate || null, activity: (state.activity || []).slice(0, 15) }
       }
     };
