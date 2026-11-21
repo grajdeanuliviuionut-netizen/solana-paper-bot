@@ -66,6 +66,8 @@ const dipPair = (sym, pool, mint, price, liq) => ({ pairAddress: pool, mint, sym
 const quietPair = (pool, mint, price, liq) => ({ pairAddress: pool, mint, symbol: 'FLOAT', priceUsd: price, liquidityUsd: liq || 100000, volumeH1: 0, priceChange: { m5: -9, h1: 30, h6: 0, h24: 0 }, txns: { buys: 1, sells: 100 }, ageDays: 5 });
 
 fs.writeFileSync(process.env.STATE_FILE, JSON.stringify({ balance: 2.9, openPositions: [], trades: [], activity: [], decisions: [], paperReset: 'work-1' }));
+// PR13: the new_pools feed never touches the network in tests.
+require('../src/newPools')._setDeps({ http: { get: async () => ({ status: 200, data: { data: [] } }) } });
 const idx = require('../src/index');
 const st = idx.getState();
 const floatPos = () => ({ id: 1, strategyId: 'dip-hold', strategyName: 'Dip and hold', symbol: 'FLOAT', pairAddress: FJK9, mint: FLOAT_MINT, entryPrice: 0.002591, sizeSol: 0.1216, entryTime: new Date(Date.now() - 20 * MIN).toISOString(), exit: config.strategies.find(s => s.id === 'dip-hold').exit, highest: 0.002727, lastPrice: 0.002727 });
