@@ -24,7 +24,7 @@ module.exports = {
         { field: 'volumeToLiquidity', op: '>=', value: 0.08 },
         { field: 'm5', op: '>=', value: -3 }
       ],
-      exit: { takeProfitPct: 5, stopLossPct: 4, trailAfterPct: 2, trailPct: 1.5, maxHoldMinutes: 20 }
+      exit: { takeProfitPct: 5, stopLossPct: 4, trailAfterPct: 2, trailPct: 1.5, maxHoldMinutes: 20, earlyFailAfterMin: 0 }
     },
     {
       id: 'momentum-entry',
@@ -37,11 +37,12 @@ module.exports = {
         { field: 'buySellRatioH1', op: '>=', value: 1.2 },
         { field: 'volumeToLiquidity', op: '>=', value: 0.08 }
       ],
-      exit: { takeProfitPct: 8, stopLossPct: 6, maxHoldMinutes: 25, earlyFailAfterMin: 8, earlyFailMinPeakPct: 1.5 }
+      exit: { takeProfitPct: 8, stopLossPct: 6, maxHoldMinutes: 25, earlyFailAfterMin: 0 }
     },
     {
       id: 'dip-buyers',
       name: 'Dip then buyers',
+      paused: true,
       universe: { minAgeDays: 1, maxAgeDays: 45, minLiquidityUsd: 20000, maxLiquidityUsd: 400000 },
       entry: [
         { field: 'h1', op: '<=', value: -4 },
@@ -50,11 +51,12 @@ module.exports = {
         { field: 'buySellRatioH1', op: '>=', value: 1.4 },
         { field: 'volumeToLiquidity', op: '>=', value: 0.06 }
       ],
-      exit: { takeProfitPct: 8, stopLossPct: 6, maxHoldMinutes: 20, earlyFailAfterMin: 8, earlyFailMinPeakPct: 1.5 }
+      exit: { takeProfitPct: 6, stopLossPct: 6, maxHoldMinutes: 45, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0 }
     },
     {
       id: 'buyer-turn',
       name: 'Buyers in control',
+      paused: true,
       universe: { minAgeDays: 0.05, maxAgeDays: 60, minLiquidityUsd: 20000, maxLiquidityUsd: 800000 },
       entry: [
         { field: 'h1', op: '>=', value: -15 },
@@ -63,7 +65,20 @@ module.exports = {
         { field: 'buySellRatioH1', op: '>=', value: 1.3 },
         { field: 'volumeToLiquidity', op: '>=', value: 0.05 }
       ],
-      exit: { takeProfitPct: 8, stopLossPct: 6, maxHoldMinutes: 20, earlyFailAfterMin: 8, earlyFailMinPeakPct: 1.5 }
+      exit: { takeProfitPct: 6, stopLossPct: 6, maxHoldMinutes: 45, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0 }
+    },
+    {
+      id: 'dip-hold',
+      name: 'Dip and hold',
+      universe: { minAgeDays: 1, maxAgeDays: 45, minLiquidityUsd: 25000, maxLiquidityUsd: 400000 },
+      entry: [
+        { field: 'h1', op: '<=', value: -5 },
+        { field: 'h1', op: '>=', value: -14 },
+        { field: 'm5', op: '>=', value: 0.4 },
+        { field: 'buySellRatioH1', op: '>=', value: 1.5 },
+        { field: 'volumeToLiquidity', op: '>=', value: 0.06 }
+      ],
+      exit: { takeProfitPct: 6, stopLossPct: 6, maxHoldMinutes: 45, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0 }
     }
   ]
 };
