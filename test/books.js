@@ -231,6 +231,12 @@ test('stop fills at the Jupiter sell quote (honest gap), and no route for 10 min
   const tr = h.trades[0];
   assert.strictEqual(tr.exitReason, 'sl');
   assert.ok(Math.abs(tr.pnlPct - (-30 - 1.1)) < 1e-6, 'books the quoted -30%, not the -12% stop level: ' + tr.pnlPct);
+  const sf = h.state.stopFills[0];
+  assert.ok(sf && tr.stopFill, 'PR14 stop fill logged');
+  assert.strictEqual(sf.stopLevelPct, -Math.abs(tr.exit.stopLossPct));
+  assert.ok(Math.abs(sf.actualFillPct - (-30)) < 1e-6 && Math.abs(sf.overshootPct - (-30 - sf.stopLevelPct)) < 1e-6);
+  assert.strictEqual(sf.quoteAgeSec, 0);
+  assert.strictEqual(sf.lastCheckBefore, null, 'first check was the trigger');
   let route = true;
   const h2 = harness({ sell: (raw, t) => (route ? sellAt(1)(raw, t) : { ok: false, noRoute: true, at: t, error: 'COULD_NOT_FIND_ANY_ROUTE' }) });
   await h2.books.runEntries(h2.state, [row({ mint: 'NRmint', pairAddress: 'PN' })], gateOk);
@@ -239,6 +245,8 @@ test('stop fills at the Jupiter sell quote (honest gap), and no route for 10 min
   h2.adv(5000); await h2.books.runExits(h2.state);
   assert.strictEqual(h2.state.books.open.length, 1, 'holds while the route is missing < 10 min');
   h2.adv(10 * MIN); await h2.books.runExits(h2.state);
+  assert.strictEqual(h2.state.books.open.length, 1, 'PR14: 10 min but only 2 consecutive no-routes -> still holds');
+  for (let i = 0; i < 3; i++) { h2.adv(5000); await h2.books.runExits(h2.state); }
   assert.strictEqual(h2.trades[0].exitReason, 'no-route-total-loss');
   assert.ok(Math.abs(h2.trades[0].pnlPct - (-100 - 1.1)) < 1e-6);
 });
