@@ -76,7 +76,8 @@ test('feed rows go to the graduation sniper only, all other gates unchanged', as
     priceChange: { m5: 5, h1: 5, h6: 5, h24: 5 }, txns: { buys: 50, sells: 10 }, txnsM5: { buys: 30, sells: 10 }, pairCreatedAt: T - 5 * MIN, dexId: 'pumpswap', fetchedAt: T - 2000 };
   const quotes = { buyQuote: async (m, sol) => ({ ok: true, at: T, inAmount: String(sol * 1e9), outAmount: '10000000000', priceImpactPct: 0.3 }),
     sellQuote: async (m, raw) => ({ ok: true, at: T, inAmount: String(raw), outAmount: String(Math.floor(Number(raw) * 4.95e-3)), priceImpactPct: 0.3 }) };
-  const books = E.makeBooks({ config, quotes, mintAuth: { check: async () => ({ pass: true, reason: 'ok', decimals: 6, mintAuthority: null, freezeAuthority: null }) }, reentry, now: () => T });
+  const books = E.makeBooks({ config, quotes, mintAuth: { check: async () => ({ pass: true, reason: 'ok', decimals: 6, mintAuthority: null, freezeAuthority: null }) }, reentry, now: () => T,
+    holderCheck: { check: async () => ({ pass: true, reason: 'ok', lpLockedPct: 100 }) } }); // v2 LP/holder check stubbed (test/grad.js covers it)
   const state = { balance: 3, reentryCooldowns: {} };
   let passedExtra = 0;
   await books.runEntries(state, [], async () => ({ ok: true }), { 'graduation-sniper': [row] }, () => { passedExtra++; });

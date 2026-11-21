@@ -55,6 +55,7 @@ function entryFails(book, row, ctx) {
     const age = poolAgeMin(row, now);
     if (age == null) return 'no pairCreatedAt';
     if (age > e.maxPoolAgeMin || age < 0) return 'pool older than ' + e.maxPoolAgeMin + 'm';
+    if (e.minPoolAgeMin && age < e.minPoolAgeMin) return 'pool younger than ' + e.minPoolAgeMin + 'm';
     const t = row.txnsM5 || {};
     if (e.m5BuysGtSells && !(num(t.buys) > num(t.sells))) return 'm5 buys <= sells';
     return null;
@@ -130,7 +131,8 @@ function bookStats(trades, open, target) {
 }
 
 // ---------- runtime ----------
-function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock }) {
+function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep }) {
+  const sleepFn = sleep || (ms => new Promise(r => setTimeout(r, ms)));
   const C = config.books;
   const nowFn = clock || Date.now;
   let chain = Promise.resolve();
@@ -145,6 +147,12 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     if (!b.stockBlocks) b.stockBlocks = { count: 0, recent: [] };
     if (!b.snaps) b.snaps = {};
     if (!b.entries) b.entries = { attempts: 0, opened: 0 };
+    const gb = C.list.find(x => x.id === 'graduation-sniper');
+    if (gb && (!b.gradSniper || b.gradSniper.version !== gb.version)) {
+      b.gradSniper = { label: label(gb), version: gb.version, since: new Date(nowFn()).toISOString(), candidates: 0, candidateMints: [],
+        rejectsByCategory: { lp: 0, holders: 0, age: 0, impact: 0, other: 0 }, rejectedMintsByCategory: { lp: [], holders: [], age: [], impact: [], other: [] },
+        rejectsByReason: {}, entries: 0, closes: 0, confirmsTriggered: 0, confirmsConfirmed: 0, confirms: [] };
+    }
     return b;
   }
   function reject(state, book, row, reason, extra) {
@@ -155,6 +163,25 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     bb[key] = (bb[key] || 0) + 1;
     b.rejects.recent = [Object.assign({ at: new Date(nowFn()).toISOString(), book: book ? label(book) : null, symbol: row && row.symbol, mint: row && row.mint, reason }, extra || {})].concat(b.rejects.recent).slice(0, 50);
     if (log) log('SKIP', row && row.symbol, (book ? label(book) + ' ' : '') + reason);
+    if (book && book.id === 'graduation-sniper' && !/^re-entry cooldown/.test(String(reason))) gradCount(state, gradCategory(reason), reason, row && row.mint);
+  }
+  // Graduation sniper v2 counters (by category: lp, holders, age, impact, other; attempts + distinct mints).
+  function gradCount(state, category, reason, mint) {
+    const g = ensure(state).gradSniper;
+    if (!g) return;
+    g.rejectsByCategory[category] = (g.rejectsByCategory[category] || 0) + 1;
+    const key = String(reason).replace(/[-\d.]+%?$/, '').trim();
+    g.rejectsByReason[key] = (g.rejectsByReason[key] || 0) + 1;
+    const l = g.rejectedMintsByCategory[category] || (g.rejectedMintsByCategory[category] = []);
+    if (mint && !l.includes(mint)) { l.push(mint); if (l.length > 300) l.shift(); }
+  }
+  function gradCategory(reason) {
+    const r = String(reason);
+    if (/^lp:/.test(r)) return 'lp';
+    if (/^holders:/.test(r)) return 'holders';
+    if (/^impact:/.test(r)) return 'impact';
+    if (/^pool younger/.test(r)) return 'age';
+    return 'other';
   }
   function stockBlock(state, row, where) {
     const why = classifyBlocked({ mint: row.mint, symbol: row.symbol, name: row.name });
@@ -189,7 +216,14 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       for (const r of extra) if (r && !entryFails(book, r, ctx) && onExtraPass) onExtraPass(book, r);
       for (const row of (pairs || []).concat(extraOnly)) {
         if (!row || !row.mint) continue;
-        if (!entryFails(book, row, ctx)) out.push({ book, row, fields: signalFields(book, row, ctx) });
+        const why = entryFails(book, row, ctx);
+        if (book.id === 'graduation-sniper' && b.gradSniper && (!why || /^pool younger/.test(why))) {
+          const g = b.gradSniper;
+          if (!g.candidateMints.includes(row.mint)) { g.candidateMints.push(row.mint); if (g.candidateMints.length > 300) g.candidateMints.shift(); g.candidates++; }
+          // age: counted once per mint (it is re-seen every scan until it is 3 min old)
+          if (why && !(g.rejectedMintsByCategory.age || []).includes(row.mint)) gradCount(state, 'age', why, row.mint);
+        }
+        if (!why) out.push({ book, row, fields: signalFields(book, row, ctx) });
       }
     }
     return out;
@@ -226,6 +260,14 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         const rug = await mintAuth.check(row.mint);
         const rugCheck = { pass: rug.pass, reason: rug.reason, mintAuthority: rug.mintAuthority === undefined ? null : rug.mintAuthority, freezeAuthority: rug.freezeAuthority === undefined ? null : rug.freezeAuthority, program: rug.program || null, decimals: rug.decimals, checkedAt: rug.checkedAt, source: rug.source };
         if (!rug.pass) { reject(state, book, row, 'rug-check: ' + rug.reason); continue; }
+        const E = book.entry || {};
+        let holder = null;
+        if (E.lpLockedMinPct != null) {
+          // v2: LP lock/burn + holder concentration (RugCheck), fail closed.
+          const hc = holderCheck ? await holderCheck.check(row.mint, row.pairAddress, E, t) : { pass: false, reason: 'lp: no holder check configured' };
+          holder = { pass: hc.pass, reason: hc.reason, lpLockedPct: hc.lpLockedPct, top10Pct: hc.top10Pct, maxHolderPct: hc.maxHolderPct, maxHolderOwner: hc.maxHolderOwner, creator: hc.creator, creatorPct: hc.creatorPct, checkedAt: hc.checkedAt, source: hc.source };
+          if (!hc.pass) { reject(state, book, row, hc.reason, { holderCheck: holder }); continue; }
+        }
         const buy = await quotes.buyQuote(row.mint, C.sizeSol);
         if (!buy.ok) { reject(state, book, row, buy.noRoute ? 'no buy route' : 'buy quote failed', { error: buy.error }); continue; }
         const sell = await quotes.sellQuote(row.mint, buy.outAmount);
@@ -234,7 +276,9 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (!quoteFresh(buy, t2, C.maxPriceAgeSec)) { reject(state, book, row, 'stale buy quote (> ' + C.maxPriceAgeSec + 's)'); continue; }
         const lamportsIn = Number(buy.inAmount);
         const roundTripPct = (Number(sell.outAmount) / lamportsIn - 1) * 100;
-        if (roundTripPct < -C.maxRoundTripLossPct) { reject(state, book, row, 'round trip ' + roundTripPct.toFixed(1) + '%'); continue; }
+        const maxRt = E.maxRoundTripLossPct != null ? E.maxRoundTripLossPct : C.maxRoundTripLossPct;
+        if (roundTripPct < -maxRt) { reject(state, book, row, (E.maxRoundTripLossPct != null ? 'impact: ' : '') + 'round trip ' + roundTripPct.toFixed(1) + '%'); continue; }
+        if (E.maxSellImpactPct != null && !(Number(sell.priceImpactPct) <= E.maxSellImpactPct)) { reject(state, book, row, 'impact: sell quote impact > ' + E.maxSellImpactPct + '%', { sellImpactPct: sell.priceImpactPct }); continue; }
         const tokensUi = Number(buy.outAmount) / 10 ** rug.decimals;
         const fillSolPerToken = C.sizeSol / tokensUi;
         const quoteGapPct = row.priceNative > 0 ? (fillSolPerToken / row.priceNative - 1) * 100 : null;
@@ -249,13 +293,14 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           entryPrice: fillSolPerToken, entryPriceUnit: 'SOL/token (Jupiter fill)', entryPriceUsdDexscreener: row.priceUsd, entryQuoteGapPct: quoteGapPct == null ? null : +quoteGapPct.toFixed(3),
           entryQuote: { side: 'buy', inMint: 'SOL', inAmount: buy.inAmount, outAmount: buy.outAmount, priceImpactPct: buy.priceImpactPct, route: buy.route, at: new Date(buy.at).toISOString() },
           entrySellCheck: { inAmount: sell.inAmount, outAmount: sell.outAmount, priceImpactPct: sell.priceImpactPct, roundTripPct: +roundTripPct.toFixed(3), at: new Date(sell.at).toISOString() },
-          entrySignal: fields, rugCheck, exit: book.exit,
+          entrySignal: fields, rugCheck, holderCheck: holder, exit: book.exit,
           markPct: +roundTripPct.toFixed(3), peakPct: +roundTripPct.toFixed(3), markSource: 'jupiter-sell-quote', markAt: new Date(sell.at).toISOString(),
           legs: [], partialDone: false, noRouteSince: null
         };
         b.open.push(pos);
         state.balance -= C.sizeSol;
         b.entries.opened++;
+        if (book.id === 'graduation-sniper' && b.gradSniper && book.version === b.gradSniper.version) b.gradSniper.entries++;
         if (log) log('ENTRY', row.symbol, label(book) + ' size ' + C.sizeSol + ' SOL, Jupiter fill, impact ' + buy.priceImpactPct + '%, round trip ' + roundTripPct.toFixed(2) + '%');
       }
     });
@@ -271,6 +316,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       exitPrice: pos.legs.length ? pos.legs[pos.legs.length - 1].fillSolPerToken : 0
     });
     b.open = b.open.filter(p => p.id !== pos.id);
+    if (pos.book === 'graduation-sniper' && b.gradSniper && pos.bookVersion === b.gradSniper.version) b.gradSniper.closes++;
     b.trades.unshift(trade);
     if (b.trades.length > 3000) b.trades.length = 3000;
     reentry.recordExit(state, trade, config, t);
@@ -307,8 +353,8 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     let changed = false;
     for (const pos of b.open.slice()) {
       const ex = pos.exit;
-      const q = await quotes.sellQuote(pos.mint, pos.tokensRemainingRaw);
-      const t = nowFn();
+      let q = await quotes.sellQuote(pos.mint, pos.tokensRemainingRaw);
+      let t = nowFn();
       const minsOpen = (t - Date.parse(pos.entryTime)) / MIN;
       pos.quoteChecks = (pos.quoteChecks || 0) + 1;
       if (!q.ok) {
@@ -323,6 +369,42 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       }
       pos.noRouteSince = null; pos.noRouteCount = 0;
       if (!quoteFresh(q, t, maxAge)) { pos.staleQuoteRefusals = (pos.staleQuoteRefusals || 0) + 1; continue; }
+      // Graduation sniper v2: a >= confirmDropPct drop vs the previous check (or > confirmImpactPct impact) is
+      // never booked off one quote. Re-quote the full amount (plus a small probe) confirmDelayMs later and
+      // decide/book from that second quote.
+      let confirm = null;
+      const gcf = pos.book === 'graduation-sniper' ? ((C.list.find(x => x.id === 'graduation-sniper') || {}).exit || {}) : {};
+      if (gcf.confirmDropPct) {
+        const pct1 = (Number(q.outAmount) / 1e9 / pos.costBasisRemainingSol - 1) * 100;
+        const prev = pos.lastCheck;
+        const rel = (p0, p1) => ((1 + p1 / 100) / (1 + p0 / 100) - 1) * 100;
+        const drop1 = prev ? rel(prev.pct, pct1) : null;
+        if ((drop1 != null && drop1 <= -gcf.confirmDropPct) || Number(q.priceImpactPct) > gcf.confirmImpactPct) {
+          const g = ensure(state).gradSniper;
+          await sleepFn(gcf.confirmDelayMs || 4000);
+          const q2 = await quotes.sellQuote(pos.mint, pos.tokensRemainingRaw);
+          const probeRaw = (BigInt(pos.tokensRemainingRaw) * BigInt(Math.round((gcf.confirmProbeFrac || 0.1) * 10000))) / 10000n;
+          const pq = probeRaw > 0n ? await quotes.sellQuote(pos.mint, String(probeRaw)) : null;
+          const t2 = nowFn();
+          const ok2 = q2 && q2.ok && quoteFresh(q2, t2, maxAge);
+          const pct2 = ok2 ? (Number(q2.outAmount) / 1e9 / pos.costBasisRemainingSol - 1) * 100 : null;
+          const drop2 = ok2 && prev ? rel(prev.pct, pct2) : null;
+          const probeBasis = pos.costBasisRemainingSol * (Number(probeRaw) / Number(BigInt(pos.tokensRemainingRaw)));
+          confirm = {
+            at: new Date(t2).toISOString(), symbol: pos.symbol, mint: pos.mint, strategyVersion: pos.strategyVersion, delayMs: gcf.confirmDelayMs || 4000,
+            previousCheck: prev ? { at: prev.at, pct: prev.pct } : null,
+            firstQuote: { outAmount: q.outAmount, pct: +pct1.toFixed(3), dropVsPrevPct: drop1 == null ? null : +drop1.toFixed(3), priceImpactPct: q.priceImpactPct, at: new Date(q.at).toISOString() },
+            confirmQuote: ok2 ? { outAmount: q2.outAmount, pct: +pct2.toFixed(3), dropVsPrevPct: drop2 == null ? null : +drop2.toFixed(3), priceImpactPct: q2.priceImpactPct, at: new Date(q2.at).toISOString() } : { ok: false, error: q2 && q2.error ? String(q2.error).slice(0, 80) : 'stale or failed' },
+            probeQuote: pq && pq.ok ? { tokensRaw: String(probeRaw), outAmount: pq.outAmount, pct: probeBasis > 0 ? +((Number(pq.outAmount) / 1e9 / probeBasis - 1) * 100).toFixed(3) : null, priceImpactPct: pq.priceImpactPct } : null,
+            confirmed: ok2 ? ((drop2 != null && drop2 <= -gcf.confirmDropPct) || Number(q2.priceImpactPct) > gcf.confirmImpactPct) : false
+          };
+          if (g) { g.confirmsTriggered++; if (confirm.confirmed) g.confirmsConfirmed++; g.confirms = [confirm].concat(g.confirms).slice(0, 30); }
+          pos.lastConfirm = confirm;
+          if (log) log('CONFIRM', pos.symbol, pos.strategyVersion + ' large drop re-quoted: first ' + confirm.firstQuote.pct + '%, second ' + (ok2 ? confirm.confirmQuote.pct + '%' : 'failed') + ', confirmed ' + confirm.confirmed);
+          if (!ok2) { changed = true; continue; }                           // nothing booked off a single quote
+          q = q2; t = t2;
+        }
+      }
       const pct = (Number(q.outAmount) / 1e9 / pos.costBasisRemainingSol - 1) * 100;
       const tokensUi = Number(pos.tokensRemainingRaw) / 10 ** (pos.decimals || 0);
       const price = tokensUi > 0 ? Number(q.outAmount) / 1e9 / tokensUi : null;
@@ -353,7 +435,9 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         pos.stopFill = stopFills.record(state, stopFills.build({ pos, strategyId: pos.book, strategyVersion: pos.strategyVersion, stopLevelPct: ex.stopLossPct, entryPriceSolPerToken: pos.entryPrice,
           prevCheck, fill: { price, pct, quoteAgeSec: (t - q.at) / 1000, priceImpactPct: q.priceImpactPct }, netPnlPct: netPct,
           liquidityUsd: pos.lastLiquidityUsd != null ? pos.lastLiquidityUsd : (pos.entrySignal && pos.entrySignal.liquidityUsd), now: t }));
+        if (confirm) Object.assign(pos.stopFill, { firstQuote: confirm.firstQuote, confirmQuote: confirm.confirmQuote, probeQuote: confirm.probeQuote, confirmed: confirm.confirmed });
       }
+      if (confirm) pos.exitConfirm = confirm;
       closeTrade(state, pos, d.reason, t);
     }
     return changed;
@@ -364,18 +448,27 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     const b = ensure(state);
     const t = nowFn();
     return C.list.map(book => {
-      const trades = b.trades.filter(x => x.book === book.id);
+      const all = b.trades.filter(x => x.book === book.id);
+      const trades = all.filter(x => (x.bookVersion || 1) === book.version);   // stats per version (v1 kept below)
       const open = b.open.filter(x => x.book === book.id);
+      const prevVers = [...new Set(all.map(x => x.bookVersion || 1).filter(v => v !== book.version))].sort();
+      const previousVersions = prevVers.map(v => Object.assign({ label: book.id + ' v' + v, version: v }, bookStats(all.filter(x => (x.bookVersion || 1) === v), [], C.targetTrades)));
       return Object.assign({ strategyId: book.id, name: book.name, version: book.version, label: label(book), sizeSol: C.sizeSol, stratSizeMult: 1, maxOpen: C.maxOpenPerBook, entry: book.entry, exit: book.exit },
         bookStats(trades, open, C.targetTrades),
         { open: open.map(p => ({ symbol: p.symbol, mint: p.mint, entryTime: p.entryTime, markPct: p.markPct, peakPct: p.peakPct, markSource: p.markSource, markAt: p.markAt, markAgeSec: p.markAt ? +((t - Date.parse(p.markAt)) / 1000).toFixed(1) : null, remainingFrac: p.remainingFrac, partialDone: p.partialDone })),
           firstEntries: trades.slice(-3).reverse().map(x => ({ symbol: x.symbol, entryTime: x.entryTime, exitReason: x.exitReason, pnlPct: x.pnlPct })).concat(open.slice(0, 2).map(p => ({ symbol: p.symbol, entryTime: p.entryTime, open: true }))),
-          rejects: b.rejects.byBook[book.id] || {} });
+          rejects: b.rejects.byBook[book.id] || {}, previousVersions,
+          v2: book.id === 'graduation-sniper' && b.gradSniper ? gradView(b.gradSniper) : undefined });
     });
+  }
+  function gradView(g) {
+    return { label: g.label, since: g.since, candidates: g.candidates, rejectsByCategory: g.rejectsByCategory,
+      rejectedMintsByCategory: Object.fromEntries(Object.entries(g.rejectedMintsByCategory).map(([k, v]) => [k, v.length])),
+      rejectsByReason: g.rejectsByReason, entries: g.entries, closes: g.closes, confirmsTriggered: g.confirmsTriggered, confirmsConfirmed: g.confirmsConfirmed, confirms: g.confirms.slice(0, 10) };
   }
   function lockedSol(state) { return ensure(state).open.reduce((a, p) => a + num(p.costBasisRemainingSol), 0); }
 
-  return { ensure, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked };
+  return { ensure, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
 }
 
 module.exports = { makeBooks, entryFails, decideExit, quoteFresh, bookStats, high24Estimate, dropFromHighPct, m5VolumeVsHourAvg, isPumpOrigin, label };

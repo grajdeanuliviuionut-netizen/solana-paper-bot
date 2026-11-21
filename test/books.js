@@ -22,7 +22,7 @@ test('config: 4 books, same 0.05 SOL size, 2 open each, name + version', () => {
   assert.strictEqual(config.books.list.length, 4);
   assert.strictEqual(config.books.sizeSol, 0.05);
   assert.strictEqual(config.books.maxOpenPerBook, 2);
-  assert.deepStrictEqual(config.books.list.map(E.label), ['graduation-sniper v1', 'runner-hunter v1', 'volume-explosion v1', 'trending-pullback v1']);
+  assert.deepStrictEqual(config.books.list.map(E.label), ['graduation-sniper v2', 'runner-hunter v1', 'volume-explosion v1', 'trending-pullback v1']);
 });
 
 test('graduation sniper entry: pump origin, pool <= 15 min, m5 buys > sells, liquidity >= $30k', () => {
@@ -145,7 +145,8 @@ function harness(opts) {
   };
   const mintAuth = { check: async () => (opts.rug || { pass: true, reason: 'mint+freeze revoked', mintAuthority: null, freezeAuthority: null, decimals: 6, program: 'spl-token', checkedAt: 'x', source: 'test' }) };
   const trades = [];
-  const books = E.makeBooks({ config, quotes, mintAuth, reentry, saveTrade: tr => trades.push(tr), now: () => t });
+  const holderCheck = { check: async () => (opts.holder || { pass: true, reason: 'ok', lpLockedPct: 100, top10Pct: 12, maxHolderPct: 3, creatorPct: 0 }) };
+  const books = E.makeBooks({ config, quotes, mintAuth, reentry, saveTrade: tr => trades.push(tr), now: () => t, holderCheck, sleep: async ms => { t += ms; } });
   const state = { balance: 3, reentryCooldowns: {} };
   return { books, state, q, trades, adv: ms => { t += ms; }, now: () => t };
 }
@@ -160,7 +161,8 @@ test('entry: Jupiter buy fill + sell-route check, book name/version, rug-check r
   const b = h.state.books;
   const pos = b.open.find(p => p.book === 'graduation-sniper');
   assert.ok(pos, JSON.stringify(b.rejects));
-  assert.strictEqual(pos.strategyVersion, 'graduation-sniper v1');
+  assert.strictEqual(pos.strategyVersion, 'graduation-sniper v2');
+  assert.ok(pos.holderCheck && pos.holderCheck.pass && pos.holderCheck.lpLockedPct === 100);
   assert.strictEqual(pos.sizeSol, 0.05);
   assert.strictEqual(pos.entryQuote.outAmount, '10000000000');
   assert.strictEqual(pos.entryQuote.priceImpactPct, 0.5);
