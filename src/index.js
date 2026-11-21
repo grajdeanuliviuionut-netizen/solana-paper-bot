@@ -3,7 +3,14 @@ const config = require('./config');
 const { loadState, saveState, logTrade } = require('./logger');
 const { getCandidatePairs } = require('./dataFetcher');
 const { generateSignals } = require('./buyAgent');
-const { shouldExit, computePnl } = require('./sellAgent');
+const sellAgent = require('./sellAgent');
+
+const shouldExit = sellAgent.shouldExit;
+const computePnl = sellAgent.computePnl || function(pos, exitPrice) {
+  const gross = (exitPrice - pos.entryPrice) / pos.entryPrice;
+  const net = gross - (config.costRoundtripPct || 1.1) / 100;
+  return net * pos.sizeSol;
+};
 
 let state = loadState();
 if (!state || typeof state !== 'object') state = {};
@@ -68,9 +75,9 @@ async function tick() {
       if (rejections.length) {
         addActivity(`Rejections: ${rejections.slice(0, 2).join(' | ')}`);
       }
-      for (const sig of signals.slice(0, 5)) {
+      for (const sig of signals.slice(0, 3)) {
         if (!canOpen()) break;
-        const already = state.openPositions.some(p => p.symbol === sig.symbol || (p.pairAddress === sig.pairAddress && p.strategyId === sig.strategyId));
+        const already = state.openPositions.some(p => p.symbol === sig.symbol);
         if (already) continue;
         const pos = {
           id: Date.now() + Math.random(),
