@@ -168,6 +168,7 @@ function makeDashboardApi(deps) {
       legacyStrategies,
       openPositions: open,
       positionsByStrategy: positionsByStrategy(),
+      gradSniperV2: deps.books.gradView ? deps.books.gradView(state) : null,
       recentTrades: all.slice(0, 60).map(compactTrade),
       agents: {
         manager: { lastUpdate: state.lastUpdate || null, pollIntervalMs: cfg.pollIntervalMs, blockReason: state.blockReason || '', pausedIds: state.pausedIds || [], stratSizeMult: state.stratSizeMult || {}, maxOpen: cfg.maxOpen, legacyOpen: (state.openPositions || []).length, bookOpen: (b.open || []).length },
@@ -214,6 +215,10 @@ function makeDashboardApi(deps) {
       const label = book.id + ' v' + book.version;
       const g = group({ kind: 'book', id: book.id, name: book.name + ' v' + book.version, label, status: 'active', maxOpen: cfg.books.maxOpenPerBook, sizeSol: cfg.books.sizeSol },
         open.filter(p => p.kind === 'book' && p.book === book.id), (b.trades || []).filter(t => t.book === book.id));
+      if (book.id === 'graduation-sniper' && deps.books.gradView) {
+        const v = deps.books.gradView(state);
+        if (v) g.v2Checks = { candidates: v.candidates, rejectsByCategory: v.rejectsByCategory, entries: v.entries, closes: v.closes, confirmsTriggered: v.confirmsTriggered, confirmsConfirmed: v.confirmsConfirmed };
+      }
       if (g.empty) {
         const n = scan && scan.candidatesByBook ? scan.candidatesByBook[book.id] : null;
         const rj = rejects.find(x => x.book === label);

@@ -37,9 +37,15 @@ module.exports = {
     noQuoteAfterMaxHoldMin: 10,   // no usable sell quote 10 min past max hold -> total loss
     list: [
       {
-        id: 'graduation-sniper', name: 'Graduation sniper', version: 1,
-        entry: { pumpOrigin: true, maxPoolAgeMin: 15, m5BuysGtSells: true, minLiquidityUsd: 30000 },
-        exit: { stopLossPct: 10, takeProfitPct: 40, trailAfterPct: 15, trailPct: 10, maxHoldMinutes: 60 }
+        // v2 (Liviu t76u): v1 lost ~100% three times (whale-held tokens dumped; LP was burned). v2 adds, fail
+        // closed: LP >= 90% locked/burned + holder concentration (RugCheck report), pool age >= 3 min,
+        // Jupiter round trip <= 8% loss and sell impact <= 5%; exits confirm a >= 50% one-check drop (or
+        // > 50% impact) with a second quote 4 s later before booking. Core rules unchanged.
+        id: 'graduation-sniper', name: 'Graduation sniper', version: 2,
+        entry: { pumpOrigin: true, minPoolAgeMin: 3, maxPoolAgeMin: 15, m5BuysGtSells: true, minLiquidityUsd: 30000,
+          lpLockedMinPct: 90, maxTop10Pct: 30, maxSingleHolderPct: 10, maxCreatorPct: 5, maxRoundTripLossPct: 8, maxSellImpactPct: 5 },
+        exit: { stopLossPct: 10, takeProfitPct: 40, trailAfterPct: 15, trailPct: 10, maxHoldMinutes: 60,
+          confirmDropPct: 50, confirmImpactPct: 50, confirmDelayMs: 4000, confirmProbeFrac: 0.1 }
       },
       {
         id: 'runner-hunter', name: 'Runner hunter', version: 1,

@@ -58,6 +58,7 @@ a{color:var(--cyan);text-decoration:none}
 .sg table{width:100%;font-size:12px;border-collapse:collapse}.sg td{padding:6px 5px;border-top:1px solid var(--line);font-family:"JetBrains Mono",monospace;white-space:nowrap;vertical-align:top}
 .sg td.tok a{font-weight:600;font-size:12.5px}.sg td small{display:block;color:var(--dim);font-size:10.5px}
 .sg th{position:static;background:none;padding:4px 5px;font-size:9.5px;white-space:nowrap}
+.sg-v2{font-size:10.5px;color:var(--mute);background:rgba(34,211,238,.06);border:1px solid var(--line);border-radius:7px;padding:4px 7px;margin:0 0 8px}
 .sg .idle{font-size:12px;color:var(--mute);padding:6px 2px;line-height:1.6}.sg .idle .why{color:#aab4c3}
 @media (max-width:1100px){.network-card,.positions-card,.equity-card,.fills-card,.rejects-card,.log-card{grid-column:span 12}.topbar{flex-direction:column;align-items:flex-start}}
 /* network */
@@ -623,6 +624,8 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
       var tags = '<span class="tag ' + st + '">' + esc(st) + '</span>' + (g.empty ? '<span class="tag empty">EMPTY</span>' : '');
       var head = '<div class="sg-h"><div><div class="nm">' + esc(g.name.replace(' (legacy)', '')) + '</div>' + tags + '<div class="sg-cnt">' + g.openCount + '/' + g.maxOpen + (g.maxOpenShared ? ' shared' : '') + ' open</div></div>' +
         (g.empty ? '' : '<div class="sg-pnl"><b class="' + cls(g.openPnlSol) + '">' + sol(g.openPnlSol, 5) + '</b><small>SOL · <span class="' + cls(g.openPnlPct) + '">' + pct(g.openPnlPct) + '</span></small></div>') + '</div>';
+      var v2 = g.v2Checks ? '<div class="sg-v2 mono">v2 checks · ' + g.v2Checks.candidates + ' candidates · rejects: lp ' + g.v2Checks.rejectsByCategory.lp + ' · holders ' + g.v2Checks.rejectsByCategory.holders + ' · age ' + g.v2Checks.rejectsByCategory.age + ' · impact ' + g.v2Checks.rejectsByCategory.impact + ' · other ' + g.v2Checks.rejectsByCategory.other + ' · entries ' + g.v2Checks.entries + ' · confirms ' + g.v2Checks.confirmsTriggered + '</div>' : '';
+      head += v2;
       var klass = 'sg' + (g.empty ? ' empty-g' : (g.openPnlSol > 0 ? ' up' : g.openPnlSol < 0 ? ' down' : '')) + (st === 'paused' ? ' paused-g' : '');
       if (g.empty) {
         return '<div class="' + klass + '">' + head + '<div class="idle">No open trades.<br><span class="why">Why idle: ' + esc(g.idleReason || 'unknown') + '</span>' + (g.idleSince ? ' <span class="hint">(' + tLondon(g.idleSince) + ')</span>' : '') +

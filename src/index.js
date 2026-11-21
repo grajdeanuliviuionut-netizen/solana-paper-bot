@@ -33,12 +33,15 @@ const BUILD = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.SOURCE_COMMIT ||
 const booksLimiter = new Limiter({
   buckets: {
     jupiter: { minGapMs: 1100, maxRetries: 1, cooldownMs: 20000 },   // <= ~55 requests/min (lite-api free 60/min)
-    rpc: { minGapMs: 400, maxRetries: 1, cooldownMs: 30000 }
+    rpc: { minGapMs: 400, maxRetries: 1, cooldownMs: 30000 },
+    rugcheck: { minGapMs: 3000, maxRetries: 0, cooldownMs: 600000 }   // grad sniper v2: free RugCheck report, no retries, 10 min pause on 429
   },
   baseBackoffMs: 1000, maxBackoffMs: 10000
 });
 const quotes = makeQuotes(booksLimiter);
 const mintAuth = makeMintAuth(booksLimiter);
+const { makeHolderCheck } = require('./books/holderCheck');
+const holderCheck = makeHolderCheck(booksLimiter);
 
 const shouldExit = sellAgent.shouldExit;
 const computePnl = sellAgent.computePnl || function (pos, exitPrice) {
@@ -57,7 +60,7 @@ if (!Array.isArray(state.decisions)) state.decisions = [];
 console.log('Re-entry cooldowns seeded from closed trades: ' + reentry.seed(state, config));
 
 const books = makeBooks({
-  config, quotes, mintAuth, reentry,
+  config, quotes, mintAuth, reentry, holderCheck,
   log: function (type, symbol, reason) {
     state.decisions.unshift(logDecision(type, symbol, reason));
     if (type !== 'SKIP') addActivity(type + ' ' + symbol + ' ' + reason);
@@ -209,6 +212,10 @@ function fetchStats() {
   // PR13: the new_pools feed is its own host entry (api.geckoterminal.com/new_pools), separate from the
   // legacy GeckoTerminal /pools/multi fallback (api.geckoterminal.com).
   const feedHost = {}; feedHost[newPools.HOST] = newPools.hostStats();
+  const rc = booksLimiter.stats().rugcheck || {};
+  feedHost['api.rugcheck.xyz'] = { requests: rc.requests || 0, rateLimited: rc.http429 || 0, failures: rc.errors || 0, skipped: rc.cooldownSkips || 0 };
+  const jl = booksLimiter.stats().jupiter || {};
+  feedHost['lite-api.jup.ag'] = { requests: jl.requests || 0, rateLimited: jl.http429 || 0, failures: jl.errors || 0, skipped: jl.cooldownSkips || 0 };
   for (const src of [ds.byHost || {}, gt.byHost || {}, feedHost]) {
     for (const [h, c] of Object.entries(src)) {
       const b = byHost[h] || (byHost[h] = { requests: 0, rateLimited: 0, failures: 0, skipped: 0 });
@@ -403,6 +410,8 @@ app.get('/api/trades', function (req, res) {
     booksLimiter: booksLimiter.stats(),
     exitLoop: exitLoopView(),
     stopFills: stopFillsView(),
+    gradSniperV2: books.gradView(state),
+    rugcheck: Object.assign({}, holderCheck.stats, { limiter: booksLimiter.stats().rugcheck }),
     legacyTrades: state.trades || [],
     bookTrades: books.ensure(state).trades,
     trades: allTrades()
@@ -440,7 +449,7 @@ function recordEquity() {
 
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, rejects: books.ensure(state).rejects, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), trades: books.ensure(state).trades });
+  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, rejects: books.ensure(state).rejects, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
 });
 
 app.get('/api/health', function (req, res) {
@@ -546,4 +555,4 @@ if (require.main === module) app.listen(config.port, function () {
   setInterval(recordEquity, 60000);
 });
 
-module.exports = { app, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, booksLimiter, resetScoreboard, getState: function () { return state; } };
+module.exports = { app, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };
