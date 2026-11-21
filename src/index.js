@@ -10,6 +10,7 @@ const { generateSignals } = require('./buyAgent');
 const sellAgent = require('./sellAgent');
 const { render } = require('./dashboard');
 const { review } = require('./manager');
+const { step: labStep } = require('./lab');
 
 const shouldExit = sellAgent.shouldExit;
 const computePnl = sellAgent.computePnl || function(pos, exitPrice) {
@@ -113,6 +114,13 @@ async function tick() {
       }
     }
     state.openPositions = stillOpen;
+
+    const labNotes = labStep(state, pairs);
+    for (const note of labNotes) addActivity(note);
+    state.labTicks = (state.labTicks || 0) + 1;
+    if (state.lab && state.lab.lines && state.labTicks % 4 === 1) {
+      addActivity('LAB ' + state.lab.lines[0]);
+    }
 
     if (canOpen()) {
       const result = generateSignals(pairs) || { signals: [], rejections: [] };
