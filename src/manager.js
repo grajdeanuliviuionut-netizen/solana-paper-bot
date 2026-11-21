@@ -1,5 +1,7 @@
-// Scores closed trades every tick. Pauses a strategy that is negative after
-// enough trades, and halves size after 5 losses in a row. Never raises risk.
+// Scores closed trades every tick. Liviu's rule: never pause a strategy for losing; cut its size
+// instead. A strategy that is net negative after enough trades trades at half size (per strategy),
+// and the whole book halves after 5 losses in a row. Size never goes below config.minPositionSol.
+// Only strategies marked paused:true in config.js stay paused (set by hand, not by results).
 function review(state, config) {
   const notes = [];
   const stats = {};
@@ -12,22 +14,28 @@ function review(state, config) {
     if ((Number(t.pnlSol) || 0) > 0) row.wins += 1;
   }
 
-  if (!Array.isArray(state.pausedIds)) state.pausedIds = [];
   const minTrades = config.pauseAfterTrades || 8;
-
-  for (const strat of config.strategies || []) {
-    if (strat.paused && !state.pausedIds.includes(strat.id)) {
-      state.pausedIds.push(strat.id);
-      notes.push('MANAGER pause ' + strat.id + ': flow scalps are the losing book');
-    }
+  const configPaused = (config.strategies || []).filter(s => s.paused).map(s => s.id);
+  const before = Array.isArray(state.pausedIds) ? state.pausedIds.slice() : [];
+  // Drop results-based pauses (e.g. dip-hold auto-paused at 13:33); keep the hand-set config pauses.
+  for (const id of before) {
+    const strat = (config.strategies || []).find(s => s.id === id);
+    if (strat && !strat.paused) notes.push('MANAGER unpause ' + id + ': strategies are never paused for results, size is cut instead');
   }
+  for (const id of configPaused) if (!before.includes(id)) notes.push('MANAGER pause ' + id + ': paused in config');
+  state.pausedIds = configPaused;
 
-  for (const [id, row] of Object.entries(stats)) {
-    if (row.n >= minTrades && row.pnl < 0 && !state.pausedIds.includes(id)) {
-      state.pausedIds.push(id);
-      const win = Math.round((100 * row.wins) / row.n);
-      notes.push('MANAGER pause ' + id + ': ' + row.n + ' trades, pnl ' + row.pnl.toFixed(4) + ' SOL, win ' + win + '%');
+  if (!state.stratSizeMult || typeof state.stratSizeMult !== 'object') state.stratSizeMult = {};
+  for (const strat of config.strategies || []) {
+    const row = stats[strat.id];
+    const mult = row && row.n >= minTrades && row.pnl < 0 ? 0.5 : 1;
+    const prev = state.stratSizeMult[strat.id] || 1;
+    if (mult !== prev && !strat.paused) {
+      notes.push(mult < 1
+        ? 'MANAGER size cut to half for ' + strat.id + ': ' + row.n + ' trades, pnl ' + row.pnl.toFixed(4) + ' SOL, win ' + Math.round((100 * row.wins) / row.n) + '%'
+        : 'MANAGER size restored for ' + strat.id);
     }
+    state.stratSizeMult[strat.id] = mult;
   }
 
   let streak = 0;
@@ -44,7 +52,14 @@ function review(state, config) {
   state.sizeMult = sizeMult;
   state.lossStreak = streak;
   state.strategyStats = stats;
-  return { notes, pausedIds: state.pausedIds, sizeMult };
+  return { notes, pausedIds: state.pausedIds, sizeMult, stratSizeMult: state.stratSizeMult };
 }
 
-module.exports = { review };
+// Position size for a strategy: sizer base x book multiplier x strategy multiplier, floored.
+function sizeFor(base, state, config, strategyId) {
+  const floor = Number(config.minPositionSol) > 0 ? Number(config.minPositionSol) : 0.02;
+  const strat = (state.stratSizeMult && state.stratSizeMult[strategyId]) || 1;
+  return Math.max(floor, base * (state.sizeMult || 1) * strat);
+}
+
+module.exports = { review, sizeFor };
