@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Paper Terminal · Night Shift</title>
+<title>Paper Terminal · Solana Paper Bot</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -19,7 +19,7 @@ a{color:var(--cyan);text-decoration:none}
 .sub{color:var(--mute);font-size:11px;margin-top:2px}
 .badge{font-size:10px;font-weight:700;letter-spacing:.8px;padding:2px 7px;border-radius:6px}
 .badge.paper{color:#0b1220;background:var(--amber)}
-.badge.night{color:var(--violet);border:1px solid rgba(167,139,250,.4);background:rgba(167,139,250,.08)}
+.badge.sol{color:var(--violet);border:1px solid rgba(167,139,250,.4);background:rgba(167,139,250,.08)}
 .conn.ok{color:var(--green)}.conn.bad{color:var(--red)}
 .stats{display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end}
 .stat{min-width:118px;padding:7px 12px;border:1px solid var(--line);border-radius:10px;background:linear-gradient(180deg,var(--panel2),var(--panel))}
@@ -27,28 +27,38 @@ a{color:var(--cyan);text-decoration:none}
 .stat b{display:block;font-size:16px;font-weight:600;margin-top:1px}
 .stat.big b{font-size:21px;background:linear-gradient(90deg,#e6f9ff,#c4b5fd);-webkit-background-clip:text;background-clip:text;color:transparent}
 .stat small{display:block;font-size:10.5px;color:var(--mute)}
-.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px;padding:16px 22px 8px;max-width:1680px;margin:0 auto}
-.card{background:linear-gradient(180deg,rgba(17,24,36,.92),rgba(12,17,25,.92));border:1px solid var(--line);border-radius:14px;padding:14px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25);min-width:0}
-.card-h{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}
-.card h2{margin:0;font-size:13px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:#cfd8e6}
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px;padding:18px 24px 10px;max-width:1680px;margin:0 auto}
+.card{background:linear-gradient(180deg,rgba(17,24,36,.94),rgba(12,17,25,.94));border:1px solid var(--line2);border-radius:16px;padding:16px 18px;box-shadow:0 10px 30px rgba(0,0,0,.25);min-width:0}
+.card-h{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:9px;border-bottom:1px solid var(--line)}
+.card h2{margin:0;font-size:13.5px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:#cfd8e6}
 .hint{color:var(--dim);font-size:11px}
 .count{display:inline-block;min-width:20px;text-align:center;font-size:11px;padding:1px 6px;border-radius:9px;background:rgba(34,211,238,.12);color:var(--cyan);margin-left:6px}
 .network-card{grid-column:span 5}.positions-card{grid-column:span 7}
 .books-card{grid-column:span 12}
 .equity-card{grid-column:span 7}.fills-card{grid-column:span 5}
 .rejects-card{grid-column:span 6}.log-card{grid-column:span 6}
-.strat-card{grid-column:span 12}
-.sgroups{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-@media (max-width:1300px){.sgroups{grid-template-columns:repeat(2,minmax(0,1fr))}}@media (max-width:800px){.sgroups{grid-template-columns:1fr}}
-.sg{border:1px solid var(--line);border-radius:12px;padding:10px 12px;background:linear-gradient(180deg,var(--panel2),var(--bg2))}
-.sg.empty-g{opacity:.78;border-style:dashed}.sg.paused-g{border-color:rgba(245,158,11,.35)}
-.sg-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px}
-.sg-h b{font-size:13px}.sg-h .tag{font-size:9.5px;padding:1px 6px;border-radius:7px;text-transform:uppercase;letter-spacing:.6px;margin-left:6px}
-.tag.active{background:rgba(34,197,94,.14);color:var(--green)}.tag.paused{background:rgba(245,158,11,.16);color:var(--amber)}
-.sg-s{font-size:11px;color:var(--mute);font-family:"JetBrains Mono",monospace}
-.sg table{width:100%;font-size:11px;border-collapse:collapse}.sg td{padding:4px 5px;border-bottom:1px solid var(--line);font-family:"JetBrains Mono",monospace;white-space:nowrap}
-.sg th{position:static;background:none}
-.sg .idle{font-size:11.5px;color:var(--mute);padding:8px 2px}.sg .idle b{color:var(--dim);letter-spacing:.5px}
+.strat-card{grid-column:span 12;padding:16px 18px}
+.strat-card .card-h h2{font-size:15px}
+.ssum{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--mute);margin:-2px 0 12px}.ssum b{color:var(--txt);font-family:"JetBrains Mono",monospace;font-weight:600}
+.sgroups{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:14px}
+.sgroups.legacy-row{grid-template-columns:repeat(auto-fit,minmax(350px,1fr))}
+.srow-h{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);margin:14px 2px 8px;font-weight:600}
+@media (max-width:800px){.sgroups,.sgroups.legacy-row{grid-template-columns:1fr}}
+.sg{border:1px solid var(--line2);border-radius:14px;padding:14px 14px 10px;background:linear-gradient(180deg,#131c2a,#0c121b);position:relative;overflow:hidden;min-height:150px}
+.sg:before{content:"";position:absolute;inset:0 0 auto 0;height:3px;background:var(--cyan)}
+.sg.up:before{background:var(--green)}.sg.down:before{background:var(--red)}
+.sg.empty-g{background:rgba(13,18,26,.6);border:1px dashed var(--line2);opacity:.62}.sg.empty-g:before{background:var(--dim)}
+.sg.paused-g:before{background:var(--amber)}
+.sg-h{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px}
+.sg-h .nm{font-size:15px;font-weight:700;letter-spacing:.1px}
+.sg-h .tag{display:inline-block;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:7px;text-transform:uppercase;letter-spacing:.7px;margin:4px 6px 0 0}
+.tag.active{background:rgba(34,197,94,.14);color:var(--green)}.tag.paused{background:rgba(245,158,11,.18);color:var(--amber)}.tag.empty{background:rgba(125,138,160,.2);color:#c3cad6}
+.sg-pnl{text-align:right;font-family:"JetBrains Mono",monospace}.sg-pnl b{display:block;font-size:17px;font-weight:600}.sg-pnl small{font-size:11px;color:var(--mute)}
+.sg-cnt{font-size:11px;color:var(--mute);font-family:"JetBrains Mono",monospace;margin-top:2px}
+.sg table{width:100%;font-size:12px;border-collapse:collapse}.sg td{padding:6px 5px;border-top:1px solid var(--line);font-family:"JetBrains Mono",monospace;white-space:nowrap;vertical-align:top}
+.sg td.tok a{font-weight:600;font-size:12.5px}.sg td small{display:block;color:var(--dim);font-size:10.5px}
+.sg th{position:static;background:none;padding:4px 5px;font-size:9.5px;white-space:nowrap}
+.sg .idle{font-size:12px;color:var(--mute);padding:6px 2px;line-height:1.6}.sg .idle .why{color:#aab4c3}
 @media (max-width:1100px){.network-card,.positions-card,.equity-card,.fills-card,.rejects-card,.log-card{grid-column:span 12}.topbar{flex-direction:column;align-items:flex-start}}
 /* network */
 .network{position:relative;width:100%;aspect-ratio:600/400}
@@ -133,7 +143,7 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
 .feed .t{color:var(--dim);margin-right:8px}
 .chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
 .chip{font-size:10.5px;padding:2px 8px;border-radius:999px;border:1px solid var(--line2);color:#c8d3e3;background:var(--bg2)}
-.win{color:var(--green)}.loss{color:var(--red)}.muted{color:var(--mute)}.amber{color:var(--amber)}
+.win{color:#34d399}.loss{color:#fb7185}.muted{color:var(--mute)}.amber{color:var(--amber)}
 .foot{color:var(--dim);font-size:11px;text-align:center;padding:10px 0 22px}
 @keyframes blink{50%{opacity:.35}}
 .live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--green);margin-right:5px;animation:blink 1.6s infinite}
@@ -144,7 +154,7 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
   <div class="brand">
     <div class="logo"><svg viewBox="0 0 32 32" width="30" height="30"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#22d3ee"/><stop offset="1" stop-color="#a78bfa"/></linearGradient></defs><circle cx="16" cy="16" r="5" fill="url(#lg)"/><g stroke="url(#lg)" stroke-width="1.6" fill="none"><circle cx="16" cy="16" r="11" opacity=".5"/><path d="M16 1v6M16 25v6M1 16h6M25 16h6"/></g></svg></div>
     <div>
-      <div class="title">Paper Terminal <span class="badge paper">PAPER</span><span class="badge night">NIGHT SHIFT</span></div>
+      <div class="title">Paper Terminal <span class="badge paper">PAPER</span><span class="badge sol">SOLANA PAPER BOT</span></div>
       <div class="sub mono"><span id="build">build …</span> · <span id="epoch">epoch …</span> · Solana · <span id="conn" class="conn">connecting…</span></div>
     </div>
   </div>
@@ -158,6 +168,15 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
 </header>
 
 <main class="grid">
+  <section class="card strat-card" id="stratCard">
+    <div class="card-h"><h2>Positions by strategy <span class="count" id="stratOpen">0</span></h2><span class="hint" id="stratHint">mark = Jupiter sell quote (exit loop) · net = after 1.1% costs · times London · refresh 5 s</span></div>
+    <div class="ssum" id="stratSum"></div>
+    <div class="srow-h">Books · 0.05 SOL each · own capacity</div>
+    <div class="sgroups" id="stratGroups"></div>
+    <div class="srow-h">Legacy strategies · shared slots</div>
+    <div class="sgroups legacy-row" id="stratLegacy"></div>
+  </section>
+
   <section class="card network-card">
     <div class="card-h"><h2>Agent network</h2><span class="hint" id="netHint">Manager + 5 agents · 4 books</span></div>
     <div class="network" id="network">
@@ -171,11 +190,6 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
     <div class="card-h"><h2>Open positions <span class="count" id="openCount">0</span></h2><span class="hint">live PnL % vs entry · stop ▏ target ▏ peak ◆ · net = after 1.1% costs</span></div>
     <div id="posChart" class="pos-chart"></div>
     <div id="posDetail" class="pos-detail"></div>
-  </section>
-
-  <section class="card strat-card" id="stratCard">
-    <div class="card-h"><h2>Positions by strategy <span class="count" id="stratOpen">0</span></h2><span class="hint" id="stratHint">marks = Jupiter sell quote from the exit loop · times London · refresh 5 s</span></div>
-    <div class="sgroups" id="stratGroups"></div>
   </section>
 
   <section class="card books-card">
@@ -209,7 +223,7 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
 </main>
 <footer class="foot mono">Paper only · LIVE_TRADING <span id="liveFlag">false</span> · no wallet · data from /api/dashboard &amp; /api/equity · <a href="/classic">classic dashboard</a> · <a href="/api/trades">/api/trades</a> · <a href="/api/books">/api/books</a></footer>
 <script>
-/* Paper Terminal · Night Shift dashboard. Vanilla JS, polls /api/dashboard (5 s) and /api/equity (30 s).
+/* Paper Terminal dashboard (Solana Paper Bot). Vanilla JS, polls /api/dashboard (5 s) and /api/equity (30 s).
    Everything shown comes from those endpoints; a missing field renders as "n/a". Paper only. */
 (function () {
   'use strict';
@@ -597,25 +611,35 @@ td{padding:5px 6px;border-bottom:1px solid rgba(26,35,50,.6);font-size:11.5px;wh
   // ---------------- PR14: positions by strategy ----------------
   function renderStrategies() {
     var gs = D.positionsByStrategy || [];
-    var total = gs.reduce(function (a, g) { return a + (g.openCount || 0); }, 0);
+    var total = 0, pnl = 0, empty = 0;
+    gs.forEach(function (g) { total += g.openCount || 0; pnl += g.openPnlSol || 0; if (g.empty) empty++; });
     $('stratOpen').textContent = total;
-    $('stratGroups').innerHTML = gs.map(function (g) {
-      var head = '<div class="sg-h"><div><b>' + esc(g.name) + '</b><span class="tag ' + (g.status === 'paused' ? 'paused' : 'active') + '">' + esc(g.status) + '</span></div>' +
-        '<div class="sg-s">' + g.openCount + '/' + g.maxOpen + (g.maxOpenShared ? ' shared' : '') + ' · <span class="' + cls(g.openPnlSol) + '">' + sol(g.openPnlSol, 5) + ' SOL · ' + pct(g.openPnlPct) + '</span></div></div>';
+    var el = (D.agents && D.agents.executor && D.agents.executor.exitLoop) || {};
+    var ci = el.checkIntervalSec || {};
+    $('stratSum').innerHTML = '<span>open <b>' + total + '</b></span><span>open P&amp;L <b class="' + cls(pnl) + '">' + sol(pnl, 5) + ' SOL</b></span><span>empty <b>' + empty + '/' + gs.length + '</b></span>' +
+      '<span>exit check every <b>' + (isNum(ci.median) ? ci.median + 's' : 'n/a') + '</b> (median)</span><span>exit loop errors <b>' + (isNum(el.errors) ? el.errors : 'n/a') + '</b></span>';
+    function card(g) {
+      var st = g.status === 'paused' ? 'paused' : 'active';
+      var tags = '<span class="tag ' + st + '">' + esc(st) + '</span>' + (g.empty ? '<span class="tag empty">EMPTY</span>' : '');
+      var head = '<div class="sg-h"><div><div class="nm">' + esc(g.name.replace(' (legacy)', '')) + '</div>' + tags + '<div class="sg-cnt">' + g.openCount + '/' + g.maxOpen + (g.maxOpenShared ? ' shared' : '') + ' open</div></div>' +
+        (g.empty ? '' : '<div class="sg-pnl"><b class="' + cls(g.openPnlSol) + '">' + sol(g.openPnlSol, 5) + '</b><small>SOL · <span class="' + cls(g.openPnlPct) + '">' + pct(g.openPnlPct) + '</span></small></div>') + '</div>';
+      var klass = 'sg' + (g.empty ? ' empty-g' : (g.openPnlSol > 0 ? ' up' : g.openPnlSol < 0 ? ' down' : '')) + (st === 'paused' ? ' paused-g' : '');
       if (g.empty) {
-        return '<div class="sg empty-g' + (g.status === 'paused' ? ' paused-g' : '') + '">' + head + '<div class="idle"><b>EMPTY — no open trades</b><br>last entry: ' + (g.lastEntryAt ? dtLondon(g.lastEntryAt) + ' (' + dur(Date.now() - Date.parse(g.lastEntryAt)) + ' ago)' : 'none since reset') +
-          '<br>idle: ' + esc(g.idleReason || 'unknown') + (g.idleSince ? ' · ' + tLondon(g.idleSince) : '') + '</div></div>';
+        return '<div class="' + klass + '">' + head + '<div class="idle">No open trades.<br><span class="why">Why idle: ' + esc(g.idleReason || 'unknown') + '</span>' + (g.idleSince ? ' <span class="hint">(' + tLondon(g.idleSince) + ')</span>' : '') +
+          '<br>Last entry: ' + (g.lastEntryAt ? dtLondon(g.lastEntryAt) + ' · ' + dur(Date.now() - Date.parse(g.lastEntryAt)) + ' ago' : 'none since reset') + '</div></div>';
       }
       var rows = g.positions.map(function (p) {
         var qa = isNum(p.quoteAgeSec) ? p.quoteAgeSec + 's' : 'n/a';
-        return '<tr><td>' + (p.dexUrl ? '<a href="' + esc(p.dexUrl) + '" target="_blank" rel="noopener">$' + esc(p.symbol) + '</a>' : '$' + esc(p.symbol)) + (p.tokensEstimated ? ' <span class="hint" title="token amount estimated (opened before PR14)">~</span>' : '') + '</td>' +
-          '<td>' + (isNum(p.sizeSol) ? p.sizeSol.toFixed(3) : 'n/a') + '</td><td>' + tLondon(p.entryTime) + '<br><span class="hint">' + (p.entryTime ? dur(Date.now() - Date.parse(p.entryTime)) : '') + '</span></td>' +
-          '<td>' + price(p.entryPrice) + '<br><span class="hint">' + price(p.markPrice) + ' · <span class="' + (isNum(p.quoteAgeSec) && p.quoteAgeSec > 15 ? 'amber' : 'muted') + '">' + qa + '</span></span></td>' +
-          '<td class="' + cls(p.netPnlPct) + '">' + pct(p.netPnlPct, 1) + '<br>' + sol(p.unrealizedSol, 5) + '</td>' +
-          '<td>' + (isNum(p.stopPct) ? p.stopPct + '%' : 'n/a') + '<br><span class="hint">' + (isNum(p.targetPct) ? '+' + p.targetPct + '%' : (isNum(p.trailPct) ? 'trail ' + p.trailPct + '%' : '–')) + '</span></td></tr>';
+        return '<tr><td class="tok">' + (p.dexUrl ? '<a href="' + esc(p.dexUrl) + '" target="_blank" rel="noopener">$' + esc(p.symbol) + '</a>' : '$' + esc(p.symbol)) + (p.tokensEstimated ? ' <span class="hint" title="token amount estimated (opened before PR14)">~</span>' : '') + '<small>' + (isNum(p.sizeSol) ? p.sizeSol.toFixed(3) : 'n/a') + ' SOL</small></td>' +
+          '<td>' + tLondon(p.entryTime) + '<small>' + (p.entryTime ? dur(Date.now() - Date.parse(p.entryTime)) : '') + '</small></td>' +
+          '<td>' + price(p.entryPrice) + '<small>' + price(p.markPrice) + ' · <span class="' + (isNum(p.quoteAgeSec) && p.quoteAgeSec > 15 ? 'amber' : '') + '">' + qa + '</span></small></td>' +
+          '<td class="' + cls(p.netPnlPct) + '">' + pct(p.netPnlPct, 1) + '<small class="' + cls(p.unrealizedSol) + '">' + sol(p.unrealizedSol, 5) + '</small></td>' +
+          '<td>' + (isNum(p.stopPct) ? p.stopPct + '%' : 'n/a') + '<small>' + (isNum(p.targetPct) ? '+' + p.targetPct + '%' : (isNum(p.trailPct) ? 'trail ' + p.trailPct + '%' : '–')) + '</small></td></tr>';
       }).join('');
-      return '<div class="sg' + (g.status === 'paused' ? ' paused-g' : '') + '">' + head + '<table><thead><tr><th>Token</th><th>SOL</th><th>Entry · age</th><th>Entry / mark · age</th><th>Net P&amp;L</th><th>Stop / tgt</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
-    }).join('') || '<div class="empty">no data</div>';
+      return '<div class="' + klass + '">' + head + '<table><thead><tr><th>Token</th><th>Entry</th><th>Price / mark</th><th>Net</th><th>Stop</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+    }
+    $('stratGroups').innerHTML = gs.filter(function (g) { return g.kind === 'book'; }).map(card).join('') || '<div class="empty">no data</div>';
+    $('stratLegacy').innerHTML = gs.filter(function (g) { return g.kind !== 'book'; }).map(card).join('');
   }
 
   // ---------------- loops ----------------

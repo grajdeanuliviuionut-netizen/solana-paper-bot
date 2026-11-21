@@ -258,12 +258,13 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     const dj2 = JSON.parse((await get("/api/dashboard")).body);
     assert.strictEqual(dj2.positionsByStrategy.length, pz.groups.length);
     const page = await get('/');
-    assert.ok(/stratGroups/.test(page.body) && /renderStrategies/.test(page.body), 'Night Shift page has the positions-by-strategy panel');
+    assert.ok(!/night/i.test(page.body), 'no Night Shift branding');
+    assert.ok(/stratGroups/.test(page.body) && /renderStrategies/.test(page.body), 'Paper Terminal page has the positions-by-strategy panel');
     assert.ok(/Dip and hold/.test(d.body), 'strategy name on close rows (classic dashboard)');
-    // Night Shift dashboard: static page at '/', assets, equity history and the aggregate endpoint
+    // Paper Terminal dashboard: static page at '/', assets, equity history and the aggregate endpoint
     const home = await get('/');
     assert.strictEqual(home.status, 200);
-    assert.ok(/Paper Terminal/.test(home.body) && /PAPER/.test(home.body) && /\/api\/dashboard/.test(home.body) && /\/api\/equity/.test(home.body), 'night shift page');
+    assert.ok(/Paper Terminal/.test(home.body) && /PAPER/.test(home.body) && /\/api\/dashboard/.test(home.body) && /\/api\/equity/.test(home.body), 'paper terminal page');
     const snap = idx.recordEquity();
     assert.ok(snap && typeof snap.markEquity === 'number' && typeof snap.equity === 'number', 'equity snapshot recorded');
     const eq = await get('/api/equity?since=scoreboard');

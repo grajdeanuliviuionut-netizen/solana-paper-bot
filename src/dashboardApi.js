@@ -1,4 +1,4 @@
-// Read-only aggregation for the Night Shift dashboard (GET /api/dashboard). It only READS state and
+// Read-only aggregation for the Paper Terminal dashboard (GET /api/dashboard). It only READS state and
 // the existing stats objects; it never changes balances, positions, exits, sizes or limiters.
 const fs = require('fs');
 const path = require('path');

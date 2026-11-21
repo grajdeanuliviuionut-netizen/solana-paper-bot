@@ -361,7 +361,7 @@ async function tick() {
   try { saveState(state); } finally { ticking = false; }
 }
 
-// Night Shift dashboard (static page polling /api/dashboard + /api/equity); the previous server-rendered
+// Paper Terminal dashboard (static page polling /api/dashboard + /api/equity); the previous server-rendered
 // dashboard stays at /classic. Read-only: none of these routes change trading state.
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 app.get('/', function (req, res) {
