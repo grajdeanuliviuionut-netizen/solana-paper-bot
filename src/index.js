@@ -13,6 +13,7 @@ const { review, sizeFor } = require('./manager');
 const reentry = require('./reentry');
 const httpBackoff = require('./httpBackoff');
 const poolPrice = require('./poolPrice');
+const dataFetcher = require('./dataFetcher');
 const { step: labStep } = require('./lab');
 
 const shouldExit = sellAgent.shouldExit;
@@ -134,6 +135,31 @@ function poolGate(sig, entryPrice, pairs) {
   st.bySource[main.source] = (st.bySource[main.source] || 0) + 1;
   st.lastVerified = st.lastVerified.concat([{ symbol: sig.symbol, pairAddress: sig.pairAddress, mainPool: main.pool.pairAddress, mainSource: main.source, samePool: samePool, gapPct: +gap.toFixed(2), at: new Date().toISOString() }]).slice(-10);
   return { ok: true, gap };
+}
+
+// PR10: the scan runs on DexScreener (shared limiter). fetchStats keeps the same top-level fields as
+// before (requests, rateLimited, retries, skipped, last429At) now counting the SCAN's requests, plus
+// since (counter start), per-host counters across both limiters, the GeckoTerminal fallback limiter, and
+// scan pass stats (candidates per pass).
+function fetchStats() {
+  const ds = poolPrice.mainLimiter.stats;
+  const gt = httpBackoff.stats;
+  const scanTag = (ds.byTag && ds.byTag.scan) || { requests: 0, rateLimited: 0, failures: 0, skipped: 0 };
+  const byHost = {};
+  for (const src of [ds.byHost || {}, gt.byHost || {}]) {
+    for (const [h, c] of Object.entries(src)) {
+      const b = byHost[h] || (byHost[h] = { requests: 0, rateLimited: 0, failures: 0, skipped: 0 });
+      for (const k of Object.keys(b)) b[k] += c[k] || 0;
+    }
+  }
+  return {
+    requests: scanTag.requests, rateLimited: scanTag.rateLimited, retries: 0, skipped: scanTag.skipped,
+    last429At: ds.last429At, failures: scanTag.failures, since: ds.since, scanSource: 'dexscreener',
+    byHost: byHost,
+    dexscreenerByTag: JSON.parse(JSON.stringify(ds.byTag || {})),
+    geckoterminal: JSON.parse(JSON.stringify(gt)),
+    scan: Object.assign({}, dataFetcher.scanStats)
+  };
 }
 
 let ticking = false;
@@ -284,7 +310,7 @@ async function tick() {
     console.error(e);
   }
   state.lastUpdate = new Date().toISOString();
-  state.fetchStats = Object.assign({}, httpBackoff.stats);
+  state.fetchStats = fetchStats();
   try { saveState(state); } finally { ticking = false; }
 }
 
@@ -303,7 +329,7 @@ app.get('/api/trades', function (req, res) {
     pausedIds: state.pausedIds || [],
     stratSizeMult: state.stratSizeMult || {},
     reentryCooldowns: state.reentryCooldowns || {},
-    fetchStats: state.fetchStats || null,
+    fetchStats: fetchStats(),
     poolChecks: state.poolChecks || null,
     pairPriceLookups: Object.assign({}, poolPrice.pairStats),
     mainPoolLookups: Object.assign({}, poolPrice.mainStats, { limiter: Object.assign({}, poolPrice.mainLimiter.stats) }),

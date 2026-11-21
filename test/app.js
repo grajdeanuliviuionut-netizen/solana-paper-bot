@@ -115,18 +115,70 @@ test('backoff: at most 1 request in flight and a minimum gap between requests', 
   assert.strictEqual(maxInFlight, 1);
   for (let i = 1; i < starts.length; i++) assert.ok(starts[i] - starts[i - 1] >= 18, 'gap ' + (starts[i] - starts[i - 1]));
 });
-test('dataFetcher: mint parsed from base_token; a 429 source reuses its last good page', async () => {
+// PR10: DexScreener scanner (shared DexScreener limiter, no GeckoTerminal).
+const SOLQ = { address: 'So11111111111111111111111111111111111111112', symbol: 'SOL' };
+const dsPair = (o) => Object.assign({ chainId: 'solana', dexId: 'raydium', pairAddress: 'P1', baseToken: { address: 'M1', symbol: 'JING' }, quoteToken: SOLQ, priceUsd: '0.01', liquidity: { usd: 50000 }, volume: { h1: 5000 }, priceChange: { m5: 1, h1: -5, h6: 2, h24: -10 }, txns: { h1: { buys: 10, sells: 5 } }, marketCap: 900000, fdv: 1000000, pairCreatedAt: Date.now() - 2 * 86400000 }, o);
+test('dataFetcher: DexScreener pair maps to the scan row the strategies use', () => {
   const df = require('../src/dataFetcher');
-  const row = { attributes: { name: 'JING / SOL', address: 'POOL1', reserve_in_usd: '50000', base_token_price_usd: '0.01', price_change_percentage: { m5: '1', h1: '-5' }, transactions: { h1: { buys: 10, sells: 5 } }, volume_usd: { h1: '5000' } }, relationships: { base_token: { data: { id: 'solana_MINT1' } } } };
-  assert.strictEqual(df.mapPool(row).mint, 'MINT1');
-  hb._reset();
-  let fail = false;
-  hb._setDeps({ http: { get: async () => { if (fail) throw err429(); return { data: { data: [row] } }; } }, sleep: async () => {}, now: () => Date.now(), opts: { minGapMs: 0, retries: 0, hostCooldownMs: 0 } });
-  assert.strictEqual((await df.getCandidatePairs()).length, 1);
+  const now = Date.now();
+  const r = df.mapDsPair(dsPair({ pairCreatedAt: now - 2 * 86400000 }), now);
+  assert.strictEqual(r.pairAddress, 'P1'); assert.strictEqual(r.mint, 'M1'); assert.strictEqual(r.symbol, 'JING');
+  assert.strictEqual(r.priceUsd, 0.01); assert.strictEqual(r.liquidityUsd, 50000); assert.strictEqual(r.volumeH1, 5000);
+  assert.deepStrictEqual(r.priceChange, { m5: 1, h1: -5, h6: 2, h24: -10 });
+  assert.deepStrictEqual(r.txns, { buys: 10, sells: 5 });
+  assert.ok(Math.abs(r.ageDays - 2) < 1e-6); assert.strictEqual(r.mcapUsd, 900000); assert.strictEqual(r.source, 'dexscreener');
+  assert.ok(!r.stale);
+  // the strategies read the same fields as before
+  const { generateSignals } = require('../src/buyAgent');
+  assert.ok(Array.isArray(generateSignals([r]).signals));
+  // filters: non-SOL quote, low liquidity, other chain, SOL itself, missing fields default safely
+  assert.strictEqual(df.mapDsPair(dsPair({ quoteToken: { address: 'EPjF', symbol: 'USDC' } })), null);
+  assert.strictEqual(df.mapDsPair(dsPair({ liquidity: { usd: 9000 } })), null);
+  assert.strictEqual(df.mapDsPair(dsPair({ chainId: 'base' })), null);
+  assert.strictEqual(df.mapDsPair(dsPair({ baseToken: { address: SOLQ.address, symbol: 'SOL' } })), null);
+  const bare = df.mapDsPair(dsPair({ priceChange: undefined, txns: undefined, volume: undefined, pairCreatedAt: undefined, marketCap: undefined }));
+  assert.deepStrictEqual(bare.priceChange, { m5: 0, h1: 0, h6: 0, h24: 0 }); assert.strictEqual(bare.ageDays, 1); assert.strictEqual(bare.mcapUsd, 1000000);
+  // one row per mint: its highest-liquidity SOL pool
+  const best = df.bestRowsByMint([dsPair({ pairAddress: 'SMALL', liquidity: { usd: 20000 } }), dsPair({ pairAddress: 'BIG', liquidity: { usd: 80000 } }), dsPair({ pairAddress: 'X', baseToken: { address: 'OTHER' } })], new Set(['M1']));
+  assert.deepStrictEqual(Object.keys(best), ['M1']); assert.strictEqual(best.M1.pairAddress, 'BIG');
+});
+test('dataFetcher: scan uses only DexScreener via the shared limiter; discovery cached; a failed batch reuses rows marked stale', async () => {
+  const df = require('../src/dataFetcher');
+  const pp = require('../src/poolPrice');
+  df._reset(); pp.mainLimiter._reset(); hb._reset();
+  const calls = []; let fail = false;
+  pp.mainLimiter._setDeps({ sleep: async () => {}, now: () => Date.now(), opts: { minGapMs: 0 }, http: { get: async url => {
+    calls.push(url);
+    if (/token-profiles\/latest/.test(url)) return { data: [{ chainId: 'solana', tokenAddress: 'M1' }, { chainId: 'base', tokenAddress: 'B1' }] };
+    if (/token-boosts\/latest/.test(url)) return { data: [{ chainId: 'solana', tokenAddress: 'M2' }] };
+    if (/token-boosts\/top|community-takeovers/.test(url)) return { data: [] };
+    if (/latest\/dex\/search/.test(url)) return { data: { pairs: [dsPair({ pairAddress: 'S1', baseToken: { address: 'M2', symbol: 'TWO' } }), dsPair({ pairAddress: 'S2', baseToken: { address: 'LOW' }, liquidity: { usd: 100 } })] } };
+    if (/\/tokens\/v1\/solana\//.test(url)) {
+      if (fail) throw Object.assign(new Error('429'), { response: { status: 429, headers: {} } });
+      return { data: [dsPair({}), dsPair({ pairAddress: 'P2', baseToken: { address: 'M2', symbol: 'TWO' } })] };
+    }
+    throw new Error('unexpected ' + url);
+  } } });
+  let gtCalls = 0;
+  hb._setDeps({ http: { get: async () => { gtCalls++; return { data: { data: [] } }; } } });
+  const a = await df.getCandidatePairs();
+  assert.deepStrictEqual(a.map(p => p.pairAddress).sort(), ['P1', 'P2']);
+  assert.ok(calls.every(u => u.startsWith('https://api.dexscreener.com/')), 'DexScreener only');
+  assert.strictEqual(gtCalls, 0, 'no GeckoTerminal call in the scan');
+  assert.strictEqual(calls.filter(u => /token-profiles|token-boosts|community|search/.test(u)).length, 7);
+  assert.ok(!calls.some(u => u.includes('B1') || u.includes('LOW')), 'other chains and low-liquidity search hits dropped');
+  await df.getCandidatePairs();
+  assert.strictEqual(calls.filter(u => /token-profiles|token-boosts|community|search/.test(u)).length, 7, 'discovery cached between passes');
+  assert.strictEqual(pp.mainLimiter.stats.byTag.scan.requests, calls.length);
+  assert.strictEqual(pp.mainLimiter.stats.byHost['api.dexscreener.com'].requests, calls.length);
   fail = true;
-  const pairs = await df.getCandidatePairs();
-  assert.strictEqual(pairs.length, 1);
-  assert.strictEqual(pairs[0].mint, 'MINT1');
+  pp.mainLimiter._setDeps({ opts: { hostCooldownMs: 0 } });
+  const c = await df.getCandidatePairs();
+  assert.strictEqual(c.length, 2); assert.ok(c.every(p => p.stale), 'cached rows are stale (never priced from)');
+  assert.strictEqual(pp.mainLimiter.stats.byTag.scan.rateLimited, 1);
+  assert.strictEqual(df.scanStats.lastCandidates, 2);
+  pp.mainLimiter._setDeps({ opts: { hostCooldownMs: 60000 } });
+  pp.mainLimiter._reset(); df._reset();
 });
 
 // ---------- boot + tick smoke (real index.js, scanner stubbed, no network) ----------
@@ -172,6 +224,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     assert.strictEqual(t.status, 200);
     const j = JSON.parse(t.body);
     assert.ok(j.trades.length >= 9 && j.pausedIds && j.reentryCooldowns);
+    for (const k of ['requests', 'rateLimited', 'retries', 'skipped', 'last429At', 'since', 'byHost', 'scan']) assert.ok(k in j.fetchStats, 'fetchStats.' + k);
     const d = await get('/');
     assert.strictEqual(d.status, 200);
     assert.ok(/Dip and hold/.test(d.body), 'strategy name on close rows');
