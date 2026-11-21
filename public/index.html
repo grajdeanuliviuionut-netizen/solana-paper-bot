@@ -79,6 +79,7 @@ table{width:100%;border-collapse:collapse}
 .bt .r{text-align:right}
 .bt .sp{font-size:9.5px;padding:1px 6px}
 @media (max-width:1700px){.agents{gap:12px;padding:16px 20px 0}.agm b{font-size:20px}}
+@media (max-width:2100px){.bt{table-layout:fixed}.bt td{font-size:12.5px;padding:7px 2px;overflow:hidden;text-overflow:ellipsis}.bt th{padding:0 2px 6px}.bt th:first-child{width:31%}.bt th:nth-child(2){width:22%}.bt th:nth-child(3){width:10%}.bt th:nth-child(4){width:9%}.bt th:nth-child(5){width:10%}.bt th:nth-child(6){width:18%}.bt .lg{display:none}.bt .sp{font-size:9px;padding:1px 4px}}
 @media (max-width:1400px){.agents{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media (min-width:2560px){html,body{font-size:18px}.agents{gap:20px;padding:24px 32px 0}.wrap{gap:24px;padding:24px 32px 32px}.col{gap:24px}.kpi{min-width:230px;padding:12px 24px}.kpi b{font-size:36px}.kpi label{font-size:13px}.brand b{font-size:28px}.brand span{font-size:15px}.meta{font-size:15px}
   .card{padding:22px 26px}.card h2{font-size:16px}.card h2 small{font-size:14px}.big b{font-size:40px}.big label{font-size:13px}.big small{font-size:14px}canvas{height:520px}
@@ -134,7 +135,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
   <section class="col">
     <div class="card">
       <h2>Strategy bots <small id="botsNote">open/max · trades · win · net SOL</small></h2>
-      <table class="bt"><thead><tr><th>Bot</th><th>Status</th><th>Open</th><th>Trades</th><th>Win</th><th>Net</th></tr></thead><tbody id="botStrats"></tbody></table>
+      <table class="bt"><thead><tr><th>Bot</th><th>Status</th><th>Open</th><th>Trd</th><th>Win</th><th>Net</th></tr></thead><tbody id="botStrats"></tbody></table>
     </div>
     <div class="card">
       <h2>Recent fills <small>last 15</small></h2>
@@ -230,7 +231,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
         '<div class="agf">' + esc(a.role) + ' · ' + ago(a.lastActivityAgeSec) + (a.errors10m ? ' · <span class="dn">' + a.errors10m + ' err/10m</span>' : '') + '</div></div>';
     }).join('');
     $('botStrats').innerHTML = ss.map(function (s) {
-      return '<tr><td>' + esc(String(s.name).replace(' (legacy)', '')) + (s.kind === 'legacy' ? ' <span class="mu">legacy</span>' : '') + '</td><td><span class="sp ' + esc(s.tone) + '">' + esc(s.status) + '</span></td>' +
+      return '<tr><td>' + esc(String(s.name).replace(' (legacy)', '')) + (s.kind === 'legacy' ? ' <span class="mu lg">legacy</span>' : '') + '</td><td><span class="sp ' + esc(s.tone) + '">' + esc(s.status) + '</span></td>' +
         '<td class="r num">' + s.open + '/' + s.maxOpen + '</td><td class="r num">' + s.trades + '</td><td class="r num">' + (isNum(s.winRatePct) ? Math.round(s.winRatePct) + '%' : '–') + '</td><td class="r num ' + cl(s.netSol) + '">' + sol(s.netSol, 4) + '</td></tr>';
     }).join('') || '<tr><td class="mu">no bots data</td></tr>';
   }
