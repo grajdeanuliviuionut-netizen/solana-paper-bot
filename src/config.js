@@ -24,7 +24,7 @@ module.exports = {
         { field: 'volumeToLiquidity', op: '>=', value: 0.08 },
         { field: 'm5', op: '>=', value: -3 }
       ],
-      exit: { takeProfitPct: 5, stopLossPct: 4, trailAfterPct: 2, trailPct: 1.5, maxHoldMinutes: 20, earlyFailAfterMin: 0 }
+      exit: { takeProfitPct: 5, stopLossPct: 4, maxHoldMinutes: 20, earlyFailAfterMin: 0 }
     },
     {
       id: 'momentum-entry',
@@ -51,7 +51,7 @@ module.exports = {
         { field: 'buySellRatioH1', op: '>=', value: 1.4 },
         { field: 'volumeToLiquidity', op: '>=', value: 0.06 }
       ],
-      exit: { takeProfitPct: 6, stopLossPct: 6, maxHoldMinutes: 45, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0 }
+      exit: { takeProfitPct: 7, stopLossPct: 6, maxHoldMinutes: 90, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0, breakevenArmPct: 4, breakevenLockPct: 2.2 }
     },
     {
       id: 'buyer-turn',
@@ -65,20 +65,20 @@ module.exports = {
         { field: 'buySellRatioH1', op: '>=', value: 1.3 },
         { field: 'volumeToLiquidity', op: '>=', value: 0.05 }
       ],
-      exit: { takeProfitPct: 6, stopLossPct: 6, maxHoldMinutes: 45, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0 }
+      exit: { takeProfitPct: 7, stopLossPct: 6, maxHoldMinutes: 90, earlyFailAfterMin: 0 }
     },
     {
       id: 'dip-hold',
       name: 'Dip and hold',
-      universe: { minAgeDays: 1, maxAgeDays: 45, minLiquidityUsd: 25000, maxLiquidityUsd: 400000 },
+      universe: { minAgeDays: 0.5, maxAgeDays: 60, minLiquidityUsd: 20000, maxLiquidityUsd: 500000 },
       entry: [
-        { field: 'h1', op: '<=', value: -5 },
-        { field: 'h1', op: '>=', value: -14 },
-        { field: 'm5', op: '>=', value: 0.4 },
-        { field: 'buySellRatioH1', op: '>=', value: 1.5 },
-        { field: 'volumeToLiquidity', op: '>=', value: 0.06 }
+        { field: 'h1', op: '<=', value: -3 },
+        { field: 'h1', op: '>=', value: -18 },
+        { field: 'm5', op: '>=', value: 0 },
+        { field: 'buySellRatioH1', op: '>=', value: 1.35 },
+        { field: 'volumeToLiquidity', op: '>=', value: 0.05 }
       ],
-      exit: { takeProfitPct: 6, stopLossPct: 6, maxHoldMinutes: 45, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0 }
+      exit: { takeProfitPct: 7, stopLossPct: 6, maxHoldMinutes: 90, timeStopOnlyIfLoss: true, earlyFailAfterMin: 0, breakevenArmPct: 4, breakevenLockPct: 2.2 }
     }
   ]
 };
