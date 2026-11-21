@@ -9,6 +9,7 @@ const { logDecision } = require('./agents/logger');
 const { generateSignals } = require('./buyAgent');
 const sellAgent = require('./sellAgent');
 const { render } = require('./dashboard');
+const { review } = require('./manager');
 
 const shouldExit = sellAgent.shouldExit;
 const computePnl = sellAgent.computePnl || function(pos, exitPrice) {
@@ -32,16 +33,37 @@ function addActivity(msg) {
   if (state.activity.length > 50) state.activity.pop();
 }
 
+function lockedSol() {
+  return (state.openPositions || []).reduce((sum, pos) => sum + (Number(pos.sizeSol) || 0), 0);
+}
+
+function equity() {
+  return (Number(state.balance) || 0) + lockedSol();
+}
+
+function realizedToday() {
+  const start = new Date();
+  start.setUTCHours(0, 0, 0, 0);
+  return (state.trades || []).reduce((sum, trade) => {
+    if (new Date(trade.closedAt).getTime() < start.getTime()) return sum;
+    return sum + (Number(trade.pnlSol) || 0);
+  }, 0);
+}
+
 function canOpen() {
-  if (state.balance < config.fullStopBalance) return false;
-  if (state.openPositions.length >= config.maxOpen) return false;
+  if (equity() < config.fullStopBalance) return false;
+  if ((state.openPositions || []).length >= config.maxOpen) return false;
+  if (realizedToday() <= -config.dailyLossLimitSol) return false;
   return true;
 }
 
 async function tick() {
   try {
+    const notes = review(state, config).notes;
+    for (const note of notes) addActivity(note);
+
     const pairs = await scan();
-    addActivity(`SCAN: ${pairs.length} pairs`);
+    addActivity('SCAN: ' + pairs.length + ' pairs');
 
     const byAddr = {};
     for (const p of pairs) {
@@ -57,13 +79,13 @@ async function tick() {
       if (exit) {
         const pnl = computePnl(pos, exit.fillPrice);
         state.balance += pos.sizeSol + pnl;
-        const trade = { ...pos, exitReason: exit.reason, exitPrice: exit.fillPrice, pnlSol: pnl, closedAt: new Date().toISOString() };
+        const trade = Object.assign({}, pos, { exitReason: exit.reason, exitPrice: exit.fillPrice, pnlSol: pnl, closedAt: new Date().toISOString() });
         state.trades.unshift(trade);
         if (state.trades.length > 100) state.trades.pop();
         logTrade(trade);
         const dec = logDecision('EXIT', pos.symbol, exit.reason, { pnl: pnl.toFixed(4) });
         state.decisions.unshift(dec);
-        addActivity(`EXIT ${pos.symbol} ${exit.reason} pnl=${pnl.toFixed(4)}`);
+        addActivity('EXIT ' + pos.symbol + ' ' + exit.reason + ' pnl=' + pnl.toFixed(4));
       } else {
         stillOpen.push(pos);
       }
@@ -76,29 +98,30 @@ async function tick() {
         if (!canOpen()) break;
         const already = state.openPositions.some(p => p.symbol === sig.symbol);
         if (already) continue;
+        if ((state.pausedIds || []).includes(sig.strategyId)) continue;
 
         const check = rugCheck(sig.pair || pairs.find(p => p.pairAddress === sig.pairAddress));
         if (!check.pass) {
-          const dec = logDecision('SKIP', sig.symbol, `rug check: ${check.reason}`);
+          const dec = logDecision('SKIP', sig.symbol, 'rug check: ' + check.reason);
           state.decisions.unshift(dec);
           continue;
         }
 
-        const size = sizePosition(state.balance);
+        const size = Math.max(0.05, sizePosition(state.balance) * (state.sizeMult || 1));
         const exec = executeEntry(sig, size, state.balance);
         if (exec.ok) {
           state.openPositions.push(exec.position);
           state.balance -= size;
           const dec = logDecision('ENTRY', sig.symbol, exec.reason, { size });
           state.decisions.unshift(dec);
-          addActivity(`ENTRY ${sig.symbol} size ${size.toFixed(3)}`);
+          addActivity('ENTRY ' + sig.symbol + ' size ' + size.toFixed(3));
         }
       }
     }
 
     if (state.decisions.length > 100) state.decisions = state.decisions.slice(0, 100);
   } catch (e) {
-    addActivity(`Tick error: ${e.message}`);
+    addActivity('Tick error: ' + e.message);
     console.error(e);
   }
   state.lastUpdate = new Date().toISOString();
@@ -111,7 +134,7 @@ app.get('/', (req, res) => {
 });
 
 app.listen(config.port, () => {
-  console.log(`Dashboard running on port ${config.port}`);
+  console.log('Dashboard running on port ' + config.port);
   tick();
   setInterval(tick, config.pollIntervalMs);
 });

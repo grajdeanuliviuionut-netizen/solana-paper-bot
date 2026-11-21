@@ -18,11 +18,11 @@ function getFieldValue(pair, field) {
 function matchesEntry(pair, strategy, rejections) {
   const u = strategy.universe;
   if (u.minLiquidityUsd && pair.liquidityUsd < u.minLiquidityUsd) {
-    rejections.push(`${strategy.id}: liquidity ${pair.liquidityUsd} < ${u.minLiquidityUsd}`);
+    rejections.push(strategy.id + ': liquidity ' + pair.liquidityUsd + ' < ' + u.minLiquidityUsd);
     return false;
   }
   if (u.maxLiquidityUsd && pair.liquidityUsd > u.maxLiquidityUsd) {
-    rejections.push(`${strategy.id}: liquidity too high`);
+    rejections.push(strategy.id + ': liquidity too high');
     return false;
   }
 
@@ -34,7 +34,7 @@ function matchesEntry(pair, strategy, rejections) {
     if (cond.op === '<' && !(val < cond.value)) pass = false;
     if (cond.op === '>' && !(val > cond.value)) pass = false;
     if (!pass) {
-      rejections.push(`${strategy.id}: ${cond.field} ${val.toFixed(2)} not ${cond.op} ${cond.value}`);
+      rejections.push(strategy.id + ': ' + cond.field + ' ' + val.toFixed(2) + ' not ' + cond.op + ' ' + cond.value);
       return false;
     }
   }
@@ -46,6 +46,7 @@ function generateSignals(pairs) {
   const rejections = [];
   if (!Array.isArray(pairs)) return { signals, rejections };
   for (const strat of config.strategies) {
+    if (strat.paused) continue;
     for (const pair of pairs) {
       if (!pair) continue;
       if (matchesEntry(pair, strat, rejections)) {
