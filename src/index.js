@@ -8,6 +8,7 @@ const { executeEntry } = require('./agents/executor');
 const { logDecision } = require('./agents/logger');
 const { generateSignals } = require('./buyAgent');
 const sellAgent = require('./sellAgent');
+const { render } = require('./dashboard');
 
 const shouldExit = sellAgent.shouldExit;
 const computePnl = sellAgent.computePnl || function(pos, exitPrice) {
@@ -84,7 +85,6 @@ async function tick() {
         }
 
         const size = sizePosition(state.balance);
-
         const exec = executeEntry(sig, size, state.balance);
         if (exec.ok) {
           state.openPositions.push(exec.position);
@@ -101,84 +101,13 @@ async function tick() {
     addActivity(`Tick error: ${e.message}`);
     console.error(e);
   }
+  state.lastUpdate = new Date().toISOString();
   saveState(state);
 }
 
 app.get('/', (req, res) => {
-  const open = (state.openPositions || []).map(p => `
-    <tr>
-      <td>${p.symbol || ''}</td>
-      <td>${p.strategyName || ''}</td>
-      <td>${(p.entryPrice || 0).toFixed(6)}</td>
-      <td>${p.sizeSol || 0}</td>
-      <td>${new Date(p.entryTime).toLocaleTimeString()}</td>
-    </tr>`).join('');
-
-  const closed = (state.trades || []).slice(0, 20).map(t => `
-    <tr class="${(t.pnlSol || 0) >= 0 ? 'win' : 'loss'}">
-      <td>${t.symbol || ''}</td>
-      <td>${t.strategyName || ''}</td>
-      <td>${t.exitReason || ''}</td>
-      <td>${(t.pnlSol || 0).toFixed(4)}</td>
-      <td>${new Date(t.closedAt).toLocaleTimeString()}</td>
-    </tr>`).join('');
-
-  const decisions = (state.decisions || []).slice(0, 15).map(d => `
-    <div class="log-line">${new Date(d.time).toLocaleTimeString()} — ${d.type} ${d.symbol} — ${d.reason}</div>`).join('');
-
-  const activityHtml = (state.activity || []).slice(0, 20).map(a => `
-    <div class="log-line">${new Date(a.time).toLocaleTimeString()} — ${a.msg}</div>`).join('');
-
-  res.send(`
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <title>Paper Trading Dashboard</title>
-      <meta http-equiv="refresh" content="30">
-      <style>
-        body { font-family: system-ui; background: #0f172a; color: #e2e8f0; padding: 20px; }
-        h1 { color: #38bdf8; }
-        table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-        th, td { padding: 8px; text-align: left; border-bottom: 1px solid #334155; }
-        th { background: #1e293b; }
-        .win { color: #4ade80; }
-        .loss { color: #f87171; }
-        .balance { font-size: 2em; color: #38bdf8; }
-        .log { background: #1e293b; padding: 12px; border-radius: 8px; max-height: 280px; overflow-y: auto; font-family: monospace; font-size: 0.9em; }
-        .log-line { margin: 4px 0; border-bottom: 1px solid #334155; padding-bottom: 4px; }
-        .agents { display: flex; gap: 12px; margin: 16px 0; }
-        .agent { background: #1e293b; padding: 10px 14px; border-radius: 8px; font-size: 0.85em; }
-      </style>
-    </head>
-    <body>
-      <h1>Solana Paper Bot — Multi-Agent</h1>
-      <div class="balance">Balance: ${(state.balance || 0).toFixed(4)} SOL</div>
-      <p>Open: ${(state.openPositions || []).length} / ${config.maxOpen} | Last: ${new Date(state.lastUpdate || Date.now()).toLocaleString()}</p>
-      <div class="agents">
-        <div class="agent">SCANNER</div>
-        <div class="agent">RUG CHECK</div>
-        <div class="agent">SIZER</div>
-        <div class="agent">EXECUTOR</div>
-        <div class="agent">LOGGER</div>
-      </div>
-      <h2>Open Positions</h2>
-      <table>
-        <tr><th>Symbol</th><th>Strategy</th><th>Entry</th><th>Size</th><th>Time</th></tr>
-        ${open || '<tr><td colspan="5">None</td></tr>'}
-      </table>
-      <h2>Recent Closed Trades</h2>
-      <table>
-        <tr><th>Symbol</th><th>Strategy</th><th>Exit</th><th>PnL (SOL)</th><th>Time</th></tr>
-        ${closed || '<tr><td colspan="5">None yet</td></tr>'}
-      </table>
-      <h2>Decision Log (with reasons)</h2>
-      <div class="log">${decisions || '<div>No decisions yet</div>'}</div>
-      <h2>Activity</h2>
-      <div class="log">${activityHtml || '<div>No activity yet</div>'}</div>
-      <p style="color:#64748b">Auto-refreshes every 30s. Paper only. Multi-agent pipeline.</p>
-    </body>
-    </html>
-  `);
+  res.set('Cache-Control', 'no-store');
+  res.type('html').send(render(state, config));
 });
 
 app.listen(config.port, () => {
