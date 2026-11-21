@@ -23,6 +23,7 @@ const { makeMintAuth } = require('./books/mintAuth');
 const { makeBooks } = require('./books/engine');
 const { classifyBlocked } = require('./books/blocklist');
 const { makeDashboardApi, equityLog } = require('./dashboardApi');
+const newPools = require('./newPools');
 const SERVER_STARTED_AT = new Date().toISOString();
 
 const BUILD = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.SOURCE_COMMIT || null;
@@ -203,7 +204,10 @@ function fetchStats() {
   const gt = httpBackoff.stats;
   const scanTag = (ds.byTag && ds.byTag.scan) || { requests: 0, rateLimited: 0, failures: 0, skipped: 0 };
   const byHost = {};
-  for (const src of [ds.byHost || {}, gt.byHost || {}]) {
+  // PR13: the new_pools feed is its own host entry (api.geckoterminal.com/new_pools), separate from the
+  // legacy GeckoTerminal /pools/multi fallback (api.geckoterminal.com).
+  const feedHost = {}; feedHost[newPools.HOST] = newPools.hostStats();
+  for (const src of [ds.byHost || {}, gt.byHost || {}, feedHost]) {
     for (const [h, c] of Object.entries(src)) {
       const b = byHost[h] || (byHost[h] = { requests: 0, rateLimited: 0, failures: 0, skipped: 0 });
       for (const k of Object.keys(b)) b[k] += c[k] || 0;
@@ -215,7 +219,8 @@ function fetchStats() {
     byHost: byHost,
     dexscreenerByTag: JSON.parse(JSON.stringify(ds.byTag || {})),
     geckoterminal: JSON.parse(JSON.stringify(gt)),
-    scan: Object.assign({}, dataFetcher.scanStats)
+    scan: Object.assign({}, dataFetcher.scanStats),
+    newPoolsFeed: newPools.snapshot()
   };
 }
 
@@ -379,10 +384,14 @@ async function tick() {
     }
     // PR11: the four books (own capacity, same size, Jupiter-quoted fills).
     try {
+      // PR13: GeckoTerminal new_pools feed (1 call / 150 s, no retries, 10-min pause after a 429) ->
+      // DexScreener rows for graduated pump.fun pools < 15 min old -> graduation sniper candidates only.
+      let gradRows = [];
+      try { await newPools.maybeFetch(); gradRows = await newPools.candidateRows(pairs); } catch (e) { addActivity('New-pools feed error: ' + e.message); }
       await books.runEntries(state, pairs, async function (sig, row) {
         await poolPrice.prefetchMain([sig.mint]);
-        return poolGate(sig, row.priceUsd, pairs);
-      });
+        return poolGate(sig, row.priceUsd, pairs.concat(gradRows));
+      }, { 'graduation-sniper': gradRows }, function () { newPools.stats.candidatesPassed += 1; });
     } catch (e) { addActivity('Books entry error: ' + e.message); console.error(e); }
     if (state.decisions.length > 100) state.decisions = state.decisions.slice(0, 100);
   } catch (e) {
@@ -418,6 +427,7 @@ app.get('/api/trades', function (req, res) {
     stratSizeMult: state.stratSizeMult || {},
     reentryCooldowns: state.reentryCooldowns || {},
     fetchStats: fetchStats(),
+    newPoolsFeed: newPools.snapshot(),
     poolChecks: state.poolChecks || null,
     pairPriceLookups: Object.assign({}, poolPrice.pairStats),
     mainPoolLookups: Object.assign({}, poolPrice.mainStats, { limiter: Object.assign({}, poolPrice.mainLimiter.stats) }),

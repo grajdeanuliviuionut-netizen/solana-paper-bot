@@ -203,11 +203,13 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     if (/\/latest\/dex\/pairs\//.test(url)) return { data: { pairs: ids.map(a => ({ chainId: 'solana', pairAddress: a, priceUsd: '0.01', liquidity: { usd: 100000 } })) } };
     return { data: ids.map(m => ({ chainId: 'solana', pairAddress: mainOf[m], baseToken: { address: m }, priceUsd: '0.01', liquidity: { usd: 100000 } })) };
   } } });
+  // PR13: the new_pools feed never touches the network in tests.
+  require('../src/newPools')._setDeps({ http: { get: async () => ({ status: 200, data: { data: [] } }) } });
   const idx = require('../src/index');
   await idx.tick();
   const st = idx.getState();
   assert.ok(!st.pausedIds.includes('dip-hold'), 'dip-hold unpaused');
-  assert.deepStrictEqual(st.pausedIds, [], 'PR7: all five books unpaused');
+  assert.deepStrictEqual(st.pausedIds, ['aggressive-flow'], 'PR13: only aggressive-flow paused (Liviu t68u); the other four legacy books unpaused');
   const opened = st.openPositions.map(p => p.pairAddress);
   assert.ok(!opened.includes('POOL_NIO'), 'NIO pool in 45-min cooldown');
   assert.ok(opened.includes('POOL_F'), 'fresh dip-hold entry opened: ' + JSON.stringify(st.activity.slice(0, 8)));

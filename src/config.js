@@ -59,7 +59,7 @@ module.exports = {
     {
       id: 'aggressive-flow',
       name: 'Aggressive flow scalp',
-      paused: false,
+      paused: true,             // PR13 (Liviu t68u, explicit override of never-pause for THIS book only): no new entries; open AF positions exit normally
       sizeMult: 0.25,           // PR9 (Liviu 17:56): quarter size (was 0.5 from PR7)
       universe: { minAgeDays: 0, maxAgeDays: null, minLiquidityUsd: 8000, maxLiquidityUsd: 2000000 },
       entry: [

@@ -220,7 +220,7 @@ test('main pool cache: price 60 s; only the DexScreener lookup verifies (scan ro
 
 test('unpaused books: momentum/dip-buyers/buyer-turn at half size, aggressive-flow at quarter size (PR9), no stacking, floor 0.02; dip-hold unchanged', () => {
   const af = config.strategies.find(x => x.id === 'aggressive-flow');
-  assert.strictEqual(af.paused, false); assert.strictEqual(af.sizeMult, 0.25);
+  assert.strictEqual(af.paused, true, 'PR13: AF paused (Liviu t68u)'); assert.strictEqual(af.sizeMult, 0.25);
   assert.strictEqual(sizeFor(0.24, { sizeMult: 1, stratSizeMult: {} }, config, 'aggressive-flow'), 0.06);
   assert.strictEqual(sizeFor(0.24, { sizeMult: 1, stratSizeMult: { 'aggressive-flow': 0.5 } }, config, 'aggressive-flow'), 0.06, 'no stacking');
   assert.strictEqual(sizeFor(0.05, { sizeMult: 1, stratSizeMult: {} }, config, 'aggressive-flow'), 0.02, 'floor 0.02');
@@ -234,8 +234,8 @@ test('unpaused books: momentum/dip-buyers/buyer-turn at half size, aggressive-fl
   assert.strictEqual(sizeFor(0.24, { sizeMult: 1, stratSizeMult: {} }, config, 'dip-hold'), 0.24);
   const state = { pausedIds: ['aggressive-flow', 'momentum-entry', 'dip-buyers', 'buyer-turn'], trades: [] };
   const r = review(state, config);
-  assert.deepStrictEqual(state.pausedIds, []);
-  assert.strictEqual(r.notes.filter(n => /MANAGER unpause/.test(n)).length, 4);
+  assert.deepStrictEqual(state.pausedIds, ['aggressive-flow'], 'PR13: only AF stays paused');
+  assert.strictEqual(r.notes.filter(n => /MANAGER unpause/.test(n)).length, 3);
   assert.strictEqual(state.stratSizeMult['dip-buyers'], 0.5, 'dip-buyers stratSizeMult 0.5');
   for (const id of ['momentum-entry', 'buyer-turn']) assert.strictEqual(state.stratSizeMult[id], 0.5, id);
   assert.strictEqual(state.stratSizeMult['aggressive-flow'], 0.25, 'aggressive-flow stratSizeMult 0.25');
