@@ -5,7 +5,9 @@
 function review(state, config) {
   const notes = [];
   const stats = {};
-  for (const t of state.trades || []) {
+  // PR11: trades archived at the scoreboard reset (state.managerHistory) still count here, so the
+  // reset never restores a legacy strategy's cut size. Book trades live in state.books (not scored here).
+  for (const t of (state.trades || []).concat(state.managerHistory || [])) {
     const id = t.strategyId || 'unknown';
     if (!stats[id]) stats[id] = { n: 0, pnl: 0, wins: 0 };
     const row = stats[id];

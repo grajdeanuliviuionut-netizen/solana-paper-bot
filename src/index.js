@@ -15,6 +15,25 @@ const httpBackoff = require('./httpBackoff');
 const poolPrice = require('./poolPrice');
 const dataFetcher = require('./dataFetcher');
 const { step: labStep } = require('./lab');
+const fs = require('fs');
+const path = require('path');
+const { Limiter } = require('./books/limiter');
+const { makeQuotes } = require('./books/quotes');
+const { makeMintAuth } = require('./books/mintAuth');
+const { makeBooks } = require('./books/engine');
+const { classifyBlocked } = require('./books/blocklist');
+
+const BUILD = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.SOURCE_COMMIT || null;
+// PR11 books: Jupiter (read-only quote API) and read-only Solana RPC get their own limiter buckets.
+const booksLimiter = new Limiter({
+  buckets: {
+    jupiter: { minGapMs: 1100, maxRetries: 1, cooldownMs: 20000 },   // <= ~55 requests/min (lite-api free 60/min)
+    rpc: { minGapMs: 400, maxRetries: 1, cooldownMs: 30000 }
+  },
+  baseBackoffMs: 1000, maxBackoffMs: 10000
+});
+const quotes = makeQuotes(booksLimiter);
+const mintAuth = makeMintAuth(booksLimiter);
 
 const shouldExit = sellAgent.shouldExit;
 const computePnl = sellAgent.computePnl || function (pos, exitPrice) {
@@ -32,6 +51,42 @@ if (typeof state.balance !== 'number') state.balance = config.startingSol;
 if (!Array.isArray(state.decisions)) state.decisions = [];
 console.log('Re-entry cooldowns seeded from closed trades: ' + reentry.seed(state, config));
 
+const books = makeBooks({
+  config, quotes, mintAuth, reentry,
+  log: function (type, symbol, reason) {
+    state.decisions.unshift(logDecision(type, symbol, reason));
+    if (type !== 'SKIP') addActivity(type + ' ' + symbol + ' ' + reason);
+  },
+  saveTrade: function (trade) { logTrade(trade); }
+});
+books.ensure(state);
+
+// PR11 scoreboard reset (once per epoch): the old trades are archived on the volume (state copy +
+// trades.jsonl copy; nothing is deleted), the scoreboard restarts empty from `since` with the build hash.
+// Balance carries over unchanged (same balance). Open legacy positions stay open and score on the new board.
+function resetScoreboard() {
+  const epoch = config.books.epoch;
+  if (state.scoreboard && state.scoreboard.epoch === epoch) return null;
+  const dir = path.dirname(process.env.STATE_FILE || './data/state.json');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const archiveFile = path.join(dir, 'archive', 'pre-' + epoch + '-' + stamp + '.json');
+  const tradesFile = process.env.TRADES_FILE || path.join(dir, 'trades.jsonl');
+  const tradesCopy = path.join(dir, 'archive', 'trades-pre-' + epoch + '-' + stamp + '.jsonl');
+  fs.mkdirSync(path.dirname(archiveFile), { recursive: true });
+  fs.writeFileSync(archiveFile, JSON.stringify({ archivedAt: new Date().toISOString(), epochBefore: (state.scoreboard && state.scoreboard.epoch) || 'legacy', balance: state.balance, equity: equity(), openPositions: state.openPositions, trades: state.trades, strategyStats: state.strategyStats || null, fetchStats: state.fetchStats || null, poolChecks: state.poolChecks || null }, null, 1));
+  let copied = 0;
+  try { if (fs.existsSync(tradesFile)) { fs.copyFileSync(tradesFile, tradesCopy); copied = fs.readFileSync(tradesCopy, 'utf8').split('\n').filter(Boolean).length; } } catch (e) { console.error('trades.jsonl archive copy failed', e.message); }
+  const archivedTrades = (state.trades || []).length;
+  state.managerHistory = (state.trades || []).slice(0, 100).map(function (t) { return { strategyId: t.strategyId, pnlSol: t.pnlSol, closedAt: t.closedAt }; });
+  state.trades = [];
+  state.riskResetAt = Date.now();
+  state.scoreboard = { epoch: epoch, since: new Date().toISOString(), build: BUILD, startBalance: state.balance, startEquity: equity(), archiveFile: archiveFile, tradesJsonlCopy: copied ? tradesCopy : null, archivedStateTrades: archivedTrades, archivedJsonlTrades: copied, legacyOpenCarried: (state.openPositions || []).length };
+  addActivity('SCOREBOARD reset (' + epoch + '): ' + archivedTrades + ' trades archived to ' + path.basename(archiveFile) + ', balance unchanged ' + Number(state.balance).toFixed(4));
+  return state.scoreboard;
+}
+try { resetScoreboard(); } catch (e) { console.error('Scoreboard reset failed', e.message); }
+if (state.scoreboard) state.scoreboard.build = BUILD || state.scoreboard.build;
+
 const app = express();
 
 function addActivity(msg) {
@@ -40,7 +95,7 @@ function addActivity(msg) {
 }
 
 function lockedSol() {
-  return (state.openPositions || []).reduce(function (sum, pos) { return sum + (Number(pos.sizeSol) || 0); }, 0);
+  return (state.openPositions || []).reduce(function (sum, pos) { return sum + (Number(pos.sizeSol) || 0); }, 0) + books.lockedSol(state);
 }
 
 function equity() {
@@ -219,11 +274,19 @@ async function tick() {
       }
       const price = fresh ? pair.priceUsd : (pos.pairAddress ? (Number(pos.lastPrice) || pos.entryPrice) : pos.entryPrice);
       if (fresh && price > (pos.highest || 0)) pos.highest = price;
-      const exit = shouldExit(pos, price, fresh || !pos.pairAddress);
+      // PR11 stock block: an open legacy position on a tokenised stock (TTWO, NIO, ...) is closed at the
+      // fresh stored-pool price (legacy positions hold no token amount, so no Jupiter sell quote exists).
+      const stockWhy = classifyBlocked({ mint: pos.mint, symbol: pos.symbol, name: pos.name });
+      let exit = null;
+      if (stockWhy && fresh) {
+        exit = { reason: 'stock-block', fillPrice: price };
+        state.stockClosures = (state.stockClosures || []).concat([{ symbol: pos.symbol, mint: pos.mint || null, strategyId: pos.strategyId, reason: stockWhy, price: price, priceSource: pair.source, at: new Date().toISOString() }]).slice(-20);
+      } else if (stockWhy && !pos.stockWaitLogged) { pos.stockWaitLogged = true; addActivity('STOCK ' + pos.symbol + ' blocked (' + stockWhy + '), closing at the next fresh price'); }
+      if (!exit) exit = shouldExit(pos, price, fresh || !pos.pairAddress);
       if (exit) {
         const pnl = computePnl(pos, exit.fillPrice);
         state.balance += pos.sizeSol + pnl;
-        const trade = Object.assign({}, pos, { exitReason: exit.reason, exitPrice: exit.fillPrice, pnlSol: pnl, closedAt: new Date().toISOString() });
+        const trade = Object.assign({}, pos, { legacy: true, book: null, strategyVersion: (pos.strategyId || 'legacy') + ' legacy', exitReason: exit.reason, exitPrice: exit.fillPrice, exitPriceSource: pos.markSource || null, pnlSol: pnl, pnlPct: +((pnl / (pos.sizeSol || 1)) * 100).toFixed(3), closedAt: new Date().toISOString() });
         state.trades.unshift(trade);
         if (state.trades.length > 100) state.trades.pop();
         logTrade(trade);
@@ -237,6 +300,11 @@ async function tick() {
     const labNotes = labStep(state, pairs);
     for (const note of labNotes) addActivity(note);
     const result = generateSignals(pairs) || { signals: [], rejections: [] };
+    result.signals = (result.signals || []).filter(function (sig) {
+      const why = books.stockBlock(state, { mint: sig.mint, symbol: sig.symbol, name: sig.pair && sig.pair.name }, 'legacy');
+      if (why) state.decisions.unshift(logDecision('SKIP', sig.symbol, 'stock-block: ' + why + ' (' + sig.strategyId + ')'));
+      return !why;
+    });
     state.skips = skipSummary(result.rejections);
     if (canOpen()) {
       let opened = 0;
@@ -289,6 +357,9 @@ async function tick() {
           exec.position.storedPoolPriced = exec.position.lastPricedAt;
           exec.position.entryPriceSource = px.source;
           exec.position.markSource = px.source;
+          exec.position.rugCheck = check;
+          exec.position.legacy = true;
+          exec.position.strategyVersion = sig.strategyId + ' legacy';
           state.openPositions.push(exec.position);
           state.balance -= size;
           state.decisions.unshift(logDecision('ENTRY', sig.symbol, exec.reason, { size: size }));
@@ -304,6 +375,13 @@ async function tick() {
       addActivity('HOLD ' + state.blockReason);
       state.lastBlock = state.blockReason;
     }
+    // PR11: the four books (own capacity, same size, Jupiter-quoted fills).
+    try {
+      await books.runEntries(state, pairs, async function (sig, row) {
+        await poolPrice.prefetchMain([sig.mint]);
+        return poolGate(sig, row.priceUsd, pairs);
+      });
+    } catch (e) { addActivity('Books entry error: ' + e.message); console.error(e); }
     if (state.decisions.length > 100) state.decisions = state.decisions.slice(0, 100);
   } catch (e) {
     addActivity('Tick error: ' + e.message);
@@ -316,7 +394,8 @@ async function tick() {
 
 app.get('/', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.type('html').send(render(state, config));
+  const html = render(state, config);
+  res.type('html').send(html.indexOf('</body>') >= 0 ? html.replace('</body>', renderBooks() + '</body>') : html + renderBooks());
 });
 
 app.get('/api/trades', function (req, res) {
@@ -334,14 +413,82 @@ app.get('/api/trades', function (req, res) {
     pairPriceLookups: Object.assign({}, poolPrice.pairStats),
     mainPoolLookups: Object.assign({}, poolPrice.mainStats, { limiter: Object.assign({}, poolPrice.mainLimiter.stats) }),
     remarks: state.remarks || [],
-    trades: state.trades || []
+    build: BUILD,
+    liveTrading: false,
+    scoreboard: state.scoreboard || null,
+    books: booksPayload(),
+    bookOpenPositions: books.ensure(state).open,
+    bookRejects: books.ensure(state).rejects,
+    stockBlocks: books.ensure(state).stockBlocks,
+    stockClosures: state.stockClosures || [],
+    jupiterQuotes: jupiterStats(),
+    mintAuthority: Object.assign({}, mintAuth.stats),
+    booksLimiter: booksLimiter.stats(),
+    exitLoop: Object.assign({}, exitLoopStats),
+    legacyTrades: state.trades || [],
+    bookTrades: books.ensure(state).trades,
+    trades: allTrades()
   });
 });
+
+app.get('/api/books', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, rejects: books.ensure(state).rejects, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: Object.assign({}, exitLoopStats), trades: books.ensure(state).trades });
+});
+
+app.get('/api/health', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, scoreboard: state.scoreboard || null, exitLoop: Object.assign({}, exitLoopStats), fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
+});
+
+function booksPayload() {
+  return { epoch: config.books.epoch, since: state.scoreboard ? state.scoreboard.since : null, sizeSol: config.books.sizeSol, maxOpenPerBook: config.books.maxOpenPerBook, targetTrades: config.books.targetTrades, maxPriceAgeSec: config.books.maxPriceAgeSec, costRoundtripPct: config.costRoundtripPct, list: books.report(state) };
+}
+function jupiterStats() {
+  const s = quotes.stats;
+  return Object.assign({}, s, { successRatePct: s.quotes ? +((100 * s.ok) / s.quotes).toFixed(1) : null, limiter: booksLimiter.stats().jupiter });
+}
+function allTrades() {
+  const b = books.ensure(state).trades;
+  return b.concat(state.trades || []).sort(function (x, y) { return Date.parse(y.closedAt) - Date.parse(x.closedAt); });
+}
+
+// PR11 exit loop for the books: re-quotes every open book position (Jupiter sell quote) then waits
+// config.books.exitLoopMs, so stops are checked every few seconds instead of every 45 s scan.
+const exitLoopStats = { passes: 0, errors: 0, lastPassAt: null, lastPassMs: null, lastError: null };
+async function exitLoop() {
+  const t0 = Date.now();
+  try {
+    const changed = await books.runExits(state);
+    exitLoopStats.passes += 1;
+    if (changed && !ticking) saveState(state);
+  } catch (e) {
+    exitLoopStats.errors += 1;
+    exitLoopStats.lastError = String(e.message || e).slice(0, 120);
+    console.error('books exit loop', e);
+  }
+  exitLoopStats.lastPassAt = new Date().toISOString();
+  exitLoopStats.lastPassMs = Date.now() - t0;
+}
+function startExitLoop() {
+  (async function loop() { await exitLoop(); setTimeout(loop, config.books.exitLoopMs); })();
+}
+
+function renderBooks() {
+  const rows = books.report(state).map(function (b) {
+    const cls = (b.profitPerTradeSol || 0) >= 0 ? 'win' : 'loss';
+    return '<tr><td>' + b.label + '</td><td>' + b.progress + '</td><td>' + (b.winRatePct == null ? '-' : b.winRatePct + '%') + '</td><td class="' + cls + '">' + (b.profitPerTradeSol == null ? '-' : b.profitPerTradeSol.toFixed(5)) + '</td><td>' + (b.netWithoutBestSol == null ? '-' : b.netWithoutBestSol.toFixed(5)) + '</td><td>' + (b.worstLossPct == null ? '-' : b.worstLossPct + '%') + '</td><td>' + b.openPositions + '/' + b.maxOpen + '</td></tr>';
+  }).join('');
+  const sb = state.scoreboard || {};
+  return '<section class="card" style="margin:12px auto;max-width:1180px;padding:12px"><h2 style="margin:0 0 6px">Books (paper, ' + config.books.sizeSol + ' SOL each, Jupiter-quoted fills)</h2><p class="mute">scoreboard ' + (sb.epoch || '') + ' since ' + (sb.since || '') + ' \u00b7 build ' + String(BUILD || 'local').slice(0, 7) + ' \u00b7 profit per trade after 1.1% costs</p>' +
+    '<table style="width:100%;font-size:13px"><tr class="mute"><th align="left">book</th><th>trades</th><th>win</th><th>SOL/trade</th><th>net w/o best</th><th>worst</th><th>open</th></tr>' + rows + '</table></section>';
+}
 
 if (require.main === module) app.listen(config.port, function () {
   console.log('Dashboard running on port ' + config.port);
   tick();
   setInterval(tick, config.pollIntervalMs);
+  startExitLoop();
 });
 
-module.exports = { app, tick, getState: function () { return state; } };
+module.exports = { app, tick, exitLoop, books, quotes, mintAuth, booksLimiter, resetScoreboard, getState: function () { return state; } };

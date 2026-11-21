@@ -187,12 +187,12 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
   fs.writeFileSync(process.env.STATE_FILE, JSON.stringify({
     balance: 3.0399, openPositions: [], activity: [], decisions: [], paperReset: 'work-1',
     pausedIds: ['aggressive-flow', 'momentum-entry', 'dip-buyers', 'buyer-turn', 'dip-hold'],
-    trades: [{ symbol: 'NIO', strategyId: 'dip-hold', strategyName: 'Dip and hold', pairAddress: 'POOL_NIO', mint: 'MINT_NIO', pnlSol: -0.0255, exitReason: 'sl', closedAt: new Date(now - 5 * MIN).toISOString() }]
+    trades: [{ symbol: 'COOLD', strategyId: 'dip-hold', strategyName: 'Dip and hold', pairAddress: 'POOL_NIO', mint: 'MINT_NIO', pnlSol: -0.0255, exitReason: 'sl', closedAt: new Date(now - 5 * MIN).toISOString() }]
       .concat(losing('dip-hold', 8))
   }));
   const dip = (sym, pool, mint) => ({ pairAddress: pool, mint, symbol: sym, priceUsd: 0.01, liquidityUsd: 100000, volumeH1: 20000, priceChange: { m5: 1, h1: -6, h6: 0, h24: 0 }, txns: { buys: 200, sells: 100 }, ageDays: 5 });
   const scannerPath = require.resolve('../src/agents/scanner');
-  require.cache[scannerPath] = { id: scannerPath, filename: scannerPath, loaded: true, exports: { scan: async () => [dip('NIO', 'POOL_NIO', 'MINT_NIO'), dip('NIO', 'POOL_NIO2', 'MINT_NIO_CLONE'), dip('FRESH', 'POOL_F', 'MINT_F')] } };
+  require.cache[scannerPath] = { id: scannerPath, filename: scannerPath, loaded: true, exports: { scan: async () => [dip('COOLD', 'POOL_NIO', 'MINT_NIO'), dip('COOLD', 'POOL_NIO2', 'MINT_NIO_CLONE'), dip('FRESH', 'POOL_F', 'MINT_F')] } };
   hb._reset(); hb._setDeps({ http: { get: async () => ({ data: { data: [] } }) }, sleep: async () => {}, now: () => Date.now(), opts: { minGapMs: 0 } });
   // Main-pool lookup (own limiter): DexScreener answers each mint with its scan pool as the main pool.
   const pp = require('../src/poolPrice');
@@ -223,7 +223,16 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     const t = await get('/api/trades');
     assert.strictEqual(t.status, 200);
     const j = JSON.parse(t.body);
-    assert.ok(j.trades.length >= 9 && j.pausedIds && j.reentryCooldowns);
+    // PR11 scoreboard reset: old trades archived on the volume, fresh board, same balance.
+    assert.ok(j.pausedIds && j.reentryCooldowns);
+    assert.strictEqual(j.legacyTrades.length, 0, 'fresh scoreboard');
+    assert.strictEqual(j.scoreboard.epoch, 'books-v1');
+    assert.ok(j.scoreboard.since && 'build' in j.scoreboard);
+    const arch = JSON.parse(fs.readFileSync(j.scoreboard.archiveFile, 'utf8'));
+    assert.strictEqual(arch.trades.length, 9, 'old trades archived, not destroyed');
+    assert.strictEqual(j.scoreboard.startBalance, 3.0399, 'same balance');
+    assert.strictEqual(j.books.list.length, 4);
+    assert.ok(j.books.list.every(b => b.sizeSol === 0.05 && b.progress === '0/30'));
     for (const k of ['requests', 'rateLimited', 'retries', 'skipped', 'last429At', 'since', 'byHost', 'scan']) assert.ok(k in j.fetchStats, 'fetchStats.' + k);
     const d = await get('/');
     assert.strictEqual(d.status, 200);
