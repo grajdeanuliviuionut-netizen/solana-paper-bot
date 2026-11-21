@@ -6,9 +6,10 @@ const { generateSignals } = require('./buyAgent');
 const { shouldExit, computePnl } = require('./sellAgent');
 
 let state = loadState();
-if (!state.activity) state.activity = [];
-if (!state.openPositions) state.openPositions = [];
-if (!state.trades) state.trades = [];
+if (!state || typeof state !== 'object') state = {};
+if (!Array.isArray(state.activity)) state.activity = [];
+if (!Array.isArray(state.openPositions)) state.openPositions = [];
+if (!Array.isArray(state.trades)) state.trades = [];
 if (typeof state.balance !== 'number') state.balance = config.startingSol;
 
 const app = express();
@@ -27,9 +28,12 @@ function canOpen() {
 async function tick() {
   try {
     const pairs = await getCandidatePairs();
-    addActivity(`Scanned ${pairs.length} pairs`);
+    const safePairs = Array.isArray(pairs) ? pairs : [];
+    addActivity(`Scanned ${safePairs.length} pairs`);
     const byAddr = {};
-    pairs.forEach(p => { if (p && p.pairAddress) byAddr[p.pairAddress] = p; });
+    for (const p of safePairs) {
+      if (p && p.pairAddress) byAddr[p.pairAddress] = p;
+    }
 
     const stillOpen = [];
     for (const pos of state.openPositions) {
@@ -58,7 +62,7 @@ async function tick() {
     state.openPositions = stillOpen;
 
     if (canOpen()) {
-      const result = generateSignals(pairs);
+      const result = generateSignals(safePairs) || { signals: [], rejections: [] };
       const signals = result.signals || [];
       const rejections = result.rejections || [];
       if (rejections.length) {
