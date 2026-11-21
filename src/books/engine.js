@@ -201,6 +201,11 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const b = ensure(state);
       recordSnaps(state, pairs);
       const sigs = signals(state, pairs, extraByBook, onExtraPass);
+      // PR14 dashboard: candidates per book in the last scan (why an empty book is idle).
+      const cand = {};
+      for (const bk of C.list) cand[bk.id] = 0;
+      for (const sg of sigs) cand[sg.book.id] = (cand[sg.book.id] || 0) + 1;
+      b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: cand };
       let tried = 0;
       for (const { book, row, fields } of sigs) {
         if (tried >= C.maxEntriesPerTick) break;

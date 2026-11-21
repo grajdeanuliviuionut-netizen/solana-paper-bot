@@ -254,6 +254,8 @@ async function tick() {
     const labNotes = labStep(state, pairs);
     for (const note of labNotes) addActivity(note);
     const result = generateSignals(pairs) || { signals: [], rejections: [] };
+    // PR14 dashboard: legacy signals per strategy in the last scan (why an empty strategy is idle).
+    state.lastLegacyScan = { at: new Date().toISOString(), pairs: pairs.length, signalsByStrategy: (result.signals || []).reduce(function (a, sg) { a[sg.strategyId] = (a[sg.strategyId] || 0) + 1; return a; }, {}) };
     result.signals = (result.signals || []).filter(function (sig) {
       const why = books.stockBlock(state, { mint: sig.mint, symbol: sig.symbol, name: sig.pair && sig.pair.name }, 'legacy');
       if (why) state.decisions.unshift(logDecision('SKIP', sig.symbol, 'stock-block: ' + why + ' (' + sig.strategyId + ')'));
@@ -409,6 +411,11 @@ app.get('/api/trades', function (req, res) {
 
 let dashApiInst = null; // built lazily (exitLoopStats is declared further down)
 function dashApi() { return dashApiInst || (dashApiInst = makeDashboardApi({ getState: function () { return state; }, config, books, equity, lockedSol, fetchStats, jupiterStats, mintAuth, exitLoopStats, exitLoopView, stopFillsView, booksLimiter, build: BUILD, startedAt: SERVER_STARTED_AT })); }
+// PR14 (Liviu t74u): open positions grouped by strategy/book (4 books + every legacy strategy).
+app.get('/api/positions', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  res.json({ now: new Date().toISOString(), build: BUILD, liveTrading: false, exitLoop: exitLoopView(), groups: dashApi().positionsByStrategy() });
+});
 app.get('/api/dashboard', function (req, res) {
   res.set('Cache-Control', 'no-store');
   try { res.json(dashApi().payload()); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }

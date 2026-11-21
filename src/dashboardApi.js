@@ -46,7 +46,7 @@ function markOpen(pos, costPct, nowMs) {
     rugCheck: pos.rugCheck ? { pass: pos.rugCheck.pass, reason: pos.rugCheck.reason } : null,
     entryImpactPct: pos.entryQuote ? num(pos.entryQuote.priceImpactPct) : null,
     legs: (pos.legs || []).map(l => ({ reason: l.reason, at: l.at, sellPctOfOriginal: l.sellPctOfOriginal, solOut: l.solOut, pnlSol: l.pnlSol, fillSolPerToken: l.fillSolPerToken })),
-    stale: !!pos.priceStale
+    stale: !!pos.priceStale, tokensEstimated: !!pos.tokensEstimated, markPrice: null
   };
   if (out.markAt) out.markAgeSec = Math.max(0, Math.round((nowMs - Date.parse(out.markAt)) / 1000));
   if (isBook) {
@@ -66,6 +66,7 @@ function markOpen(pos, costPct, nowMs) {
     }
   }
   if (out.pnlPct != null) out.netPnlPct = r(out.pnlPct - costPct, 3);
+  if (out.entryPrice != null && out.pnlPct != null) out.markPrice = out.entryPrice * (1 + out.pnlPct / 100);
   return out;
 }
 
@@ -166,6 +167,7 @@ function makeDashboardApi(deps) {
       booksConfig: cfg.books ? { epoch: cfg.books.epoch, sizeSol: cfg.books.sizeSol, maxOpenPerBook: cfg.books.maxOpenPerBook, targetTrades: cfg.books.targetTrades, maxPriceAgeSec: cfg.books.maxPriceAgeSec } : null,
       legacyStrategies,
       openPositions: open,
+      positionsByStrategy: positionsByStrategy(),
       recentTrades: all.slice(0, 60).map(compactTrade),
       agents: {
         manager: { lastUpdate: state.lastUpdate || null, pollIntervalMs: cfg.pollIntervalMs, blockReason: state.blockReason || '', pausedIds: state.pausedIds || [], stratSizeMult: state.stratSizeMult || {}, maxOpen: cfg.maxOpen, legacyOpen: (state.openPositions || []).length, bookOpen: (b.open || []).length },
@@ -177,7 +179,68 @@ function makeDashboardApi(deps) {
       }
     };
   }
-  return { payload, snapshot, marks };
+
+  // PR14 (Liviu t74u): open positions grouped per book / legacy strategy. Every book and every configured
+  // legacy strategy appears, empty ones with their last entry time and why they are idle (if known).
+  function positionsByStrategy() {
+    const state = deps.getState();
+    const cfg = deps.config;
+    const now = Date.now();
+    const b = deps.books.ensure(state);
+    const open = marks();
+    const exitOf = p => p.exit || {};
+    const lastEntry = list => list.reduce((a, t) => (t.entryTime && (!a || t.entryTime > a) ? t.entryTime : a), null);
+    function group(base, positions, closed) {
+      const rows = positions.map(p => {
+        const ex = exitOf(p);
+        const tp = ex.takeProfitPct != null ? ex.takeProfitPct : (ex.partial ? ex.partial.atPct : null);
+        return { id: p.id, symbol: p.symbol, name: p.name, mint: p.mint, pairAddress: p.pairAddress,
+          dexUrl: p.pairAddress ? 'https://dexscreener.com/solana/' + p.pairAddress : (p.mint ? 'https://dexscreener.com/solana/' + p.mint : null),
+          sizeSol: p.sizeSol, costBasisSol: p.costBasisSol, entryTime: p.entryTime, ageMin: p.entryTime ? r((now - Date.parse(p.entryTime)) / 60000, 1) : null,
+          entryPrice: p.entryPrice, markPrice: p.markPrice, priceUnit: p.priceUnit, markSource: p.markSource, markAt: p.markAt, quoteAgeSec: p.markAgeSec,
+          pnlPct: p.pnlPct, netPnlPct: p.netPnlPct, unrealizedSol: p.unrealizedSol, peakPct: p.peakPct,
+          stopPct: ex.stopLossPct != null ? -ex.stopLossPct : null, targetPct: tp, trailPct: ex.trailPct != null ? ex.trailPct : null, maxHoldMinutes: ex.maxHoldMinutes != null ? ex.maxHoldMinutes : null,
+          tokensEstimated: !!p.tokensEstimated };
+      });
+      const cost = rows.reduce((a, x) => a + (x.costBasisSol || x.sizeSol || 0), 0);
+      const pnl = rows.reduce((a, x) => a + (x.unrealizedSol || 0), 0);
+      return Object.assign(base, { openCount: rows.length, openPnlSol: r(pnl), openPnlPct: cost > 0 ? r((pnl / cost) * 100, 2) : null, openCostSol: r(cost),
+        lastEntryAt: lastEntry(positions.concat(closed)), empty: rows.length === 0, positions: rows });
+    }
+    const groups = [];
+    const scan = b.lastScan || null;
+    const rejects = (b.rejects && b.rejects.recent) || [];
+    for (const book of (cfg.books && cfg.books.list) || []) {
+      const label = book.id + ' v' + book.version;
+      const g = group({ kind: 'book', id: book.id, name: book.name + ' v' + book.version, label, status: 'active', maxOpen: cfg.books.maxOpenPerBook, sizeSol: cfg.books.sizeSol },
+        open.filter(p => p.kind === 'book' && p.book === book.id), (b.trades || []).filter(t => t.book === book.id));
+      if (g.empty) {
+        const n = scan && scan.candidatesByBook ? scan.candidatesByBook[book.id] : null;
+        const rj = rejects.find(x => x.book === label);
+        g.idleReason = n === 0 ? '0 candidates passed the entry rules in the last scan' + (scan ? ' (' + scan.pairs + ' pairs)' : '') : n > 0 ? n + ' candidate(s) last scan' + (rj ? ', last reject: ' + rj.reason + ' (' + rj.symbol + ')' : '') : (rj ? 'last reject: ' + rj.reason + ' (' + rj.symbol + ')' : 'no scan yet since restart');
+        g.idleSince = scan ? scan.at : null;
+        if (rj) g.lastReject = rj;
+      }
+      groups.push(g);
+    }
+    const lscan = state.lastLegacyScan || null;
+    const legacyOpenTotal = (state.openPositions || []).length;
+    for (const s of cfg.strategies || []) {
+      const paused = (state.pausedIds || []).indexOf(s.id) >= 0 || !!s.paused;
+      const g = group({ kind: 'legacy', id: s.id, name: (s.name || s.id) + ' (legacy)', label: s.id + ' legacy', status: paused ? 'paused' : 'active', maxOpen: cfg.maxOpen, maxOpenShared: true,
+        stratSizeMult: (state.stratSizeMult || {})[s.id] == null ? null : state.stratSizeMult[s.id] },
+        open.filter(p => p.kind === 'legacy' && p.strategyId === s.id), (state.trades || []).filter(t => t.strategyId === s.id));
+      if (g.empty) {
+        const n = lscan && lscan.signalsByStrategy ? (lscan.signalsByStrategy[s.id] || 0) : null;
+        g.idleReason = paused ? 'PAUSED (no new entries; open trades still exit)' : legacyOpenTotal >= cfg.maxOpen ? 'legacy slots full (' + legacyOpenTotal + '/' + cfg.maxOpen + ' shared)'
+          : n === 0 ? '0 signals passed the entry rules in the last scan' + (lscan ? ' (' + lscan.pairs + ' pairs)' : '') : n > 0 ? n + ' signal(s) last scan, not entered (slot reserve / pool check / cooldown)' : 'no scan yet since restart';
+        g.idleSince = lscan ? lscan.at : null;
+      }
+      groups.push(g);
+    }
+    return groups;
+  }
+  return { payload, snapshot, marks, positionsByStrategy };
 }
 
 module.exports = { makeDashboardApi, markOpen, scoreGroup, londonDay };

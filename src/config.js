@@ -27,7 +27,7 @@ module.exports = {
     targetTrades: 30,             // report each book after 30 trades
     maxPriceAgeSec: 30,           // never act on a scan row or a quote older than 30 s
     exitLoopMs: 5000,             // PR14 target period of the exit loop (ALL open trades, legacy + books)
-    exitQuotesPerMin: 45,         // PR14 Jupiter quotes/min the exit loop may use (bucket max ~55); more opens -> longer period
+    exitQuotesPerMin: 52,         // PR14 Jupiter quotes/min the exit loop may use (bucket max ~55, limiter-enforced); more opens -> longer period
     maxExitQuoteAgeSec: 10,       // PR14 exit decisions only on a Jupiter sell quote <= 10 s old
     noRouteConsecutive: 5,        // PR14 no-route total loss needs 5 consecutive no-route answers AND noRouteTotalLossMin
     maxEntriesPerTick: 4,
