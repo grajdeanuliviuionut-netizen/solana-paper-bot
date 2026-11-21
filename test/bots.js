@@ -49,7 +49,7 @@ test('buildBots: six agents + strategy rows with real statuses and metrics', () 
   assert.strictEqual(a.manager.status, 'RUNNING'); assert.strictEqual(a.scanner.status, 'RUNNING'); assert.strictEqual(a.rugCheck.status, 'IDLE');
   assert.strictEqual(a.strategist.status, 'RUNNING'); assert.strictEqual(a.executor.status, 'RUNNING'); assert.strictEqual(a.logger.status, 'RUNNING');
   assert.strictEqual(a.scanner.pairsPerMin, 13.8); assert.strictEqual(a.scanner.http429, 1);
-  assert.strictEqual(a.rugCheck.passes, 6); assert.strictEqual(a.rugCheck.rejects, 4);
+  assert.strictEqual(a.rugCheck.passes, 6); assert.strictEqual(a.rugCheck.rejects, 3); assert.strictEqual(a.rugCheck.stockBlocks, 1);
   assert.strictEqual(a.strategist.candidatesLastHour, 3); assert.strictEqual(a.strategist.entriesLastHour, 2);
   assert.strictEqual(a.executor.quotesPerMin, 4); assert.strictEqual(a.executor.checkIntervalSec, 6.1);
   assert.strictEqual(a.logger.tradesWritten, 3);

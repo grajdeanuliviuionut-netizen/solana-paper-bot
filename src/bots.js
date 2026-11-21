@@ -82,7 +82,7 @@ function buildBots(ctx) {
   const np = ctx.newPools || {};
   const ma = ctx.mintAuthStats || {}, hc = ctx.holderStats || {}, lr = ctx.legacyRug || {};
   const passes = (ma.passed || 0) + (hc.passed || 0) + (lr.passed || 0);
-  const rejects = (ma.rejected || 0) + (hc.rejected || 0) + (lr.rejected || 0) + ((ctx.stockBlocks && ctx.stockBlocks.count) || 0);
+  const rejects = (ma.rejected || 0) + (hc.rejected || 0) + (lr.rejected || 0);   // since restart (stock blocks are cumulative, shown apart)
   const rc429 = (ctx.rugcheckLimiter && ctx.rugcheckLimiter.http429) || 0;
   const jl = ctx.jupiterLimiter || {};
   const qWin = Math.min(10, uptimeMin);
@@ -94,7 +94,7 @@ function buildBots(ctx) {
       { uptimeSec: Math.round(uptimeMin * 60), build: ctx.build || null, ticks: T.get('manager').total, lastTickMs: T.get('manager').lastTickMs || null }),
     agent('scanner', 'Scanner', 'DexScreener scan + GT new_pools', poll, { label: 'pairs/min', value: pairsPerMin, sub: '429s ' + scan429 + (np.pausedUntil && Date.parse(np.pausedUntil) > t ? ' · new_pools paused' : ' · new_pools ' + (np.calls || 0) + ' calls') },
       { pairsPerMin, http429: scan429, lastPairs: T.get('scanner').lastPairs == null ? null : T.get('scanner').lastPairs, newPoolsCalls: np.calls || 0, newPoolsPausedUntil: np.pausedUntil || null }),
-    agent('rugCheck', 'Rug Check', 'RPC mint/freeze · stock block · RugCheck holders/LP', poll, { label: 'pass / reject', value: passes + ' / ' + rejects, sub: 'RugCheck ' + (hc.requests || 0) + ' req · 429s ' + rc429 },
+    agent('rugCheck', 'Rug Check', 'RPC mint/freeze · stock block · RugCheck holders/LP', poll, { label: 'pass / reject', value: passes + ' / ' + rejects, sub: 'since restart · stock blocks ' + ((ctx.stockBlocks && ctx.stockBlocks.count) || 0) + ' · RugCheck 429s ' + rc429 },
       { passes, rejects, mintAuthority: { checks: ma.checks || 0, passed: ma.passed || 0, rejected: ma.rejected || 0, errors: ma.errors || 0 }, holders: { checks: hc.checks || 0, passed: hc.passed || 0, rejected: hc.rejected || 0, errors: hc.errors || 0, http429: rc429 }, legacy: Object.assign({}, lr), stockBlocks: (ctx.stockBlocks && ctx.stockBlocks.count) || 0 }),
     agent('strategist', 'Strategist', 'entry rules · books + legacy', poll, { label: 'cand / entries 1h', value: cand1h + ' / ' + (ctx.entriesLastHour || 0), sub: (T.get('strategist').lastEval ? 'last eval ' + T.get('strategist').lastEval : 'no evaluation yet') },
       { candidatesLastHour: cand1h, entriesLastHour: ctx.entriesLastHour || 0, lastEval: T.get('strategist').lastEval || null }),
