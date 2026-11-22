@@ -9,6 +9,11 @@ process.env.STATE_FILE = path.join(TMP, 'state.json');
 process.env.TRADES_FILE = path.join(TMP, 'trades.jsonl');
 delete process.env.LIVE_TRADING; delete process.env.WALLET_PRIVATE_KEY; delete process.env.RESET_STATE;
 const config = require('../src/config');
+// t83u (Liviu 22 Nov 06:46): the live config pauses everything except runner-hunter (asserted in test/pause.js).
+// The legacy behaviour tests below run on the pre-t83u active set (only aggressive-flow paused) so entry logic stays covered.
+for (const s of config.strategies) s.paused = s.id === 'aggressive-flow';
+for (const b of config.books.list) b.paused = false;
+config.slotReserve = { 'dip-hold': 1 };
 const { review, sizeFor } = require('../src/manager');
 const reentry = require('../src/reentry');
 const hb = require('../src/httpBackoff');
@@ -273,7 +278,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     assert.strictEqual(dj2.positionsByStrategy.length, pz.groups.length);
     const page = await get('/');
     assert.ok(!/night/i.test(page.body), 'no Night Shift branding');
-    assert.ok(/stratGroups/.test(page.body) && /renderStrategies/.test(page.body) && /stratLegacy/.test(page.body) && /setInterval\(refresh, 5000\)/.test(page.body), 'Paper Terminal page has the positions-by-strategy panel');
+    assert.ok(/id="hero"/.test(page.body) && /renderHero/.test(page.body) && /id="paused"/.test(page.body) && /renderPaused/.test(page.body) && /setInterval\(refresh, 5000\)/.test(page.body), 'Paper Terminal: runner-hunter hero + paused list (t83u)');
     assert.ok(/Dip and hold/.test(d.body), 'strategy name on close rows (classic dashboard)');
     // Paper Terminal dashboard: static page at '/', assets, equity history and the aggregate endpoint
     const home = await get('/');
@@ -305,7 +310,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     assert.ok(bj.strategies.length >= 9 && bj.strategies.find(x => x.id === 'aggressive-flow').status === 'PAUSED');
     assert.ok(bj.strategies.every(x => ['RUNNING', 'WATCHING', 'PAUSED', 'EMPTY'].includes(x.status) && 'trades' in x && 'netSol' in x && 'maxOpen' in x));
     assert.strictEqual(dj.bots.agents.length, 6);
-    assert.ok(/id="bots"/.test(home.body) && /renderBots/.test(home.body), 'Bots panel on the page');
+    assert.ok(/id="nucleus"/.test(home.body) && /renderNucleus/.test(home.body), 'agents nucleus on the page (t83u)');
   } finally { server.close(); }
 });
 
