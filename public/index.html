@@ -22,14 +22,18 @@ header{display:flex;align-items:center;justify-content:space-between;gap:24px;pa
 .hx{font-size:13px;color:var(--mute);margin:-4px 0 12px}.hx b{color:var(--ink,#e8edf4);font-weight:600}
 .health{font-size:12.5px;color:var(--sub);text-align:right;line-height:1.6}
 .health .d{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--up);margin-right:6px;vertical-align:1px}.health .d.bad{background:var(--dn)}
-/* t102u/t103u (Liviu): ultrawide fix - main content sits in a centred 1400px container; CSS Grid auto-fit columns
-   (min 440px; stat boxes min 100px) give 2 columns at full width (stats/agents column next to the positions table), 1 column on narrow
-   screens; the fills column spans the full container width underneath. */
-.wrap{max-width:1400px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:20px;padding:20px 28px 28px;align-items:start}
-.wrap>.col:last-child{grid-column:1/-1}
-header{flex-wrap:wrap;padding-left:max(28px,calc((100% - 1400px) / 2 + 28px));padding-right:max(28px,calc((100% - 1400px) / 2 + 28px))}
-@media (max-width:1400px){.kpis{flex-wrap:wrap}}
-@media (max-width:720px){header{flex-wrap:wrap}.wrap{padding:14px 12px 20px;gap:14px}.card{padding:14px}.pt,.ft{display:block;overflow-x:auto}}
+/* t104u (Liviu): ultrawide layout - everything below the header sits in a centred container, max-width 1600px,
+   margin 0 auto, padding 20px. Columns have bounded widths so nothing stretches: >=1500px three columns
+   (agents/rules 340-420px | hero + open positions | recent fills 360-440px); 1000-1499px two columns (fills span
+   below); narrower one column. Stat boxes are grids of bounded tiles; tables 100% wide, left-aligned, padded. */
+.wrap{max-width:1600px;margin:0 auto;padding:20px;display:grid;grid-template-columns:minmax(0,1fr);gap:20px;align-items:start}
+@media (min-width:1000px){.wrap{grid-template-columns:minmax(320px,420px) minmax(0,1fr)}.wrap>.col:last-child{grid-column:1/-1}}
+@media (min-width:1500px){.wrap{grid-template-columns:minmax(340px,420px) minmax(0,1fr) minmax(360px,440px)}.wrap>.col:last-child{grid-column:auto}}
+header{flex-wrap:wrap;padding-left:max(20px,calc((100% - 1600px) / 2 + 20px));padding-right:max(20px,calc((100% - 1600px) / 2 + 20px))}
+header .kpis{display:grid;grid-template-columns:repeat(5,minmax(110px,170px));gap:10px}
+header .kpis .kpi{min-width:0}
+@media (max-width:900px){header .kpis{grid-template-columns:repeat(auto-fit,minmax(110px,1fr));width:100%}}
+@media (max-width:720px){.wrap{padding:12px;gap:14px}.card{padding:14px}.pt,.ft{display:block;overflow-x:auto}}
 .col{display:flex;flex-direction:column;gap:20px;min-width:0}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;min-width:0}
 .card h2{margin:0 0 14px;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--sub);display:flex;justify-content:space-between;align-items:baseline;gap:10px}
@@ -59,18 +63,18 @@ canvas{display:block;width:100%;height:240px}
 .hero{border-top:3px solid var(--up)}
 .hh{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
 .hh .t{font-size:24px;font-weight:700}.hh .t small{font-size:14px;color:var(--mute);font-weight:500;margin-left:10px}
-.hs{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:12px;margin-bottom:18px}
+.hs{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;margin-bottom:18px}
 .hs div{padding:12px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
 .hs label{display:block;font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--mute)}
 .hs b{display:block;font-size:30px;font-weight:600;margin-top:4px}
 .sect{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--mute);margin:18px 2px 6px;font-weight:600}
 table{width:100%;border-collapse:collapse}
-.pt td{padding:8px 6px;border-top:1px solid var(--line);font-size:14px;white-space:nowrap;vertical-align:top}
+.pt td{padding:9px 10px;text-align:left;border-top:1px solid var(--line);font-size:14px;white-space:nowrap;vertical-align:top}
 .pt td small{display:block;font-size:12px;color:var(--mute);margin-top:1px}
-.pt th{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.7px;text-align:left;padding:6px 6px 6px;font-weight:600}
-.pt .r,.ft .r{text-align:right}
+.pt th{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.7px;text-align:left;padding:6px 10px;font-weight:600}
+.pt .r,.ft .r{text-align:left}
 .empty{padding:18px 6px;color:var(--sub);font-size:14px;border-top:1px solid var(--line)}
-.ft td{padding:7px 4px;border-top:1px solid var(--line);font-size:13.5px;white-space:nowrap}
+.ft td{padding:8px 10px;text-align:left;border-top:1px solid var(--line);font-size:13.5px;white-space:nowrap}
 .ft td small{display:block;color:var(--mute);font-size:11.5px}
 .tg{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.5px;padding:1px 7px;border-radius:5px;margin-left:8px;vertical-align:2px;text-transform:uppercase}
 .tg.rh{background:rgba(47,214,123,.14);color:var(--up)}.tg.lo{background:rgba(245,178,61,.16);color:var(--warn)}
