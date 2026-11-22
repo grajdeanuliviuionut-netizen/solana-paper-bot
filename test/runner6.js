@@ -27,7 +27,7 @@ const row = o => Object.assign({ pairAddress: 'PR5', mint: 'R5mint', symbol: 'RU
 const FEE = { microLamports: 3000, sol: 0.0000056, fallback: false, lamports: 5600 };
 function harness(o) {
   o = o || {};
-  let t = o.now || NOW; const h = { mult: 1.0, fail: false, trades: [], top: o.top10 || { ok: true, top10Pct: 12, mintAuthority: null, freezeAuthority: null, source: 'rugcheck' }, sma: o.sma === undefined ? { ma: 0.001, period: 50, candles: 50, source: 'geckoterminal-ohlcv-1m', newestAgeSec: 30, spanMin: 50 } : o.sma, gtCalls: 0, equity: o.equity || 4 };
+  let t = o.now || NOW; const h = { mult: 1.0, fail: false, trades: [], top: o.top10 || { ok: true, top10Pct: 12, mintAuthority: null, freezeAuthority: null, source: 'rugcheck' }, sma: o.sma === undefined ? { ma: 0.001, maPrev: 0.00099, maSlopePct: 1.0101, period: 50, candles: 50, source: 'geckoterminal-ohlcv-1m', newestAgeSec: 30, spanMin: 50 } : o.sma, gtCalls: 0, equity: o.equity || 4 };
   const quotes = {
     buyQuote: async (mint, sol) => ({ ok: true, at: t, inAmount: String(Math.round(sol * 1e9)), outAmount: String(Math.round(sol / 0.05 * 10000000000)), priceImpactPct: 0.5, route: 'Ray' }),
     sellQuote: async (mint, raw, bps) => (h.okFromBps && (bps || 300) < h.okFromBps) ? { ok: false, error: 'route timeout', at: t } : (h.staleBelow && (bps || 300) < h.staleBelow) ? { ok: true, at: t - 5000, inAmount: String(raw), outAmount: String(Math.floor(Number(raw) * 5e-3 * h.mult)), priceImpactPct: 0.4 } : h.fail ? { ok: false, error: 'timeout' } : ({ ok: true, at: t, inAmount: String(raw), outAmount: String(Math.floor(Number(raw) * 5e-3 * h.mult)), priceImpactPct: 0.4, route: 'Ray' })
@@ -51,8 +51,8 @@ const near = (a, b, msg, eps) => assert.ok(Math.abs(a - b) < (eps || 1e-9), (msg
 test('live config: runner-hunter v6 "Trend Following", epoch runner-v6, v5..v1 kept, v5 filters dropped', () => {
   const b = RH();
   assert.strictEqual(config.books.epoch, 'runner-v6');
-  assert.strictEqual(b.version, 6); assert.strictEqual(b.name, 'Trend Following');
-  assert.deepStrictEqual(b.previousVersions.map(v => v.version), [5, 4, 3, 2, 1]);
+  assert.strictEqual(Math.floor(b.version), 6); assert.strictEqual(b.name, 'Trend Following');
+  assert.deepStrictEqual(b.previousVersions.map(v => v.version).filter(v => v < 6), [5, 4, 3, 2, 1]);
   assert.strictEqual(b.entry.minLiquidityUsd, 50000); assert.strictEqual(b.entry.trend.maPeriod, 50);
   for (const k of ['maxLiquidityUsd', 'minVolumeToLiquidityH24', 'minM5', 'minM15', 'maxH1', 'breakout']) assert.strictEqual(b.entry[k], undefined, k);
   assert.deepStrictEqual(b.entry.rugCheck, { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' });
@@ -82,9 +82,9 @@ test('entry rules: liquidity must be > $50k; own-history MA decides above/below'
   const b = RH();
   assert.ok(/^liquidity/.test(E.entryFails(b, row({ liquidityUsd: 50000 }), { now: NOW, ticks: {} })));
   assert.strictEqual(E.entryFails(b, row({ liquidityUsd: 50001, priceChange: { m5: -5, h1: 80, h6: 0, h24: 0 }, volumeH24: 1 }), { now: NOW, ticks: {} }), null, 'old v5 filters gone');
-  const s = []; for (let sec = 55 * 60; sec >= 0; sec -= 45) s.push([NOW - sec * 1000, 0.001]);
+  const s = []; for (let sec = 60 * 60; sec >= 0; sec -= 45) s.push([NOW - sec * 1000, 0.001 + (3600 - sec) * 1e-8]);
   assert.ok(/^belowMA/.test(E.entryFails(b, row({ priceUsd: 0.001 }), { now: NOW, ticks: { PR5: s } })));
-  assert.strictEqual(E.entryFails(b, row({ priceUsd: 0.00101 }), { now: NOW, ticks: { PR5: s } }), null);
+  assert.strictEqual(E.entryFails(b, row({ priceUsd: 0.0011 }), { now: NOW, ticks: { PR5: s } }), null);
 });
 
 test('entry: GT MA above -> buy 5% of equity, MA + distance logged; flat 2% slip on the fill', async () => {
@@ -107,7 +107,7 @@ test('entry rejects: below MA (GT), no MA data (fail closed), rug authority, top
   assert.strictEqual(await h.enter(), undefined); assert.strictEqual(h.f().maNoData, 1);
   h = harness({ sma: { error: '429' } });
   assert.strictEqual(await h.enter(), undefined); assert.strictEqual(h.f().maUnavailable, 1);
-  h.sma = { ma: 0.001, period: 50, candles: 50, source: 'geckoterminal-ohlcv-1m', newestAgeSec: 20 }; h.adv(45000);
+  h.sma = { ma: 0.001, maPrev: 0.00099, period: 50, candles: 50, source: 'geckoterminal-ohlcv-1m', newestAgeSec: 20 }; h.adv(45000);
   assert.ok(await h.enter(row({ fetchedAt: h.now() - 5000 })), 'a GT error is not cached: retried next scan');
   h = harness({ top10: { ok: true, top10Pct: 10, mintAuthority: 'Auth111', freezeAuthority: null, source: 'rugcheck' } });
   assert.strictEqual(await h.enter(), undefined); assert.ok(h.state.books.rug.blacklist.R5mint, 'blacklisted');
@@ -160,7 +160,7 @@ test('Manager v6: cannot loosen the stop beyond -4, the liquidity floor below $5
   const tr = []; for (let i = 1; i <= 10; i++) tr.push({ id: 'T' + i, book: 'runner-hunter', bookVersion: 6, closedAt: new Date(NOW + i * MIN).toISOString(), pnlSol: -0.008, pnlPct: -8, exitReason: 'sl', holdMinutes: 20, legs: [], entrySignal: { top10Pct: 10 } });
   const st = { scoreboard: { epoch: 'runner-v6', since: new Date(NOW - MIN).toISOString() }, books: { trades: tr.reverse() } };
   const e = improver.step(st, book, { baseVersion: 6, now: NOW });
-  assert.strictEqual(e.rule, 'R1'); assert.strictEqual(e.change, 'entry.trend.minAbovePct'); assert.strictEqual(book.version, 6.01);
+  assert.strictEqual(e.rule, 'R1'); assert.strictEqual(e.change, 'entry.trend.minAbovePct'); assert.strictEqual(book.version, +(RH().version + 0.01).toFixed(2)); assert.ok(book.entry.trend.minAbovePct >= 1);
   assert.strictEqual(book.exit.stopLossPct, 4); assert.strictEqual(book.entry.minLiquidityUsd, 50000); assert.deepStrictEqual(book.entry.rugCheck, RH().entry.rugCheck);
 });
 
@@ -185,6 +185,40 @@ test('exit ladder: failed/stale first quote -> 3%, 10%, 25%; stop fires only on 
   h.okFromBps = 0; await h.pass(0.99); assert.strictEqual(h.trades.length, 0, '-1% move: no stop'); assert.strictEqual(h.state.books.open[0].legs.length, 0);
   // normal pass: one quote at 200 bps, fill at the flat 2%
   await h.pass(1.09); assert.strictEqual(h.trades[0].exitReason, 'tp'); assert.strictEqual(h.trades[0].legs[0].fillSlippageBps, 200); assert.strictEqual(h.trades[0].legs[0].costs.simSlipPct, 2);
+});
+
+
+test('t98u trend confirmation: price >= MA50 + 1% and MA50 rising (now > 5 candles ago); counters, maSlope, Manager floor', async () => {
+  const T = Object.assign({}, RH().entry.trend, { minAbovePct: 1, requireMaRising: true, risingLookbackCandles: 5 });
+  const b = JSON.parse(JSON.stringify(RH())); b.entry.trend = T;
+  // own history 60 min: rising line 0.001 -> 0.00106
+  const up = []; for (let sec = 60 * 60; sec >= 0; sec -= 45) up.push([NOW - sec * 1000, 0.001 + (3600 - sec) / 3600 * 0.00006]);
+  const s = M15.smaFromTicks(up, NOW, T); assert.ok(s.maPrev > 0 && s.ma > s.maPrev && s.maSlopePct > 0, JSON.stringify(s));
+  assert.ok(/^belowMA/.test(E.entryFails(b, row({ priceUsd: s.ma * 0.999 }), { now: NOW, ticks: { PR5: up } })));
+  assert.ok(/^belowMinAbove/.test(E.entryFails(b, row({ priceUsd: s.ma * 1.005 }), { now: NOW, ticks: { PR5: up } })));
+  assert.strictEqual(E.entryFails(b, row({ priceUsd: s.ma * 1.011 }), { now: NOW, ticks: { PR5: up } }), null);
+  const down = up.map(([ts, p]) => [ts, 0.00206 - p]);
+  const sd = M15.smaFromTicks(down, NOW, T); assert.ok(sd.ma < sd.maPrev);
+  assert.ok(/^maNotRising/.test(E.entryFails(b, row({ priceUsd: sd.ma * 1.05 }), { now: NOW, ticks: { PR5: down } })));
+  assert.strictEqual(M15.smaFromTicks(up.filter(x => NOW - x[0] <= 52 * MIN), NOW, T).maPrev, null, '< 55 min: no earlier SMA');
+  assert.ok(/^maNotRising/.test(E.entryFails(b, row({ priceUsd: 0.002 }), { now: NOW, ticks: { PR5: up.filter(x => NOW - x[0] <= 52 * MIN) } })), 'fails closed');
+  // GT candles: 60 newest-first closes, rising
+  const c = []; for (let k = 0; k < 60; k++) c.push([Math.floor((NOW - k * MIN) / 1000), 1, 1, 1, 2 - k / 100, 5]);
+  const g = M15.smaFromOhlcv(c, NOW, T); near(g.ma, 2 - 0.245, 'ma', 1e-9); near(g.maPrev, 2 - 0.295, 'prev', 1e-9);
+  assert.strictEqual(M15.smaFromOhlcv(c.slice(0, 54), NOW, T).maPrev, null, '< 55 candles: no earlier SMA');
+  // engine with the t98u params: counters + maSlope on the position
+  const book = RH(), keep = book.entry.trend; book.entry.trend = T;
+  try {
+    let h = harness({ sma: { ma: 0.001, maPrev: 0.00099, maSlopePct: 1.0101, period: 50, candles: 50, source: 'geckoterminal-ohlcv-1m', newestAgeSec: 20 } });
+    let p = await h.enter(row({ priceUsd: 0.001005 })); assert.strictEqual(p, undefined); assert.strictEqual(h.f().belowMinAbove, 1);
+    h = harness({ sma: { ma: 0.001, maPrev: 0.00101, maSlopePct: -0.99, period: 50, candles: 50, source: 'geckoterminal-ohlcv-1m', newestAgeSec: 20 } });
+    p = await h.enter(); assert.strictEqual(p, undefined); assert.strictEqual(h.f().maNotRising, 1);
+    h = harness({ sma: { ma: 0.001, maPrev: 0.00099, maSlopePct: 1.0101, period: 50, candles: 50, source: 'geckoterminal-ohlcv-1m', newestAgeSec: 20 } });
+    p = await h.enter(); assert.ok(p); assert.strictEqual(p.trend.maSlope, 1.0101); assert.strictEqual(p.trend.minAbovePct, 1); assert.strictEqual(p.trend.requireMaRising, true);
+  } finally { book.entry.trend = keep; }
+  // Manager: minAbovePct never below 1; requireMaRising is not a knob
+  assert.strictEqual(improver.HARD_V6['entry.trend.minAbovePct'].min, 1); assert.strictEqual(improver.BOUNDS_V6['entry.trend.minAbovePct'].min, 1);
+  assert.ok(!Object.keys(improver.BOUNDS_V6).some(k => /requireMaRising|risingLookback/.test(k)));
 });
 
 (async () => {

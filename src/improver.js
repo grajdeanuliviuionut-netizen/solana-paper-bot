@@ -80,18 +80,18 @@ const RULES_V5 = [
   'R9 healthy (net >= 0 and win rate >= 40%) -> no change'
 ];
 // t93u v6 Trend Following (Liviu 22 Nov 14:53): the Manager may only tighten: stop <= 4% (never looser than -4),
-// liquidity floor >= $50k, top-10 <= 15%, slippage <= 150 bps; MA margin 0..3% above the 50 MA; TP 6..12%.
+// liquidity floor >= $50k, top-10 <= 15%, slippage <= 150 bps; MA margin 1..3% above the 50 MA (t98u: never < 1%); TP 6..12%.
 // Not in the whitelist: the MA period, the rug gates (mint/freeze revoked, blacklist), 2-loss pause, night
 // hours, sizing, feed protection, the 2% slip cost model, the halt.
 const BOUNDS_V6 = {
   'entry.minLiquidityUsd': { min: 50000, max: 250000, step: 25000, hard: 'never below $50k' },
-  'entry.trend.minAbovePct': { min: 0, max: 3, step: 0.5 },
+  'entry.trend.minAbovePct': { min: 1, max: 3, step: 0.5, hard: 'never below 1% (t98u)' },
   'entry.maxTop10Pct': { min: 5, max: 15, step: 2.5, hard: 'tighten-only' },
   'entry.maxSlippageBps': { min: 50, max: 150, step: 25, hard: 'tighten-only' },
   'exit.stopLossPct': { min: 2, max: 4, step: 0.5, hard: 'tighten-only (never beyond -4%)' },
   'exit.takeProfitPct': { min: 6, max: 12, step: 1 }
 };
-const HARD_V6 = { 'entry.minLiquidityUsd': { min: 50000 }, 'entry.maxTop10Pct': { max: 15 }, 'entry.maxSlippageBps': { max: 150 }, 'exit.stopLossPct': { max: 4 } };
+const HARD_V6 = { 'entry.trend.minAbovePct': { min: 1 }, 'entry.minLiquidityUsd': { min: 50000 }, 'entry.maxTop10Pct': { max: 15 }, 'entry.maxSlippageBps': { max: 150 }, 'exit.stopLossPct': { max: 4 } };
 const RULES_V6 = [
   'R1 fast stops: win rate < 40% and >= 3 stops -> stronger trend: entry.trend.minAbovePct +0.5 (max 3)',
   'R2 stops overshoot: >= 2 stops and avg stop overshoot <= -2 pts -> entry.minLiquidityUsd +25k (max 250k)',

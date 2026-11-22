@@ -63,6 +63,16 @@ function dropFromHighPct(row, snaps, now) {
   return hi ? ((hi - num(row.priceUsd)) / hi) * 100 : null;
 }
 
+// t93u/t98u trend rule on an SMA result s {ma, maPrev}: price > MA (belowMA); price >= MA x (1 + minAbovePct%)
+// (belowMinAbove); with requireMaRising the SMA50 now must be > the SMA50 risingLookbackCandles (5) candles ago
+// (maNotRising; no earlier SMA -> fails closed). Returns null or the reason.
+function trendFail(tr, price, s) {
+  const n = tr.maPeriod;
+  if (!(price > s.ma)) return 'belowMA: price <= MA' + n;
+  if (tr.minAbovePct && !(price >= s.ma * (1 + tr.minAbovePct / 100))) return 'belowMinAbove: price < MA' + n + ' + ' + tr.minAbovePct + '%';
+  if (tr.requireMaRising && !(s.maPrev > 0 && s.ma > s.maPrev)) return 'maNotRising: MA' + n + ' not above its value ' + (tr.risingLookbackCandles || 5) + ' candles ago';
+  return null;
+}
 // Returns null (passes) or the first failed rule as a short reason.
 function entryFails(book, row, ctx) {
   const e = book.entry, now = ctx.now, pc = row.priceChange || {};
@@ -72,7 +82,7 @@ function entryFails(book, row, ctx) {
     if (!(num(row.liquidityUsd) > e.minLiquidityUsd)) return 'liquidity: <= ' + e.minLiquidityUsd;
     if (!(num(row.priceUsd) > 0)) return 'maNoData: no price';
     const s = m15Mod.smaFromTicks(ctx.ticks && ctx.ticks[row.pairAddress], now, e.trend);
-    if (s && !(num(row.priceUsd) > s.ma * (1 + (e.trend.minAbovePct || 0) / 100))) return 'belowMA: price <= MA' + e.trend.maPeriod;
+    if (s) { const w = trendFail(e.trend, num(row.priceUsd), s); if (w) return w; }
     return null;
   }
   if (e.minLiquidityUsd && num(row.liquidityUsd) < e.minLiquidityUsd) return (e.maxLiquidityUsd != null ? 'liquidityMin: < ' : 'liquidity < ') + e.minLiquidityUsd;
@@ -150,7 +160,7 @@ function signalFields(book, row, ctx) {
   }
   if (book.id === 'runner-hunter' && book.entry && book.entry.trend) {
     const s = m15Mod.smaFromTicks(ctx.ticks && ctx.ticks[row.pairAddress], ctx.now, book.entry.trend);
-    Object.assign(f, { priceUsd: row.priceUsd, ma: s ? s.ma : null, maPeriod: book.entry.trend.maPeriod, maSource: s ? s.source : null, maDistPct: s ? +((num(row.priceUsd) / s.ma - 1) * 100).toFixed(3) : null });
+    Object.assign(f, { priceUsd: row.priceUsd, ma: s ? s.ma : null, maPrev: s ? s.maPrev : null, maSlopePct: s ? s.maSlopePct : null, maPeriod: book.entry.trend.maPeriod, maSource: s ? s.source : null, maDistPct: s ? +((num(row.priceUsd) / s.ma - 1) * 100).toFixed(3) : null });
   }
   if (book.id === 'volume-explosion') Object.assign(f, { volumeM5: row.volumeM5, m5VolumeVsHourAvg: +num(m5VolumeVsHourAvg(row)).toFixed(2) });
   if (book.id === 'trending-pullback') Object.assign(f, { volumeH6: row.volumeH6, high24Est: high24Estimate(row, ctx.snaps && ctx.snaps[row.mint], ctx.now), dropFromHighPct: +num(dropFromHighPct(row, ctx.snaps && ctx.snaps[row.mint], ctx.now)).toFixed(2) });
@@ -462,8 +472,9 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
             const ks = Object.keys(mc); if (ks.length > 600) delete mc[ks[0]];
           }
           if (!ent.r) { countFilter(state, book, 'maNoData'); reject(state, book, row, 'maNoData: no 50-candle 1m history (own + GeckoTerminal)'); continue; }
-          Object.assign(fields, { ma: ent.r.ma, maSource: ent.r.source, maDistPct: +((num(row.priceUsd) / ent.r.ma - 1) * 100).toFixed(3), maNewestCandleAgeSec: ent.r.newestAgeSec, maSpanMin: ent.r.spanMin || TR.maPeriod });
-          if (!(num(row.priceUsd) > ent.r.ma * (1 + (TR.minAbovePct || 0) / 100))) { countFilter(state, book, 'belowMA'); reject(state, book, row, 'belowMA: price <= MA' + TR.maPeriod + ' (GeckoTerminal)'); continue; }
+          Object.assign(fields, { ma: ent.r.ma, maPrev: ent.r.maPrev == null ? null : ent.r.maPrev, maSlopePct: ent.r.maSlopePct == null ? null : ent.r.maSlopePct, maSource: ent.r.source, maDistPct: +((num(row.priceUsd) / ent.r.ma - 1) * 100).toFixed(3), maNewestCandleAgeSec: ent.r.newestAgeSec, maSpanMin: ent.r.spanMin || TR.maPeriod });
+          const tw = trendFail(TR, num(row.priceUsd), ent.r);
+          if (tw) { countFilter(state, book, tw); reject(state, book, row, tw + ' (GeckoTerminal)'); continue; }
         }
         // t90u v5 sizing: exactly pctOfEquity (5%) of the current marked total equity per trade (no static 0.05).
         const SZ = book.entry && book.entry.sizing;
@@ -583,7 +594,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           if (RC) pos.rugCheckV4 = { pass: true, liquidityUsd: row.liquidityUsd, mintRevoked: true, freezeRevoked: true, top10Pct: fields.top10Pct == null ? null : fields.top10Pct, limits: RC };
         }
         if (sizing) pos.sizing = sizing;
-        if (TR) pos.trend = { ma: fields.ma, maPeriod: TR.maPeriod, maSource: fields.maSource, priceUsd: num(row.priceUsd), maDistPct: fields.maDistPct, candleSec: 60 };
+        if (TR) pos.trend = { ma: fields.ma, maPrev: fields.maPrev == null ? null : fields.maPrev, maSlope: fields.maSlopePct == null ? null : fields.maSlopePct, maSlopeUnit: '% change of SMA' + TR.maPeriod + ' vs ' + (TR.risingLookbackCandles || 5) + ' candles earlier', minAbovePct: TR.minAbovePct || 0, requireMaRising: !!TR.requireMaRising, maPeriod: TR.maPeriod, maSource: fields.maSource, priceUsd: num(row.priceUsd), maDistPct: fields.maDistPct, candleSec: 60 };
         // t93u v6: SL/TP measured on the price move since entry: the Jupiter sell-quote value of the held tokens
         // vs their value at the entry sell check (after the simulated buy slip); slippage is a cost on top.
         if (book.exit && book.exit.priceBasis === 'entryQuote') pos.exitRefSol = (Number(sell.outAmount) / 1e9) * (sim ? (1 - sim.costs.simSlipPct / 100) : 1);

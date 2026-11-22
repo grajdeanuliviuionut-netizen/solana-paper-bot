@@ -45,19 +45,24 @@ function priorHighFromOhlcv(list, t, o) {
 // t93u v6 trend: 50-period SMA of 1-minute closes.
 // Own history: the bot's ~45 s pool price ticks resampled to 1 min (close of minute k = the last tick at or
 // before its end; a minute with no tick carries the previous close). Needs ticks covering >= period minutes.
+// t98u: maPrev = the same SMA ending risingLookback (5) candles earlier, so "rising" = ma > maPrev. Needs
+// period + lookback minutes (own) / candles (GT); without them maPrev is null and a rising check fails closed.
 function smaFromTicks(series, t, o) {
-  const n = o.maPeriod;
+  const n = o.maPeriod, lb = o.risingLookbackCandles || 0;
   if (!Array.isArray(series) || !series.length || (t - series[0][0]) / MIN < n) return null;
   const closes = [];
+  const enough = (t - series[0][0]) / MIN >= n + lb;
   let j = 0, last = null;
-  for (let k = n - 1; k >= 0; k--) {
+  for (let k = n - 1 + (enough ? lb : 0); k >= 0; k--) {
     const end = t - k * MIN;
     while (j < series.length && series[j][0] <= end) { if (series[j][1] > 0) last = series[j][1]; j++; }
     if (last == null) return null;
     closes.push(last);
   }
-  const ma = closes.reduce((a, b) => a + b, 0) / n;
-  return { ma, period: n, candles: n, source: 'own-history-1m', newestAgeSec: +((t - series[series.length - 1][0]) / 1000).toFixed(1) };
+  const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  const ma = mean(closes.slice(-n));
+  const maPrev = enough && lb ? mean(closes.slice(0, n)) : null;
+  return { ma, maPrev, maSlopePct: maPrev ? +((ma / maPrev - 1) * 100).toFixed(4) : null, risingLookbackCandles: lb, period: n, candles: n, source: 'own-history-1m', newestAgeSec: +((t - series[series.length - 1][0]) / 1000).toFixed(1) };
 }
 // GeckoTerminal 1m OHLCV: SMA of the closes of the newest `period` candles (needs >= period candles, newest <= maxCandleAgeSec old).
 function smaFromOhlcv(list, t, o) {
@@ -69,7 +74,10 @@ function smaFromOhlcv(list, t, o) {
   if (age > (o.maxCandleAgeSec || 180)) return null;
   const use = rows.slice(0, n);
   const ma = use.reduce((a, r) => a + Number(r[4]), 0) / n;
-  return { ma, period: n, candles: n, source: 'geckoterminal-ohlcv-1m', newestAgeSec: +age.toFixed(1), spanMin: +((use[0][0] - use[n - 1][0]) / 60 + 1).toFixed(0) };
+  const lb = o.risingLookbackCandles || 0;
+  const prev = lb && rows.length >= n + lb ? rows.slice(lb, lb + n) : null;
+  const maPrev = prev ? prev.reduce((a, r) => a + Number(r[4]), 0) / n : null;
+  return { ma, maPrev, maSlopePct: maPrev ? +((ma / maPrev - 1) * 100).toFixed(4) : null, risingLookbackCandles: lb, period: n, candles: n, source: 'geckoterminal-ohlcv-1m', newestAgeSec: +age.toFixed(1), spanMin: +((use[0][0] - use[n - 1][0]) / 60 + 1).toFixed(0) };
 }
 // Own-history m15 (pure). Returns { pct, fromAgeMin } or null.
 function m15FromTicks(series, priceNow, t) {
