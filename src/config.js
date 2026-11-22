@@ -25,11 +25,14 @@ module.exports = {
   // change (src/improver.js BOUNDS/RULES) as a new version, logs what and why, and reports every 30 trades.
   // Paper only: it never touches size, wallets, keys or LIVE_TRADING.
   manager: { enabled: true, reviewEvery: 10, reportEvery: 30 },
+  // t89u (Liviu 22 Nov 13:18): Manager hard halt. Marked equity -5% from its high within any rolling 24 h
+  // (equity.jsonl, all epochs) -> all new trading stops, persisted, never auto-cleared (src/halt.js).
+  halt: { enabled: true, windowHours: 24, dropPct: 5 },
 
   // PR11 (Liviu t64u, 21 Nov): four aggressive PAPER books, side by side, same size, own capacity.
   // Fills and marks come only from Jupiter quotes (read-only quote API, never a swap).
   books: {
-    epoch: 'runner-v3',           // t86u: fresh runner-hunter v3 board (runner-v2 archived, kept in scoreboardHistory; t85u: runner-v2, books-v1 before)
+    epoch: 'runner-v4',           // t89u: fresh runner-hunter v4 board (runner-v3 archived, kept in scoreboardHistory). t86u: fresh runner-hunter v3 board (runner-v2 archived, kept in scoreboardHistory; t85u: runner-v2, books-v1 before)
     epochCloseout: true,          // t85u: close non-onlyStrategies leftovers (paper, Jupiter sell quote) before the board starts
     sizeSol: 0.05,                // SAME size per trade for every book (manager never cuts the books)
     maxOpenPerBook: 2,            // own capacity per book, separate from the legacy maxOpen 4
@@ -66,11 +69,23 @@ module.exports = {
         // <= 30% (Solana RPC largest accounts, pool/AMM/burn excluded, fail closed), 24 h volume >= 0.1x liquidity,
         // rising on m5 AND m15 (own 15-min price history, else GeckoTerminal 1m candles, fail closed), h1 <= 25%.
         // No re-buy of a coin for 24 h after a stop-out. 4 losses in a row -> no new entries for 30 min. Exits = v2.
-        id: 'runner-hunter', name: 'Runner hunter', version: 3,
-        entry: { minLiquidityUsd: 100000, maxLiquidityUsd: 900000, minVolumeToLiquidityH24: 0.1, minM5: 0, minM15: 0, maxH1: 25, maxTop10Pct: 30,
-          stopCooldownHours: 24, lossStreakPause: { losses: 4, minutes: 30 } },
-        exit: { stopLossPct: 6, partial: { atPct: 8, sellPct: 33.3333 }, trailAfterPartial: true, trailPct: 8, maxHoldMinutes: 240 },
+        // v4 (Liviu t89u, 22 Nov 13:18): v3 entry filters kept, plus the Rug Check agent (hard, fail closed,
+        // blacklist for the epoch on a fail: liquidity > $30k, mint + freeze authority revoked, top-10 <= 15%) and
+        // the Executor's 150 bps slippage limit (entries abort; exits sell and flag). Strategist exits: -6% stop,
+        // at +4% stop to entry and a 3% trail below the peak, not +4% within 15 min -> exit, 30 min max hold.
+        // Paper fills: Jupiter quote - U(0.5-2.0%) per side, -3% more on stop-loss exits, 0.5% fee per side,
+        // priority fee per side (replaces the 1.1% round trip). Guardrail: 3 losses in a row -> no scanning or
+        // entries for 1 h. The 5%/24 h halt is config.halt.
+        id: 'runner-hunter', name: 'Runner hunter', version: 4,
+        entry: { minLiquidityUsd: 100000, maxLiquidityUsd: 900000, minVolumeToLiquidityH24: 0.1, minM5: 0, minM15: 0, maxH1: 25, maxTop10Pct: 15,
+          maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
+          stopCooldownHours: 24, lossStreakPause: { losses: 3, minutes: 60, pauseScanning: true } },
+        exit: { stopLossPct: 6, breakevenAtPct: 4, trailAfterPct: 4, trailPct: 3, momentum: { minPct: 4, withinMinutes: 15 }, maxHoldMinutes: 30,
+          costModel: { simSlipMinPct: 0.5, simSlipMaxPct: 2.0, stopPenaltyPct: 3, feePctPerSide: 0.5, priorityFee: true, cuLimit: 200000 } },
         previousVersions: [
+          { version: 3, until: '2026-11-22T13:18', entry: { minLiquidityUsd: 100000, maxLiquidityUsd: 900000, minVolumeToLiquidityH24: 0.1, minM5: 0, minM15: 0, maxH1: 25, maxTop10Pct: 30,
+            stopCooldownHours: 24, lossStreakPause: { losses: 4, minutes: 30 } },
+            exit: { stopLossPct: 6, partial: { atPct: 8, sellPct: 33.3333 }, trailAfterPartial: true, trailPct: 8, maxHoldMinutes: 240 } },
           { version: 2, until: '2026-11-22T12:12', entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },
             exit: { stopLossPct: 6, partial: { atPct: 8, sellPct: 33.3333 }, trailAfterPartial: true, trailPct: 8, maxHoldMinutes: 240 } },
           { version: 1, until: '2026-11-22', entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },

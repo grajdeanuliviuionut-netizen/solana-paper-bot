@@ -171,24 +171,25 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
     $('build').textContent = 'build ' + (D.build ? String(D.build).slice(0, 7) : 'local');
     var ex = (D.agents && D.agents.executor && D.agents.executor.exitLoop) || {};
     var upd = D.lastUpdate ? (Date.now() - Date.parse(D.lastUpdate)) / 1000 : null;
-    var ok = D.liveTrading === false && !ex.errors && isNum(upd) && upd < 3 * (D.pollIntervalMs || 45000) / 1000;
+    var halted = D.manager && D.manager.halt && D.manager.halt.halted;
+    var ok = !halted && D.liveTrading === false && !ex.errors && isNum(upd) && upd < 3 * (D.pollIntervalMs || 45000) / 1000;
     $('hDot').className = 'd' + (ok ? '' : ' bad');
-    $('hTxt').textContent = (ok ? 'healthy' : 'check') + ' · exit loop ' + (ex.errors || 0) + ' errors · scan ' + ago(upd) + ' · live trading off';
+    $('hTxt').textContent = (halted ? 'HALTED (manual restart) · ' : '') + (ok ? 'healthy' : 'check') + ' · exit loop ' + (ex.errors || 0) + ' errors · scan ' + ago(upd) + ' · live trading off';
   }
 
   function renderHero() {
     var g = group('runner-hunter') || { positions: [] }, b = (D.books || []).filter(function (x) { return x.strategyId === 'runner-hunter'; })[0] || {};
-    var paused = g.status === 'paused';
-    $('heroSt').textContent = paused ? 'PAUSED' : 'ACTIVE'; $('heroSt').className = 'sp ' + (paused ? 'amber' : 'green');
+    var paused = g.status === 'paused', hlt = D.manager && D.manager.halt && D.manager.halt.halted, gp = D.manager && D.manager.guardrail && D.manager.guardrail.pausedUntil;
+    $('heroSt').textContent = hlt ? 'HALTED' : gp ? 'PAUSED ' + tL(gp) : paused ? 'PAUSED' : 'ACTIVE'; $('heroSt').className = 'sp ' + (hlt ? 'red' : (paused || gp) ? 'amber' : 'green');
     $('heroSub').textContent = 'v' + (b.version || 1) + ' · ' + (b.sizeSol || 0.05) + ' SOL per trade';
     var x = b.exit || {}, pa = x.partial || {};
-    var exTxt = 'stop −' + x.stopLossPct + '% · sell ' + (Math.abs(pa.sellPct - 33.3333) < 0.01 ? '⅓' : pa.sellPct + '%') + ' at +' + pa.atPct + '% · trail ' + x.trailPct + '% below peak · ' + Math.round((x.maxHoldMinutes || 0) / 60) + ' h max';
+    var exTxt = x.breakevenAtPct != null ? 'stop −' + x.stopLossPct + '% · at +' + x.breakevenAtPct + '% stop → entry + trail ' + x.trailPct + '% below peak · not +' + (x.momentum || {}).minPct + '% in ' + (x.momentum || {}).withinMinutes + ' min → exit · ' + x.maxHoldMinutes + ' min max' : 'stop −' + x.stopLossPct + '% · sell ' + (Math.abs(pa.sellPct - 33.3333) < 0.01 ? '⅓' : pa.sellPct + '%') + ' at +' + pa.atPct + '% · trail ' + x.trailPct + '% below peak · ' + Math.round((x.maxHoldMinutes || 0) / 60) + ' h max';
     var P = D.pnl || {}, rh = (P.byStrategy || []).filter(function (r) { return r.strategyId === 'runner-hunter'; })[0];
     $('heroEx').innerHTML = esc(exTxt) + (P.epoch ? ' · board <b>' + esc(P.epoch) + '</b> since ' + tL(P.since) + (rh ? ' · all runner P&amp;L since start <b class="' + cl(rh.totalSol) + '">' + sol(rh.totalSol) + '</b>' : '') : '');
     $('hOpen').textContent = sol(g.openPnlSol); $('hOpen').className = 'num ' + cl(g.openPnlSol);
     $('hCount').textContent = (g.openCount || 0) + ' / ' + (g.maxOpen || b.maxOpen || 2);
     var en = b.entry || {};
-    $('heroEn').textContent = en.maxLiquidityUsd != null ? 'entry: liq $' + Math.round(en.minLiquidityUsd / 1000) + 'k–$' + Math.round(en.maxLiquidityUsd / 1000) + 'k · top10 ≤ ' + en.maxTop10Pct + '% · 24h vol ≥ ' + en.minVolumeToLiquidityH24 + '× liq · m5 > ' + en.minM5 + ' & m15 > ' + en.minM15 + ' · h1 ≤ ' + en.maxH1 + '% · 24 h no re-buy after a stop' : '';
+    $('heroEn').textContent = en.maxLiquidityUsd != null ? 'entry: liq $' + Math.round(en.minLiquidityUsd / 1000) + 'k–$' + Math.round(en.maxLiquidityUsd / 1000) + 'k · top10 ≤ ' + en.maxTop10Pct + '% · 24h vol ≥ ' + en.minVolumeToLiquidityH24 + '× liq · m5 > ' + en.minM5 + ' & m15 > ' + en.minM15 + ' · h1 ≤ ' + en.maxH1 + '% · 24 h no re-buy after a stop' + (en.rugCheck ? ' · rug: liq > $' + Math.round(en.rugCheck.minLiquidityUsd / 1000) + 'k, mint+freeze revoked, top10 ≤ ' + en.rugCheck.maxTop10Pct + '%, blacklist on fail · slippage ≤ ' + en.maxSlippageBps + ' bps' : '') + (x.costModel ? ' · paper fills: quote − ' + x.costModel.simSlipMinPct + '–' + x.costModel.simSlipMaxPct + '% per side, −' + x.costModel.stopPenaltyPct + '% on stops, ' + x.costModel.feePctPerSide + '% fee per side + priority fee' : '') : '';
     if (b.epochStats) b = Object.assign({}, b, { trades: b.epochStats.trades, winRatePct: b.epochStats.winRatePct, netSol: b.epochStats.netSol, progress: b.epochStats.progress });
     $('hTrades').textContent = b.trades == null ? '–' : b.trades + ' / ' + (b.progress ? String(b.progress).split('/')[1] : 30);
     $('hWin').textContent = isNum(b.winRatePct) ? Math.round(b.winRatePct) + '%' : '–';
@@ -196,7 +197,11 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
   }
   function renderManager() {
     var m = D.manager; if (!m) { $('mgBody').innerHTML = '<div class="empty">manager data unavailable</div>'; return; }
-    var g = m.guardrail || {}, f = m.entryFilters || {}, h = '';
+    var g = m.guardrail || {}, f = m.entryFilters || {}, h = '', hv = m.halt || {}, ex = m.executor || {}, rc = m.rugCheck, pf = ex.priorityFee || {};
+    if (hv.halted) h += '<div class="row"><span>HALT</span><b class="num dn">HALTED ' + tL(hv.halt.at) + ' · ' + esc(hv.halt.reason) + ' · manual restart required</b></div>';
+    else if (hv.enabled) h += '<div class="row"><span>24 h drawdown</span><b class="num">' + (hv.lastCheck && isNum(hv.lastCheck.dropPct) ? '−' + hv.lastCheck.dropPct.toFixed(2) + '%' : '–') + ' / halt at −' + hv.limitPct + '%</b></div>';
+    if (ex.maxSlippageBps != null) h += '<div class="row"><span>Executor</span><b class="num">≤ ' + ex.maxSlippageBps + ' bps · aborts ' + ex.slippageAborts + ' · exit over-limit ' + ex.exitSlippageExceeded + ' · prio ' + (isNum(pf.microLamports) ? Math.round(pf.microLamports) + ' µL/CU' + (pf.fallback ? ' (fallback)' : '') : '–') + '</b></div>';
+    if (rc) h += '<div class="row"><span>Rug check</span><b class="num">checked ' + rc.checks + ' · failed ' + rc.failed + ' · blacklisted ' + rc.blacklisted + ' · unavailable ' + rc.unavailable + '</b></div>';
     h += '<div class="row"><span>Closed trades (' + esc(m.epoch || '') + ')</span><b class="num">' + m.closedTrades + ' · next review @' + m.nextReviewAtTrade + ' · report @' + m.nextReportAtTrade + '</b></div>';
     h += '<div class="row"><span>Version</span><b class="num">' + esc(m.current ? m.current.label : '–') + '</b></div>';
     h += '<div class="row"><span>Guardrail</span><b class="num ' + (g.pausedUntil ? 'dn' : '') + '">' + (g.pausedUntil ? 'PAUSED until ' + tL(g.pausedUntil) : 'trading') + ' · loss streak ' + (g.lossStreak || 0) + '/' + (g.losses || 4) + '</b></div>';
