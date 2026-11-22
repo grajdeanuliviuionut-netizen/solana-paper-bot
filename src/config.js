@@ -32,7 +32,7 @@ module.exports = {
   // PR11 (Liviu t64u, 21 Nov): four aggressive PAPER books, side by side, same size, own capacity.
   // Fills and marks come only from Jupiter quotes (read-only quote API, never a swap).
   books: {
-    epoch: 'runner-v5',           // t90u: fresh runner-hunter v5 board (runner-v4 archived, kept in scoreboardHistory). t89u: fresh runner-hunter v4 board (runner-v3 archived, kept in scoreboardHistory). t86u: fresh runner-hunter v3 board (runner-v2 archived, kept in scoreboardHistory; t85u: runner-v2, books-v1 before)
+    epoch: 'runner-v6',           // t93u: Trend Following board (runner-v5 archived).           // t90u: fresh runner-hunter v5 board (runner-v4 archived, kept in scoreboardHistory). t89u: fresh runner-hunter v4 board (runner-v3 archived, kept in scoreboardHistory). t86u: fresh runner-hunter v3 board (runner-v2 archived, kept in scoreboardHistory; t85u: runner-v2, books-v1 before)
     epochCloseout: true,          // t85u: close non-onlyStrategies leftovers (paper, Jupiter sell quote) before the board starts
     sizeSol: 0.05,                // SAME size per trade for every book (manager never cuts the books)
     maxOpenPerBook: 2,            // own capacity per book, separate from the legacy maxOpen 4
@@ -76,22 +76,29 @@ module.exports = {
         // Paper fills: Jupiter quote - U(0.5-2.0%) per side, -3% more on stop-loss exits, 0.5% fee per side,
         // priority fee per side (replaces the 1.1% round trip). Guardrail: 3 losses in a row -> no scanning or
         // entries for 1 h. The 5%/24 h halt is config.halt.
-        // v5 (Liviu t90u, 22 Nov 13:56, "Boss Rules"): entries only on a confirmed busy breakout (m5 volume >= 3x
-        // the hour's average 5-min volume = volumeH1 / 12, AND the price above the prior high = max price 45..5 min
-        // ago from the bot's 45 s price history (needs >= 30 min of it) or GeckoTerminal 1m candle highs, AND m5 > 0),
-        // on top of the v3/v4 filters, Rug Check and the 150 bps slippage limit. Size = 5% of marked equity. Exits:
-        // -6% stop, full take profit at +2/+3/+4% by momentum tier (fixed at entry), 25 min time limit at market;
-        // stop only on a fresh quote (feed stale >= 60 s -> hold). 2 losses in a row -> 30 min pause; no entries
-        // 02:00-06:00 UTC. v4 cost model, 24 h stop-out block and the equity halt are kept.
-        id: 'runner-hunter', name: 'Runner hunter', version: 5,
-        entry: { minLiquidityUsd: 100000, maxLiquidityUsd: 900000, minVolumeToLiquidityH24: 0.1, minM5: 0, minM15: 0, maxH1: 25, maxTop10Pct: 15,
+        // v6 "Trend Following" (Liviu t93u, 22 Nov 14:53): buy only pools with liquidity > $50k whose price is above
+        // its 50-period SMA of 1-minute closes (own ~45 s price history resampled to 1 min when it covers >= 50 min,
+        // else GeckoTerminal 1m OHLCV: >= 50 candles, newest <= 3 min old; no data -> no entry). Rug gates kept
+        // (liq > $30k, mint+freeze revoked, top-10 <= 15% via RugCheck, blacklist), 24 h no re-buy after a stop,
+        // 150 bps entry slippage abort. Exits: -4% stop, +8% take profit (full), measured on the Jupiter sell-quote
+        // price move since entry, checked every ~5 s with feed protection; 240 min safety cap (not in the order).
+        // Paper cost model: flat 2% adverse slippage on every fill (buy and sell) + priority fee; no extra fee or
+        // stop penalty. Boss Rules risk: 2 losses -> 30 min pause, no entries 02:00-06:00 UTC, 5%/24 h equity halt.
+        // Size 5% of marked equity.
+        id: 'runner-hunter', name: 'Trend Following', version: 6,
+        entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 0, maCacheSec: 120 },
+          maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
+          stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
+        exit: { stopLossPct: 4, takeProfitPct: 8, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
+          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } },
+        previousVersions: [
+          { version: 5, until: '2026-11-22T14:53', name: 'Runner hunter (Boss Rules breakout)', entry: { minLiquidityUsd: 100000, maxLiquidityUsd: 900000, minVolumeToLiquidityH24: 0.1, minM5: 0, minM15: 0, maxH1: 25, maxTop10Pct: 15,
           maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
           breakout: { minVolSpike: 3, lookbackMin: 45, excludeMin: 5, minCoverMin: 30, minBreakPct: 0 },
           stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
-        exit: { stopLossPct: 6, takeProfit: { strong: { pct: 4, minVolSpike: 6, minM5: 3 }, moderate: { pct: 3, minVolSpike: 4, minM5: 1.5 }, weak: { pct: 2 } },
+            exit: { stopLossPct: 6, takeProfit: { strong: { pct: 4, minVolSpike: 6, minM5: 3 }, moderate: { pct: 3, minVolSpike: 4, minM5: 1.5 }, weak: { pct: 2 } },
           maxHoldMinutes: 25, feedStaleSec: 60,
-          costModel: { simSlipMinPct: 0.5, simSlipMaxPct: 2.0, stopPenaltyPct: 3, feePctPerSide: 0.5, priorityFee: true, cuLimit: 200000 } },
-        previousVersions: [
+          costModel: { simSlipMinPct: 0.5, simSlipMaxPct: 2.0, stopPenaltyPct: 3, feePctPerSide: 0.5, priorityFee: true, cuLimit: 200000 } } },
           { version: 4, until: '2026-11-22T13:56', entry: { minLiquidityUsd: 100000, maxLiquidityUsd: 900000, minVolumeToLiquidityH24: 0.1, minM5: 0, minM15: 0, maxH1: 25, maxTop10Pct: 15,
           maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
           stopCooldownHours: 24, lossStreakPause: { losses: 3, minutes: 60, pauseScanning: true } },

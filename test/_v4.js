@@ -3,5 +3,5 @@
 const config = require('../src/config');
 const rh = config.books.list.find(b => b.id === 'runner-hunter');
 const v4 = rh && (rh.previousVersions || []).find(v => v.version === 4);
-if (v4) { rh.version = 4; rh.entry = v4.entry; rh.exit = v4.exit; rh.previousVersions = rh.previousVersions.filter(v => v.version < 4); }
+if (v4) { rh.version = 4; rh.name = 'Runner hunter'; rh.entry = v4.entry; rh.exit = v4.exit; rh.previousVersions = rh.previousVersions.filter(v => v.version < 4); }
 config.books.epoch = 'runner-v4';
