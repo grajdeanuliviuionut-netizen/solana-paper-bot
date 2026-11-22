@@ -79,6 +79,29 @@ const RULES_V5 = [
   'R8 still losing: net < 0 -> entry.minVolumeToLiquidityH24 +0.05 (max 0.5)',
   'R9 healthy (net >= 0 and win rate >= 40%) -> no change'
 ];
+// t93u v6 Trend Following (Liviu 22 Nov 14:53): the Manager may only tighten: stop <= 4% (never looser than -4),
+// liquidity floor >= $50k, top-10 <= 15%, slippage <= 150 bps; MA margin 0..3% above the 50 MA; TP 6..12%.
+// Not in the whitelist: the MA period, the rug gates (mint/freeze revoked, blacklist), 2-loss pause, night
+// hours, sizing, feed protection, the 2% slip cost model, the halt.
+const BOUNDS_V6 = {
+  'entry.minLiquidityUsd': { min: 50000, max: 250000, step: 25000, hard: 'never below $50k' },
+  'entry.trend.minAbovePct': { min: 0, max: 3, step: 0.5 },
+  'entry.maxTop10Pct': { min: 5, max: 15, step: 2.5, hard: 'tighten-only' },
+  'entry.maxSlippageBps': { min: 50, max: 150, step: 25, hard: 'tighten-only' },
+  'exit.stopLossPct': { min: 2, max: 4, step: 0.5, hard: 'tighten-only (never beyond -4%)' },
+  'exit.takeProfitPct': { min: 6, max: 12, step: 1 }
+};
+const HARD_V6 = { 'entry.minLiquidityUsd': { min: 50000 }, 'entry.maxTop10Pct': { max: 15 }, 'entry.maxSlippageBps': { max: 150 }, 'exit.stopLossPct': { max: 4 } };
+const RULES_V6 = [
+  'R1 fast stops: win rate < 40% and >= 3 stops -> stronger trend: entry.trend.minAbovePct +0.5 (max 3)',
+  'R2 stops overshoot: >= 2 stops and avg stop overshoot <= -2 pts -> entry.minLiquidityUsd +25k (max 250k)',
+  'R3 TP rarely reached: >= 3 time exits and 0 TPs -> exit.takeProfitPct -1 (min 6)',
+  'R7 concentrated losers: losers top10 >= 5 pts above winners -> entry.maxTop10Pct -2.5 (min 5)',
+  'R10 costly fills: avg entry slippage >= 1% -> entry.maxSlippageBps -25 (min 50)',
+  'R8 still losing: net < 0 -> entry.minLiquidityUsd +25k (max 250k)',
+  'R9 healthy (net >= 0 and win rate >= 40%) -> no change'
+];
+const isV6 = book => !!(book && book.entry && book.entry.trend);
 const isV5 = book => !!(book && book.exit && book.exit.takeProfit);
 const isV4 = book => !!(book && ((book.entry && book.entry.rugCheck) || (book.exit && book.exit.breakevenAtPct != null)));
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -103,7 +126,7 @@ function stats(trades) {
     netSol: r(pnl.reduce((s, x) => s + x, 0)),
     stops: stops.length, fastStops: stops.filter(t => num(t.holdMinutes) < 15).length, avgStopOvershootPct: r(avg(over), 3),
     trails: trails.length, trailAvgPct: r(avg(trails.map(t => num(t.pnlPct))), 3),
-    timeExits: trades.filter(t => t.exitReason === 'time').length,
+    timeExits: trades.filter(t => t.exitReason === 'time').length, tps: trades.filter(t => t.exitReason === 'tp').length,
     partials: trades.filter(t => (t.legs || []).some(l => /partial/.test(String(l.reason)))).length,
     noMomentum: trades.filter(t => t.exitReason === 'no-momentum').length,
     avgEntrySlippagePct: r(avg(trades.map(t => t.entrySlippagePct).filter(x => Number.isFinite(Number(x))).map(Number)), 3),
@@ -120,6 +143,27 @@ function decide(s, params, v4) {
   const move = (k, dir) => { const b = BB[k]; const v = at(k); return +Math.min(b.max, Math.max(b.min, v + dir * b.step)).toFixed(4); };
   const pick = (rule, k, dir, why) => (can(k, dir) ? { rule, knob: k, from: at(k), to: move(k, dir), why } : null);
   const lowWin = s.winRatePct != null && s.winRatePct < 40;
+  if (v4 === 'v6') {
+    const B6 = BOUNDS_V6;
+    const can6 = (k, dir) => { const b = B6[k], v = at(k); return !!b && v != null && (dir > 0 ? v + 1e-9 < b.max : v - 1e-9 > b.min); };
+    const pick6 = (rule, k, dir, why) => (can6(k, dir) ? { rule, knob: k, from: at(k), to: +Math.min(B6[k].max, Math.max(B6[k].min, at(k) + dir * B6[k].step)).toFixed(4), why } : null);
+    const tps = s.tps != null ? s.tps : null;
+    const c6 = [
+      () => lowWin && s.stops >= 3 && pick6('R1', 'entry.trend.minAbovePct', +1, 'win rate ' + s.winRatePct + '% with ' + s.stops + ' stops: require price further above the 50 MA'),
+      () => s.stops >= 2 && s.avgStopOvershootPct != null && s.avgStopOvershootPct <= -2 && pick6('R2', 'entry.minLiquidityUsd', +1, s.stops + ' stops filled ' + s.avgStopOvershootPct + ' pts past the stop: deeper pools'),
+      () => s.timeExits >= 3 && !tps && pick6('R3', 'exit.takeProfitPct', -1, s.timeExits + ' trades hit the 240 min cap without the TP'),
+      () => s.losersAvgTop10 != null && s.winnersAvgTop10 != null && s.losersAvgTop10 - s.winnersAvgTop10 >= 5 && pick6('R7', 'entry.maxTop10Pct', -1, 'losers had top-10 ' + s.losersAvgTop10 + '% vs winners ' + s.winnersAvgTop10 + '%'),
+      () => s.avgEntrySlippagePct != null && s.avgEntrySlippagePct >= 1 && pick6('R10', 'entry.maxSlippageBps', -1, 'average entry slippage ' + s.avgEntrySlippagePct + '%'),
+      () => s.netSol < 0 && pick6('R8', 'entry.minLiquidityUsd', +1, 'net ' + s.netSol + ' SOL over the last ' + s.trades + ' trades: only deeper pools')
+    ];
+    if (s.netSol >= 0 && !lowWin) return { rule: 'R9', knob: null, why: 'healthy: net ' + s.netSol + ' SOL, win rate ' + s.winRatePct + '%: no change' };
+    for (const c of c6) {
+      const d = c();
+      const hl = d && HARD_V6[d.knob];
+      if (d && !(hl && ((hl.max != null && d.to > hl.max) || (hl.min != null && d.to < hl.min)))) return d;
+    }
+    return { rule: 'none', knob: null, why: 'no rule fired with a knob inside its bounds: no change' };
+  }
   if (v5) {
     const c5 = [
       () => s.stops >= 2 && s.avgStopOvershootPct != null && s.avgStopOvershootPct <= -2 && pick('R1', 'entry.minLiquidityUsd', +1, s.stops + ' stops filled ' + s.avgStopOvershootPct + ' pts past the level on average: thicker pools fill closer to the stop'),
@@ -205,7 +249,7 @@ function step(state, book, opts) {
     const s = stats(blk);
     if (opts && opts.rejects) s.rejectsByFilter = opts.rejects;
     const params = { entry: JSON.parse(JSON.stringify(book.entry)), exit: JSON.parse(JSON.stringify(book.exit)) };
-    const d = decide(s, params, isV5(book) ? 'v5' : isV4(book));
+    const d = decide(s, params, isV6(book) ? 'v6' : isV5(book) ? 'v5' : isV4(book));
     const entry = { at: nowIso, epoch: sb.epoch, tradeIndex: m.reviewedThrough + 10, fromVersion: book.version, stats: s, rule: d.rule, change: d.knob, from: d.from == null ? null : d.from, to: d.to == null ? null : d.to, why: d.why, toVersion: book.version };
     if (d.knob) {
       const prev = { version: book.version, until: nowIso, entry: JSON.parse(JSON.stringify(params.entry)), exit: JSON.parse(JSON.stringify(params.exit)), by: 'manager', rule: d.rule };
@@ -233,4 +277,4 @@ function restore(state, book, baseVersion) {
   return true;
 }
 
-module.exports = { step, decide, stats, restore, isV4, isV5, BOUNDS_V5, RULES_V5, HARD_V5, BOUNDS, RULES, BOUNDS_V4, RULES_V4, HARD_V4 };
+module.exports = { step, decide, stats, restore, isV4, isV5, isV6, BOUNDS_V6, RULES_V6, HARD_V6, BOUNDS_V5, RULES_V5, HARD_V5, BOUNDS, RULES, BOUNDS_V4, RULES_V4, HARD_V4 };

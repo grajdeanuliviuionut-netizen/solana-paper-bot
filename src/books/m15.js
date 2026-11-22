@@ -42,6 +42,35 @@ function priorHighFromOhlcv(list, t, o) {
   if (inWin.length < 10 || oldest < o.minCoverMin) return null;
   return { priorHigh: Math.max(...inWin.map(r => Number(r[2]))), fromMin: +Math.min(oldest, o.lookbackMin).toFixed(1), toMin: o.excludeMin, points: inWin.length, source: 'geckoterminal-ohlcv-1m' };
 }
+// t93u v6 trend: 50-period SMA of 1-minute closes.
+// Own history: the bot's ~45 s pool price ticks resampled to 1 min (close of minute k = the last tick at or
+// before its end; a minute with no tick carries the previous close). Needs ticks covering >= period minutes.
+function smaFromTicks(series, t, o) {
+  const n = o.maPeriod;
+  if (!Array.isArray(series) || !series.length || (t - series[0][0]) / MIN < n) return null;
+  const closes = [];
+  let j = 0, last = null;
+  for (let k = n - 1; k >= 0; k--) {
+    const end = t - k * MIN;
+    while (j < series.length && series[j][0] <= end) { if (series[j][1] > 0) last = series[j][1]; j++; }
+    if (last == null) return null;
+    closes.push(last);
+  }
+  const ma = closes.reduce((a, b) => a + b, 0) / n;
+  return { ma, period: n, candles: n, source: 'own-history-1m', newestAgeSec: +((t - series[series.length - 1][0]) / 1000).toFixed(1) };
+}
+// GeckoTerminal 1m OHLCV: SMA of the closes of the newest `period` candles (needs >= period candles, newest <= maxCandleAgeSec old).
+function smaFromOhlcv(list, t, o) {
+  if (!Array.isArray(list)) return null;
+  const rows = list.filter(r => Array.isArray(r) && r.length >= 5 && Number(r[4]) > 0).sort((a, b) => b[0] - a[0]);
+  const n = o.maPeriod;
+  if (rows.length < n) return null;
+  const age = t / 1000 - rows[0][0];
+  if (age > (o.maxCandleAgeSec || 180)) return null;
+  const use = rows.slice(0, n);
+  const ma = use.reduce((a, r) => a + Number(r[4]), 0) / n;
+  return { ma, period: n, candles: n, source: 'geckoterminal-ohlcv-1m', newestAgeSec: +age.toFixed(1), spanMin: +((use[0][0] - use[n - 1][0]) / 60 + 1).toFixed(0) };
+}
 // Own-history m15 (pure). Returns { pct, fromAgeMin } or null.
 function m15FromTicks(series, priceNow, t) {
   if (!Array.isArray(series) || !(priceNow > 0)) return null;
@@ -91,7 +120,14 @@ function makeM15(limiter) {
     if (!l || t - l.at >= 60000) { await gt(pairAddress, t); l = lists.get(pairAddress); }
     return l && l.list ? priorHighFromOhlcv(l.list, t, o) : null;
   }
-  return { gt, priorHighGt, stats };
+  // t93u: 50-period SMA from the same cached GT candles.
+  async function smaGt(pairAddress, t, o) {
+    let l = lists.get(pairAddress);
+    if (!l || t - l.at >= 60000) { await gt(pairAddress, t); l = lists.get(pairAddress); }
+    if (!l || t - l.at >= 60000) return { error: stats.lastError || 'GeckoTerminal unavailable' };   // fetch failed / rate limited: not a verdict
+    return l.list ? smaFromOhlcv(l.list, t, o) : null;
+  }
+  return { gt, priorHighGt, smaGt, stats };
 }
 
-module.exports = { recordTick, pruneTicks, m15FromTicks, m15FromOhlcv, priorHighFromTicks, priorHighFromOhlcv, makeM15, KEEP_MIN };
+module.exports = { smaFromTicks, smaFromOhlcv, recordTick, pruneTicks, m15FromTicks, m15FromOhlcv, priorHighFromTicks, priorHighFromOhlcv, makeM15, KEEP_MIN };

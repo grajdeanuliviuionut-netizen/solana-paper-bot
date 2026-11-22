@@ -21,6 +21,8 @@ const isStopExit = r => stopFills.isStop(r) || r === 'breakeven';
 const MIN = 60000;
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const label = b => b.id + ' v' + b.version;
+// v3+ runner books (filter counters, top-10 gate): the v3-v5 liquidity band or the v6 trend rule.
+const v3plus = e => !!(e && (e.maxLiquidityUsd != null || e.trend));
 
 // ---------- entry rules (pure) ----------
 function isPumpOrigin(row) {
@@ -64,6 +66,15 @@ function dropFromHighPct(row, snaps, now) {
 // Returns null (passes) or the first failed rule as a short reason.
 function entryFails(book, row, ctx) {
   const e = book.entry, now = ctx.now, pc = row.priceChange || {};
+  if (book.id === 'runner-hunter' && e.trend) {
+    // t93u v6 Trend Following: liquidity > $50k and price above its 50-period (1 min) SMA. The SMA comes from the
+    // bot's own history here when it covers >= 50 min; otherwise from GeckoTerminal candles in runEntries (fail closed).
+    if (!(num(row.liquidityUsd) > e.minLiquidityUsd)) return 'liquidity: <= ' + e.minLiquidityUsd;
+    if (!(num(row.priceUsd) > 0)) return 'maNoData: no price';
+    const s = m15Mod.smaFromTicks(ctx.ticks && ctx.ticks[row.pairAddress], now, e.trend);
+    if (s && !(num(row.priceUsd) > s.ma * (1 + (e.trend.minAbovePct || 0) / 100))) return 'belowMA: price <= MA' + e.trend.maPeriod;
+    return null;
+  }
   if (e.minLiquidityUsd && num(row.liquidityUsd) < e.minLiquidityUsd) return (e.maxLiquidityUsd != null ? 'liquidityMin: < ' : 'liquidity < ') + e.minLiquidityUsd;
   if (book.id === 'graduation-sniper') {
     if (e.pumpOrigin && !isPumpOrigin(row)) return 'not pump.fun origin';
@@ -136,6 +147,10 @@ function signalFields(book, row, ctx) {
         priorHighWindowMin: ph ? [ph.fromMin, ph.toMin] : null, breakPct: ph ? +((num(row.priceUsd) / ph.priorHigh - 1) * 100).toFixed(3) : null });
     }
     Object.assign(f, { volumeH24: row.volumeH24, volumeToLiquidityH24: +(num(row.volumeH24) / (num(row.liquidityUsd) || 1)).toFixed(3), m15: m ? +m.pct.toFixed(3) : null, m15Source: m ? m.source : null, m15FromAgeMin: m ? m.fromAgeMin : null });
+  }
+  if (book.id === 'runner-hunter' && book.entry && book.entry.trend) {
+    const s = m15Mod.smaFromTicks(ctx.ticks && ctx.ticks[row.pairAddress], ctx.now, book.entry.trend);
+    Object.assign(f, { priceUsd: row.priceUsd, ma: s ? s.ma : null, maPeriod: book.entry.trend.maPeriod, maSource: s ? s.source : null, maDistPct: s ? +((num(row.priceUsd) / s.ma - 1) * 100).toFixed(3) : null });
   }
   if (book.id === 'volume-explosion') Object.assign(f, { volumeM5: row.volumeM5, m5VolumeVsHourAvg: +num(m5VolumeVsHourAvg(row)).toFixed(2) });
   if (book.id === 'trending-pullback') Object.assign(f, { volumeH6: row.volumeH6, high24Est: high24Estimate(row, ctx.snaps && ctx.snaps[row.mint], ctx.now), dropFromHighPct: +num(dropFromHighPct(row, ctx.snaps && ctx.snaps[row.mint], ctx.now)).toFixed(2) });
@@ -238,7 +253,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   }
   const filterKey = reason => String(reason).split(':')[0].trim();
   function countFilter(state, book, reason) {
-    if (!(book && book.entry && book.entry.maxLiquidityUsd != null)) return;
+    if (!(book && v3plus(book.entry))) return;
     const f = filterStats(state, book), k = filterKey(reason);
     f.byFilter[k] = (f.byFilter[k] || 0) + 1;
     if (f.lastScan) f.lastScan.byFilter[k] = (f.lastScan.byFilter[k] || 0) + 1;
@@ -369,7 +384,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const seen = new Set((pairs || []).map(r => r && r.mint));
       const extraOnly = extra.filter(r => r && !seen.has(r.mint));
       for (const r of extra) if (r && !entryFails(book, r, ctx) && onExtraPass) onExtraPass(book, r);
-      const v3 = book.entry && book.entry.maxLiquidityUsd != null;
+      const v3 = book.entry && (book.entry.maxLiquidityUsd != null || !!book.entry.trend);
       if (v3) filterStats(state, book).lastScan = { at: new Date(t).toISOString(), rows: (pairs || []).length, passedRules: 0, byFilter: {} };
       for (const row of (pairs || []).concat(extraOnly)) {
         if (!row || !row.mint) continue;
@@ -431,6 +446,24 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         const cool = reentry.blocked(state, { mint: row.mint, pairAddress: row.pairAddress }, t);
         if (cool) { reject(state, book, row, 're-entry cooldown'); continue; }
         if (row.stale || !row.fetchedAt || t - row.fetchedAt > C.maxPriceAgeSec * 1000) { reject(state, book, row, 'stale scan row (> ' + C.maxPriceAgeSec + 's)'); continue; }
+        // t93u v6: 50 MA from GeckoTerminal 1m candles when the own history is shorter than 50 min (fail closed).
+        // Results are cached per pool for maCacheSec so the GT budget rotates through the candidates.
+        const TR = book.entry && book.entry.trend;
+        if (TR && fields.ma == null) {
+          const mc = b.maCache || (b.maCache = {});
+          let ent = mc[row.pairAddress];
+          if (!ent || t - ent.at > (TR.maCacheSec || 120) * 1000) {
+            if (gtBudget <= 0) { countFilter(state, book, 'maPending'); continue; }
+            gtBudget--;
+            const sm = m15 && m15.smaGt ? await m15.smaGt(row.pairAddress, nowFn(), TR) : null;
+            if (sm && sm.error) { countFilter(state, book, 'maUnavailable'); reject(state, book, row, 'maUnavailable: GeckoTerminal ' + String(sm.error).slice(0, 60) + ' (fail closed, retried)'); continue; }
+            ent = mc[row.pairAddress] = { at: t, r: sm };
+            const ks = Object.keys(mc); if (ks.length > 600) delete mc[ks[0]];
+          }
+          if (!ent.r) { countFilter(state, book, 'maNoData'); reject(state, book, row, 'maNoData: no 50-candle 1m history (own + GeckoTerminal)'); continue; }
+          Object.assign(fields, { ma: ent.r.ma, maSource: ent.r.source, maDistPct: +((num(row.priceUsd) / ent.r.ma - 1) * 100).toFixed(3), maNewestCandleAgeSec: ent.r.newestAgeSec, maSpanMin: ent.r.spanMin || TR.maPeriod });
+          if (!(num(row.priceUsd) > ent.r.ma * (1 + (TR.minAbovePct || 0) / 100))) { countFilter(state, book, 'belowMA'); reject(state, book, row, 'belowMA: price <= MA' + TR.maPeriod + ' (GeckoTerminal)'); continue; }
+        }
         // t90u v5 sizing: exactly pctOfEquity (5%) of the current marked total equity per trade (no static 0.05).
         const SZ = book.entry && book.entry.sizing;
         let size = C.sizeSol, sizing = null;
@@ -474,7 +507,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (!rug.pass) { reject(state, book, row, 'rug-check: ' + rug.reason); continue; }
         const E = book.entry || {};
         // t86u v3: top-10 holders (Solana RPC largest accounts, pool/AMM/burn excluded), fail closed.
-        if (E.maxTop10Pct != null && E.maxLiquidityUsd != null) {
+        if (E.maxTop10Pct != null && v3plus(E)) {
           const tt = top10 ? await top10.check(row.mint, row.pairAddress, nowFn()) : { ok: false, reason: 'top10: no checker configured' };
           if (!tt.ok && RC) rugState(state).unavailable++;
           if (!tt.ok) { countFilter(state, book, 'top10Unavailable'); reject(state, book, row, 'top10: unavailable (' + (tt.reason || 'error') + ')'); continue; }
@@ -549,6 +582,10 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           if (RC) pos.rugCheckV4 = { pass: true, liquidityUsd: row.liquidityUsd, mintRevoked: true, freezeRevoked: true, top10Pct: fields.top10Pct == null ? null : fields.top10Pct, limits: RC };
         }
         if (sizing) pos.sizing = sizing;
+        if (TR) pos.trend = { ma: fields.ma, maPeriod: TR.maPeriod, maSource: fields.maSource, priceUsd: num(row.priceUsd), maDistPct: fields.maDistPct, candleSec: 60 };
+        // t93u v6: SL/TP measured on the price move since entry: the Jupiter sell-quote value of the held tokens
+        // vs their value at the entry sell check (after the simulated buy slip); slippage is a cost on top.
+        if (book.exit && book.exit.priceBasis === 'entryQuote') pos.exitRefSol = (Number(sell.outAmount) / 1e9) * (sim ? (1 - sim.costs.simSlipPct / 100) : 1);
         if (book.exit && book.exit.takeProfit) pos.takeProfit = Object.assign(tpTier(book.exit.takeProfit, fields), { setAt: at, deadlineAt: new Date(t2 + book.exit.maxHoldMinutes * MIN).toISOString() });
         if (book.exit && book.exit.feedStaleSec) pos.feed = { lastOkAt: at, stale: false, staleSince: null, events: [] };
         // Re-check after the awaits above (quotes): never push a second holding of the same mint.
@@ -557,7 +594,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         b.open.push(pos);
         state.balance -= size;
         b.entries.opened++;
-        if (book.entry && book.entry.maxLiquidityUsd != null) filterStats(state, book).entered++;
+        if (book.entry && v3plus(book.entry)) filterStats(state, book).entered++;
         if (book.id === 'graduation-sniper' && b.gradSniper && book.version === b.gradSniper.version) {
           b.gradSniper.entries++;
           pos.v2Checks = Object.assign({}, curV2);
@@ -746,7 +783,12 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       pos.markSource = 'jupiter-sell-quote';
       pos.lastQuote = { inAmount: q.inAmount, outAmount: q.outAmount, priceImpactPct: q.priceImpactPct, at: pos.markAt };
       changed = true;
-      const d = decideExit(pos, ex, pct, pos.peakPct, minsOpen);
+      let dp = pct, dpk = pos.peakPct;
+      if (ex.priceBasis === 'entryQuote' && pos.exitRefSol > 0) {
+        dp = (Number(q.outAmount) / 1e9 / (pos.exitRefSol * (pos.remainingFrac == null ? 1 : pos.remainingFrac)) - 1) * 100;
+        pos.movePct = +dp.toFixed(3); pos.peakMovePct = Math.max(num(pos.peakMovePct), pos.movePct); dpk = pos.peakMovePct;
+      }
+      const d = decideExit(pos, ex, dp, dpk, minsOpen);
       if (!d) continue;
       if (d.action === 'partial') {
         const part = (BigInt(pos.tokensRaw) * BigInt(Math.round(d.sellPct * 10000))) / 1000000n;

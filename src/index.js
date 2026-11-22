@@ -631,10 +631,10 @@ function bossRulesView() {
     const tp = p.takeProfit || null;
     return { symbol: p.symbol, id: p.id, version: p.strategyVersion, feed: { lastUpdateAt: F ? F.lastOkAt : p.markAt || null, ageSec: age == null ? null : +age.toFixed(1), stale: !!(F && F.stale), staleSince: F ? F.staleSince : null, protected: !!(p.exit && p.exit.feedStaleSec), events: F ? F.events.slice(0, 5) : [] },
       takeProfit: tp ? { tier: tp.tier, pct: tp.pct, why: tp.why, deadlineAt: tp.deadlineAt, leftSec: tp.deadlineAt ? Math.max(0, Math.round((Date.parse(tp.deadlineAt) - now) / 1000)) : null } : null,
-      markPct: p.markPct, sizeSol: p.sizeSol, sizing: p.sizing || null };
+      markPct: p.markPct, movePct: p.movePct == null ? null : p.movePct, trend: p.trend || null, heldMin: +((now - Date.parse(p.entryTime)) / 60000).toFixed(1), sizeSol: p.sizeSol, sizing: p.sizing || null };
   });
   const bf = ((bk.entryFilters || {})['runner-hunter'] || {}).byFilter || {};
-  const keys = ['volSpike', 'breakout', 'breakoutNoData', 'breakoutPending', 'nightHoursSkip', 'lossStreakPause', 'm5', 'm15', 'm15NoData', 'liquidityMin', 'liquidityMax', 'vol24Liq', 'h1Max', 'top10', 'top10Unavailable', 'slippageAbort', 'rugBlacklisted', 'sizingEquityUnknown'];
+  const keys = ['liquidity', 'belowMA', 'maNoData', 'maPending', 'maUnavailable', 'volSpike', 'breakout', 'breakoutNoData', 'breakoutPending', 'nightHoursSkip', 'lossStreakPause', 'm5', 'm15', 'm15NoData', 'liquidityMin', 'liquidityMax', 'vol24Liq', 'h1Max', 'top10', 'top10Unavailable', 'slippageAbort', 'rugBlacklisted', 'sizingEquityUnknown'];
   const rejects = {}; keys.forEach(function (k) { if (bf[k]) rejects[k] = bf[k]; });
   Object.keys(bf).forEach(function (k) { if (/^rug:/.test(k)) rejects[k] = bf[k]; });
   return {
@@ -643,7 +643,10 @@ function bossRulesView() {
     feed: { staleAfterSec: X.feedStaleSec || null, staleEvents: (bk.feed || {}).staleEvents || 0, openStale: open.filter(function (p) { return p.feed.stale; }).length, recent: ((bk.feed || {}).recent || []).slice(0, 10), rule: 'no stop-loss (or any exit) is decided without a fresh (<= 10 s) Jupiter sell quote; >= 60 s without one = stale, logged; the position waits for the feed' },
     halted: haltMod.isHalted(state),
     sizing: E.sizing ? { pctOfEquity: E.sizing.pctOfEquity, markedEquitySol: +Number(eq).toFixed(6), nextSizeSol: +(Number(eq) * E.sizing.pctOfEquity / 100).toFixed(6) } : null,
-    takeProfit: X.takeProfit || null, timeLimitMinutes: X.takeProfit ? X.maxHoldMinutes : null,
+    takeProfit: X.takeProfit || (X.takeProfitPct != null ? { fixedPct: X.takeProfitPct } : null), timeLimitMinutes: X.maxHoldMinutes || null,
+    strategy: RH && RH.entry && RH.entry.trend ? { name: RH.name, version: RH.version, minLiquidityUsd: RH.entry.minLiquidityUsd, maPeriod: RH.entry.trend.maPeriod, candle: '1m', stopLossPct: X.stopLossPct, takeProfitPct: X.takeProfitPct, maxHoldMinutes: X.maxHoldMinutes, slipPctPerFill: (X.costModel || {}).flatSlipPct, priceBasis: X.priceBasis,
+      maMethod: 'SMA of the last 50 one-minute closes: own ~45 s pool price history resampled to 1 min (last price at or before each minute end, carried forward) when it covers >= 50 min, else GeckoTerminal 1m OHLCV closes (>= 50 candles, newest <= 3 min old); no data -> no entry' } : null,
+    trendStats: RH && RH.entry && RH.entry.trend ? { gtSma: m15.stats } : null,
     positions: open, breakoutRejects: rejects, breakout: E.breakout || null
   };
 }
@@ -669,7 +672,7 @@ function managerView(compact) {
     rugCheck: RH && RH.entry && RH.entry.rugCheck ? (function () { const r = books.rugState(state); return { limits: RH.entry.rugCheck, epoch: r.epoch, checks: r.checks, passed: r.passed, failed: r.failed, unavailable: r.unavailable, byReason: r.byReason, blacklisted: Object.keys(r.blacklist).length, blacklist: compact ? undefined : r.blacklist, note: 'a definite fail blacklists the mint for this epoch; RPC/data errors reject (fail closed) without blacklisting' }; })() : null,
     costModel: RH && RH.exit && RH.exit.costModel ? { config: RH.exit.costModel, doc: execMod.COST_MODEL_DOC } : null,
     log: (m.log || []).slice(0, compact ? 5 : 200), reports: compact ? (m.reports || []).slice(-3) : (m.reports || []) };
-  if (!compact) Object.assign(v, { bounds: improver.isV5(RH) ? improver.BOUNDS_V5 : improver.isV4(RH) ? improver.BOUNDS_V4 : improver.BOUNDS, rules: improver.isV5(RH) ? improver.RULES_V5 : improver.isV4(RH) ? improver.RULES_V4 : improver.RULES, hardCeilings: improver.isV5(RH) ? improver.HARD_V5 : improver.isV4(RH) ? improver.HARD_V4 : null, top10: Object.assign({}, top10.stats), m15: Object.assign({}, m15.stats), previousVersions: RH ? RH.previousVersions || [] : [],
+  if (!compact) Object.assign(v, { bounds: improver.isV6(RH) ? improver.BOUNDS_V6 : improver.isV5(RH) ? improver.BOUNDS_V5 : improver.isV4(RH) ? improver.BOUNDS_V4 : improver.BOUNDS, rules: improver.isV6(RH) ? improver.RULES_V6 : improver.isV5(RH) ? improver.RULES_V5 : improver.isV4(RH) ? improver.RULES_V4 : improver.RULES, hardCeilings: improver.isV6(RH) ? improver.HARD_V6 : improver.isV5(RH) ? improver.HARD_V5 : improver.isV4(RH) ? improver.HARD_V4 : null, top10: Object.assign({}, top10.stats), m15: Object.assign({}, m15.stats), previousVersions: RH ? RH.previousVersions || [] : [],
     note: 'Paper only. The Manager changes only whitelisted runner-hunter knobs inside these bounds; never size, wallets, keys or LIVE_TRADING.' });
   return v;
 }
