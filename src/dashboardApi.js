@@ -190,6 +190,7 @@ function makeDashboardApi(deps) {
     const b = deps.books.ensure(state);
     const open = marks();
     const exitOf = p => p.exit || {};
+    const bp = p => b.open.find(x => x.id === p.id) || null;   // t100u: the book position (partial legs)
     const lastEntry = list => list.reduce((a, t) => (t.entryTime && (!a || t.entryTime > a) ? t.entryTime : a), null);
     function group(base, positions, closed) {
       const rows = positions.map(p => {
@@ -201,7 +202,7 @@ function makeDashboardApi(deps) {
           entryPrice: p.entryPrice, markPrice: p.markPrice, priceUnit: p.priceUnit, markSource: p.markSource, markAt: p.markAt, quoteAgeSec: p.markAgeSec,
           pnlPct: p.pnlPct, netPnlPct: p.netPnlPct, unrealizedSol: p.unrealizedSol, peakPct: p.peakPct,
           stopPct: ex.stopLossPct != null ? -ex.stopLossPct : null, targetPct: tp, trailPct: ex.trailPct != null ? ex.trailPct : null, maxHoldMinutes: ex.maxHoldMinutes != null ? ex.maxHoldMinutes : null,
-          tokensEstimated: !!p.tokensEstimated };
+          tokensEstimated: !!p.tokensEstimated, partialDone: !!(bp(p) && bp(p).partialDone), realizedSol: bp(p) ? r((bp(p).legs || []).reduce((a, l) => a + (l.pnlSol || 0), 0), 6) : null, movePct: bp(p) && bp(p).movePct != null ? bp(p).movePct : null };
       });
       const cost = rows.reduce((a, x) => a + (x.costBasisSol || x.sizeSol || 0), 0);
       const pnl = rows.reduce((a, x) => a + (x.unrealizedSol || 0), 0);

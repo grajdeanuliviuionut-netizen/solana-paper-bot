@@ -93,6 +93,19 @@ const RH = (config.books.list || []).find(function (b) { return b.id === 'runner
 const RH_BASE = RH ? RH.version : null;
 // t89u: a halt is cleared at boot only by env HALT_CLEAR_ID equal to the persisted halt id (set by Liviu).
 try { if (haltMod.isHalted(state) && process.env.HALT_CLEAR_ID && process.env.HALT_CLEAR_ID === state.halt.id) { haltMod.clear(state, 'env HALT_CLEAR_ID', Date.now()); console.log('Halt ' + state.halt.id + ' cleared by HALT_CLEAR_ID'); } } catch (e) { console.error('halt clear', e.message); }
+// t100u: open runner-hunter v6.x positions with the old full +8% TP (same -4% stop, same price basis, TP not
+// reached) switch to the current half-and-trail exit; anything else keeps the rules it was opened with.
+try {
+  const X6 = RH && RH.exit;
+  if (X6 && X6.partial) for (const p of books.ensure(state).open) {
+    const e = p.exit || {};
+    if (p.book === 'runner-hunter' && !p.exitMigrated && !p.partialDone && e.takeProfitPct === X6.partial.atPct && e.stopLossPct === X6.stopLossPct && e.priceBasis === X6.priceBasis && !(Number(p.peakMovePct) >= X6.partial.atPct)) {
+      p.exitBefore = e; p.exit = JSON.parse(JSON.stringify(X6));
+      p.exitMigrated = { at: new Date().toISOString(), from: 'full TP +' + e.takeProfitPct + '%', to: 'half at +' + X6.partial.atPct + '%, trail ' + X6.trailPct + '%, breakeven floor', by: 't100u' };
+      console.log('Exit migrated to half-and-trail: ' + p.symbol);
+    }
+  }
+} catch (e) { console.error('exit migrate', e.message); }
 try { if (config.manager && config.manager.enabled && improver.restore(state, RH, RH_BASE)) console.log('Manager: runner-hunter v' + RH.version + ' restored'); } catch (e) { console.error('manager restore', e.message); }
 
 // PR11 scoreboard reset (once per epoch): the old trades are archived on the volume (state copy +
@@ -631,7 +644,7 @@ function bossRulesView() {
     const tp = p.takeProfit || null;
     return { symbol: p.symbol, id: p.id, version: p.strategyVersion, feed: { lastUpdateAt: F ? F.lastOkAt : p.markAt || null, ageSec: age == null ? null : +age.toFixed(1), stale: !!(F && F.stale), staleSince: F ? F.staleSince : null, protected: !!(p.exit && p.exit.feedStaleSec), events: F ? F.events.slice(0, 5) : [] },
       takeProfit: tp ? { tier: tp.tier, pct: tp.pct, why: tp.why, deadlineAt: tp.deadlineAt, leftSec: tp.deadlineAt ? Math.max(0, Math.round((Date.parse(tp.deadlineAt) - now) / 1000)) : null } : null,
-      markPct: p.markPct, movePct: p.movePct == null ? null : p.movePct, trend: p.trend || null, heldMin: +((now - Date.parse(p.entryTime)) / 60000).toFixed(1), sizeSol: p.sizeSol, sizing: p.sizing || null };
+      markPct: p.markPct, movePct: p.movePct == null ? null : p.movePct, peakMovePct: p.peakMovePct == null ? null : p.peakMovePct, partialDone: !!p.partialDone, halfTrail: !!(p.exit && p.exit.partial), realizedSol: +(p.legs || []).reduce((a, l) => a + (l.pnlSol || 0), 0).toFixed(6), exitMigrated: p.exitMigrated || null, trend: p.trend || null, heldMin: +((now - Date.parse(p.entryTime)) / 60000).toFixed(1), sizeSol: p.sizeSol, sizing: p.sizing || null };
   });
   const bf = ((bk.entryFilters || {})['runner-hunter'] || {}).byFilter || {};
   const keys = ['liquidity', 'belowMA', 'maNoData', 'maPending', 'maUnavailable', 'volSpike', 'breakout', 'breakoutNoData', 'breakoutPending', 'nightHoursSkip', 'lossStreakPause', 'm5', 'm15', 'm15NoData', 'liquidityMin', 'liquidityMax', 'vol24Liq', 'h1Max', 'top10', 'top10Unavailable', 'slippageAbort', 'rugBlacklisted', 'sizingEquityUnknown'];
@@ -644,7 +657,7 @@ function bossRulesView() {
     halted: haltMod.isHalted(state),
     sizing: E.sizing ? { pctOfEquity: E.sizing.pctOfEquity, markedEquitySol: +Number(eq).toFixed(6), nextSizeSol: +(Number(eq) * E.sizing.pctOfEquity / 100).toFixed(6) } : null,
     takeProfit: X.takeProfit || (X.takeProfitPct != null ? { fixedPct: X.takeProfitPct } : null), timeLimitMinutes: X.maxHoldMinutes || null,
-    strategy: RH && RH.entry && RH.entry.trend ? { name: RH.name, version: RH.version, minLiquidityUsd: RH.entry.minLiquidityUsd, maPeriod: RH.entry.trend.maPeriod, candle: '1m', stopLossPct: X.stopLossPct, takeProfitPct: X.takeProfitPct, maxHoldMinutes: X.maxHoldMinutes, slipPctPerFill: (X.costModel || {}).flatSlipPct, priceBasis: X.priceBasis,
+    strategy: RH && RH.entry && RH.entry.trend ? { name: RH.name, version: RH.version, minLiquidityUsd: RH.entry.minLiquidityUsd, maPeriod: RH.entry.trend.maPeriod, minAbovePct: RH.entry.trend.minAbovePct, requireMaRising: !!RH.entry.trend.requireMaRising, candle: '1m', stopLossPct: X.stopLossPct, takeProfitPct: X.takeProfitPct != null ? X.takeProfitPct : (X.partial ? X.partial.atPct : null), partial: X.partial || null, trailPct: X.trailPct || null, breakevenAfterPartial: !!X.breakevenAfterPartial, managerFrozen: !!(config.manager && config.manager.applyChanges === false), maxHoldMinutes: X.maxHoldMinutes, slipPctPerFill: (X.costModel || {}).flatSlipPct, priceBasis: X.priceBasis,
       maMethod: 'SMA of the last 50 one-minute closes: own ~45 s pool price history resampled to 1 min (last price at or before each minute end, carried forward) when it covers >= 50 min, else GeckoTerminal 1m OHLCV closes (>= 50 candles, newest <= 3 min old); no data -> no entry' } : null,
     trendStats: RH && RH.entry && RH.entry.trend ? { gtSma: m15.stats } : null,
     positions: open, breakoutRejects: rejects, breakout: E.breakout || null,
@@ -749,7 +762,7 @@ async function exitLoop() {
     // t86u: Manager review every 10 closed runner-hunter trades (one bounded change) + a report every 30.
     let mv = null;
     if (config.manager && config.manager.enabled && RH) {
-      mv = improver.step(state, RH, { baseVersion: RH_BASE, rejects: (books.ensure(state).entryFilters['runner-hunter'] || {}).byFilter || null });
+      mv = improver.step(state, RH, { baseVersion: RH_BASE, frozen: !!(config.manager && config.manager.applyChanges === false), rejects: (books.ensure(state).entryFilters['runner-hunter'] || {}).byFilter || null });
       if (mv) addActivity('MANAGER review @' + mv.tradeIndex + ': ' + (mv.change ? mv.change + ' ' + mv.from + ' -> ' + mv.to + ' (v' + mv.toVersion + ')' : 'no change') + ' - ' + mv.why);
     }
     if ((changed || n || mv) && !ticking) saveState(state);

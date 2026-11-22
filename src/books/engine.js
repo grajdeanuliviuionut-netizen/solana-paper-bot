@@ -190,6 +190,8 @@ function decideExit(pos, ex, pct, peakPct, minsOpen) {
     return null;
   }
   if (ex.takeProfitPct != null && pct >= ex.takeProfitPct) return { action: 'close', reason: 'tp' };
+  // t100u half-and-trail: after the half sold at +8% the runner's floor is the entry price (move 0%).
+  if (ex.breakevenAfterPartial && pos.partialDone && pct <= 0) return { action: 'close', reason: 'breakeven' };
   if (ex.partial && !pos.partialDone && pct >= ex.partial.atPct) return { action: 'partial', reason: 'partial-tp', sellPct: ex.partial.sellPct };
   const armed = ex.trailAfterPartial ? !!pos.partialDone : (ex.trailAfterPct != null && peakPct >= ex.trailAfterPct);
   if (armed && ex.trailPct && (1 + pct / 100) <= (1 + peakPct / 100) * (1 - ex.trailPct / 100)) return { action: 'close', reason: 'trail' };
@@ -826,11 +828,22 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       if (!d) continue;
       if (d.action === 'partial') {
         const part = (BigInt(pos.tokensRaw) * BigInt(Math.round(d.sellPct * 10000))) / 1000000n;
-        const pq = part > 0n ? await quotes.sellQuote(pos.mint, String(part)) : null;
+        let pq = null, pl = null;
+        if (XL && part > 0n) {
+          // t100u: the half is sold through the same exit slippage ladder (2/3/10/25%, quote <= 2 s old).
+          pl = [];
+          for (const bps of XL.bps) {
+            const t0 = nowFn(); const qq = await quotes.sellQuote(pos.mint, String(part), bps); const t1 = nowFn();
+            const fresh = !!(qq && qq.ok && qq.at && t1 - qq.at <= XL.maxQuoteAgeMs && t1 >= qq.at - 1000);
+            pl.push({ slippageBps: bps, result: fresh ? 'ok' : qq && qq.ok ? 'stale' : qq && qq.noRoute ? 'no-route' : 'failed', ms: t1 - t0 });
+            if (fresh) { pq = Object.assign({}, qq, { ladderBps: bps }); break; }
+          }
+        } else if (part > 0n) pq = await quotes.sellQuote(pos.mint, String(part));
         const t3 = nowFn();
         if (!pq || !quoteFresh(pq, t3, maxAge)) continue; // retry next pass
-        bookLeg(state, pos, 'partial-tp', String(part), pq, t3);
-        pos.partialDone = true;
+        const pleg = bookLeg(state, pos, 'partial-tp', String(part), pq, t3);
+        if (pl && pleg) { pleg.exitLadder = pl; pleg.fillSlippageBps = pq.ladderBps; pleg.movePct = +dp.toFixed(3); }
+        pos.partialDone = true; pos.partialAt = new Date(t3).toISOString();
         if (log) log('PARTIAL', pos.symbol, pos.strategyVersion + ' sold ' + d.sellPct + '% at +' + pct.toFixed(1) + '%');
         continue;
       }

@@ -251,7 +251,10 @@ function step(state, book, opts) {
     const params = { entry: JSON.parse(JSON.stringify(book.entry)), exit: JSON.parse(JSON.stringify(book.exit)) };
     const d = decide(s, params, isV6(book) ? 'v6' : isV5(book) ? 'v5' : isV4(book));
     const entry = { at: nowIso, epoch: sb.epoch, tradeIndex: m.reviewedThrough + 10, fromVersion: book.version, stats: s, rule: d.rule, change: d.knob, from: d.from == null ? null : d.from, to: d.to == null ? null : d.to, why: d.why, toVersion: book.version };
-    if (d.knob) {
+    if (d.knob && opts && opts.frozen) {
+      // t100u (Liviu): no new variants: the review is logged, the change is not applied.
+      entry.applied = false; entry.why = d.why + ' [not applied: Manager changes frozen (t100u, filter-on only)]';
+    } else if (d.knob) {
       const prev = { version: book.version, until: nowIso, entry: JSON.parse(JSON.stringify(params.entry)), exit: JSON.parse(JSON.stringify(params.exit)), by: 'manager', rule: d.rule };
       setPath(params, d.knob, d.to);
       book.previousVersions = [prev].concat(book.previousVersions || []).slice(0, 40);
