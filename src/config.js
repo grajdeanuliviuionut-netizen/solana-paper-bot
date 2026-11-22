@@ -24,7 +24,7 @@ module.exports = {
   // t86u (Liviu 22 Nov 12:12): the Manager reviews every 10 closed runner-hunter trades, applies ONE bounded
   // change (src/improver.js BOUNDS/RULES) as a new version, logs what and why, and reports every 30 trades.
   // Paper only: it never touches size, wallets, keys or LIVE_TRADING.
-  manager: { enabled: true, reviewEvery: 10, reportEvery: 30 },
+  manager: { enabled: true, reviewEvery: 10, reportEvery: 30, applyChanges: false },   // t100u: reviews/reports only, no new variants
   // t89u (Liviu 22 Nov 13:18): Manager hard halt. Marked equity -5% from its high within any rolling 24 h
   // (equity.jsonl, all epochs) -> all new trading stops, persisted, never auto-cleared (src/halt.js).
   halt: { enabled: true, windowHours: 24, dropPct: 5 },
@@ -88,16 +88,24 @@ module.exports = {
         // Paper cost model: flat 2% adverse slippage on every fill (buy and sell) + priority fee; no extra fee or
         // stop penalty. Boss Rules risk: 2 losses -> 30 min pause, no entries 02:00-06:00 UTC, 5%/24 h equity halt.
         // Size 5% of marked equity.
-        // v6.01 (Liviu t98u, 22 Nov 16:00): trend confirmation: price >= 1% above the 50 MA AND the 50 MA rising =
-        // SMA50 of the last 50 one-minute closes > SMA50 of the 50 closes ending 5 candles earlier (needs 55 min of own
-        // history or 55 GeckoTerminal candles; otherwise no entry). Same board runner-v6. Max 2 open (unchanged).
-        id: 'runner-hunter', name: 'Trend Following', version: 6.01,
+        // v6.02 "filter-on" (Liviu t100u, 22 Nov 20:49): the MA filter-on runner is the only variant (Manager changes
+        // frozen: books.manager.applyChanges false). Entry unchanged from v6.01 (liq > $50k, price >= 1% above a rising
+        // SMA50 of 1-min closes, rug gates, Boss Rules, 2 open, 5% sizing). Exits on the price move since entry: -4% stop;
+        // at +8% sell half (1:2 risk/reward), the other half runs with a 4% trailing stop from its peak and a floor at the
+        // entry price (exit 'breakeven'); 240 min safety cap. Fresh Jupiter quotes every ~5 s via the exit slippage ladder.
+        // v6.01 kept below (it had: price >= 1% above a rising MA50, full exit at +8%).
+        id: 'runner-hunter', name: 'Trend Following', version: 6.02,
         entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 1, requireMaRising: true, risingLookbackCandles: 5, maCacheSec: 120 },
           maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
           stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
-        exit: { stopLossPct: 4, takeProfitPct: 8, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
+        exit: { stopLossPct: 4, partial: { atPct: 8, sellPct: 50 }, trailAfterPartial: true, trailPct: 4, breakevenAfterPartial: true, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
           costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } },
         previousVersions: [
+          { version: 6.01, until: '2026-11-22T20:49', name: 'Trend Following', entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 1, requireMaRising: true, risingLookbackCandles: 5, maCacheSec: 120 },
+          maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
+          stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
+            exit: { stopLossPct: 4, takeProfitPct: 8, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
+          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } } },
           { version: 6, until: '2026-11-22T16:00', name: 'Trend Following', entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 0, maCacheSec: 120 },
           maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
           stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
