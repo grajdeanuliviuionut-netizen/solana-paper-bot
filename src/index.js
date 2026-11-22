@@ -381,7 +381,10 @@ async function tick() {
       // PR13: GeckoTerminal new_pools feed (1 call / 150 s, no retries, 10-min pause after a 429) ->
       // DexScreener rows for graduated pump.fun pools < 15 min old -> graduation sniper candidates only.
       let gradRows = [];
-      try { await newPools.maybeFetch(); gradRows = await newPools.candidateRows(pairs); } catch (e) { addActivity('New-pools feed error: ' + e.message); }
+      // t83u: the new_pools feed (+ its DexScreener enrichment) only serves the graduation sniper -> off while it is paused.
+      if (newPoolsEnabled()) {
+        try { await newPools.maybeFetch(); gradRows = await newPools.candidateRows(pairs); } catch (e) { addActivity('New-pools feed error: ' + e.message); }
+      }
       await books.runEntries(state, pairs, async function (sig, row) {
         await poolPrice.prefetchMain([sig.mint]);
         return poolGate(sig, row.priceUsd, pairs.concat(gradRows));
@@ -471,7 +474,7 @@ app.get('/api/positions', function (req, res) {
 });
 app.get('/api/dashboard', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  try { const p = dashApi().payload(); try { p.bots = botsView(); } catch (e) { p.bots = { error: String(e.message || e) }; } res.json(p); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
+  try { const p = dashApi().payload(); try { p.pause = pauseView(); } catch (e) { p.pause = null; } try { p.bots = botsView(); } catch (e) { p.bots = { error: String(e.message || e) }; } res.json(p); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
 });
 // Equity curve: snapshots from equity.jsonl on the volume (1/min) plus the current live point.
 // ?hours=N (default 24, max 720) or ?since=scoreboard; ?max=N points (default 600).
@@ -493,7 +496,7 @@ function recordEquity() {
 
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
+  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, pause: pauseView(), rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
 });
 
 app.get('/api/health', function (req, res) {
@@ -583,6 +586,17 @@ function sampleBotCounters() {
     botTracker.counter('scanner', 'newPools.calls', newPools.stats.calls);
   } catch (e) { console.error('bot counters', e.message); }
 }
+// t83u pause state (config paused flags; legacy also via manager pausedIds). Paused = no new entries only.
+function newPoolsEnabled() { return (config.books.list || []).some(function (b) { return b.id === 'graduation-sniper' && !b.paused; }); }
+function pauseView() {
+  const bk = books.ensure(state);
+  const legacyOpen = state.openPositions || [];
+  const rows = (config.books.list || []).map(function (b) { return { id: b.id, kind: 'book', name: b.name + ' v' + b.version, paused: !!b.paused, open: (bk.open || []).filter(function (p) { return p.book === b.id; }).length }; })
+    .concat((config.strategies || []).map(function (s) { return { id: s.id, kind: 'legacy', name: s.name, paused: !!s.paused || (state.pausedIds || []).indexOf(s.id) >= 0, open: legacyOpen.filter(function (p) { return p.strategyId === s.id; }).length }; }));
+  return { activeStrategies: rows.filter(function (r) { return !r.paused; }).map(function (r) { return r.id; }), pausedStrategies: rows.filter(function (r) { return r.paused; }).map(function (r) { return r.id; }),
+    strategies: rows, newPoolsFeed: newPoolsEnabled() ? 'on' : 'off (graduation sniper paused)', slotReserve: config.slotReserve || {},
+    note: 'paused = no new entries; open positions are still marked and exited by the exit loop (Liviu t83u)' };
+}
 function botsView() {
   const now = Date.now();
   const bk = books.ensure(state);
@@ -598,7 +612,7 @@ function botsView() {
       scoreGroup((state.trades || []).filter(function (t) { return t.strategyId === s.id; })));
   });
   const ls = booksLimiter.stats();
-  return botsMod.buildBots({ tracker: botTracker, now, startedAt: SERVER_STARTED_AT, build: BUILD, pollIntervalMs: config.pollIntervalMs, exitLoop: exitLoopView(), fetchStats: fetchStats(),
+  return botsMod.buildBots({ pause: pauseView(), newPoolsEnabled: newPoolsEnabled(), tracker: botTracker, now, startedAt: SERVER_STARTED_AT, build: BUILD, pollIntervalMs: config.pollIntervalMs, exitLoop: exitLoopView(), fetchStats: fetchStats(),
     mintAuthStats: mintAuth.stats, holderStats: holderCheck.stats, legacyRug, stockBlocks: bk.stockBlocks, jupiterLimiter: ls.jupiter, rugcheckLimiter: ls.rugcheck, newPools: newPools.stats,
     entriesLastHour, tradesWritten, tradesTotal: closed.length, lastTradeAt, openCount: allOpen.length, books: books.report(state), legacy, legacyOpenTotal: legacyOpen.length, maxOpen: config.maxOpen,
     lastScan: bk.lastScan || null, lastLegacyScan: state.lastLegacyScan || null });
@@ -643,4 +657,4 @@ if (require.main === module) app.listen(config.port, function () {
   setInterval(recordEquity, 60000);
 });
 
-module.exports = { app, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };
+module.exports = { app, pauseView, newPoolsEnabled, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };

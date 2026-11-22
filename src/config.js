@@ -8,7 +8,7 @@ module.exports = {
   pollIntervalMs: parseInt(process.env.POLL_INTERVAL_MS || '45000', 10),
   positionSizeSol: 0.15,
   maxOpen: 4,                   // PR7: 3 -> 4 with the four books unpaused; 1 slot reserved for dip-hold
-  slotReserve: { 'dip-hold': 1 },
+  slotReserve: {},              // t83u: dip-hold paused -> no reserved legacy slot (was { 'dip-hold': 1 })
   maxPoolDivergencePct: 5,      // skip a buy when the chosen pool is >5% off the token's main pool
   dailyLossLimitSol: 0.2,
   fullStopBalance: 2.5,
@@ -41,7 +41,9 @@ module.exports = {
         // closed: LP >= 90% locked/burned + holder concentration (RugCheck report), pool age >= 3 min,
         // Jupiter round trip <= 8% loss and sell impact <= 5%; exits confirm a >= 50% one-check drop (or
         // > 50% impact) with a second quote 4 s later before booking. Core rules unchanged.
-        id: 'graduation-sniper', name: 'Graduation sniper', version: 2,
+        // t83u (Liviu 22 Nov 06:46, explicit override of never-pause): only runner-hunter enters. paused = no new
+        // entries; open positions are still marked and exited by the exit loop.
+        id: 'graduation-sniper', name: 'Graduation sniper', version: 2, paused: true,
         entry: { pumpOrigin: true, minPoolAgeMin: 3, maxPoolAgeMin: 15, m5BuysGtSells: true, minLiquidityUsd: 30000,
           lpLockedMinPct: 90, maxTop10Pct: 30, maxSingleHolderPct: 10, maxCreatorPct: 5, maxRoundTripLossPct: 8, maxSellImpactPct: 5 },
         exit: { stopLossPct: 10, takeProfitPct: 40, trailAfterPct: 15, trailPct: 10, maxHoldMinutes: 60,
@@ -53,12 +55,12 @@ module.exports = {
         exit: { stopLossPct: 12, partial: { atPct: 10, sellPct: 20 }, trailAfterPartial: true, trailPct: 15, maxHoldMinutes: 240 }
       },
       {
-        id: 'volume-explosion', name: 'Volume explosion', version: 1,
+        id: 'volume-explosion', name: 'Volume explosion', version: 1, paused: true,   // t83u
         entry: { minM5VolumeVsHourAvg: 10, minVolumeM5Usd: 3000, minM5: 0, maxM5: 30, minPoolAgeMin: 60, minLiquidityUsd: 10000 },
         exit: { stopLossPct: 8, trailAfterPct: 10, trailPct: 6, maxHoldMinutes: 60 }
       },
       {
-        id: 'trending-pullback', name: 'Trending pullback', version: 1,
+        id: 'trending-pullback', name: 'Trending pullback', version: 1, paused: true,   // t83u
         entry: { minH24: 100, minDropFromHighPct: 20, maxDropFromHighPct: 30, volumeRising: true, minLiquidityUsd: 20000 },
         exit: { stopLossPct: 10, takeProfitPct: 25, trailAfterPct: 15, trailPct: 5, maxHoldMinutes: 180 }
       }
@@ -81,7 +83,7 @@ module.exports = {
     {
       id: 'momentum-entry',
       name: 'Momentum entry',
-      paused: false,
+      paused: true,             // t83u (Liviu 22 Nov 06:46): only runner-hunter enters; open trades still exit
       sizeMult: 0.5,            // PR7 (Liviu 17:10): unpaused at half size
       universe: { minAgeDays: 0, maxAgeDays: 30, minLiquidityUsd: 15000 },
       entry: [
@@ -95,7 +97,7 @@ module.exports = {
     {
       id: 'dip-buyers',
       name: 'Dip then buyers',
-      paused: false,
+      paused: true,             // t83u: only runner-hunter enters
       sizeMult: 0.5,            // PR7 (Liviu 17:10): unpaused at half size
       universe: { minAgeDays: 1, maxAgeDays: 45, minLiquidityUsd: 20000, maxLiquidityUsd: 400000 },
       entry: [
@@ -110,7 +112,7 @@ module.exports = {
     {
       id: 'buyer-turn',
       name: 'Buyers in control',
-      paused: false,
+      paused: true,             // t83u: only runner-hunter enters; open trades still exit
       sizeMult: 0.5,            // PR7 (Liviu 17:10): unpaused at half size
       universe: { minAgeDays: 0.05, maxAgeDays: 60, minLiquidityUsd: 20000, maxLiquidityUsd: 800000 },
       entry: [
@@ -125,6 +127,7 @@ module.exports = {
     {
       id: 'dip-hold',
       name: 'Dip and hold',
+      paused: true,             // t83u: only runner-hunter enters; open trades still exit
       universe: { minAgeDays: 0.5, maxAgeDays: 60, minLiquidityUsd: 20000, maxLiquidityUsd: 500000 },
       entry: [
         { field: 'h1', op: '<=', value: -3 },
