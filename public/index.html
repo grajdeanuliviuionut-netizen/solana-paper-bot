@@ -24,14 +24,16 @@ header{display:flex;align-items:center;justify-content:space-between;gap:24px;pa
 .health .d{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--up);margin-right:6px;vertical-align:1px}.health .d.bad{background:var(--dn)}
 /* t104u (Liviu): ultrawide layout - everything below the header sits in a centred container, max-width 1600px,
    margin 0 auto, padding 20px. Columns have bounded widths so nothing stretches: >=1500px three columns
-   (agents/rules 340-420px | hero + open positions | recent fills 360-440px); 1000-1499px two columns (fills span
+   (agents/rules 300-360px | hero + open positions | recent fills 320-380px); 1000-1499px two columns (fills span
    below); narrower one column. Stat boxes are grids of bounded tiles; tables 100% wide, left-aligned, padded. */
 .wrap{max-width:1600px;margin:0 auto;padding:20px;display:grid;grid-template-columns:minmax(0,1fr);gap:20px;align-items:start}
 @media (min-width:1000px){.wrap{grid-template-columns:minmax(320px,420px) minmax(0,1fr)}.wrap>.col:last-child{grid-column:1/-1}}
-@media (min-width:1500px){.wrap{grid-template-columns:minmax(340px,420px) minmax(0,1fr) minmax(360px,440px)}.wrap>.col:last-child{grid-column:auto}}
+@media (min-width:1500px){.wrap{grid-template-columns:minmax(300px,360px) minmax(0,1fr) minmax(320px,380px)}.wrap>.col:last-child{grid-column:auto}}
 header{flex-wrap:wrap;padding-left:max(20px,calc((100% - 1600px) / 2 + 20px));padding-right:max(20px,calc((100% - 1600px) / 2 + 20px))}
-header .kpis{display:grid;grid-template-columns:repeat(5,minmax(110px,170px));gap:10px}
-header .kpis .kpi{min-width:0}
+header .kpis{display:grid;grid-template-columns:repeat(5,minmax(120px,200px));gap:10px}
+header .kpis .kpi{min-width:0}header .kpis .kpi small{white-space:normal}
+.hero .hs b{font-size:22px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#openCard{overflow-x:auto}.pt td,.pt th{padding-left:8px;padding-right:8px}
 @media (max-width:900px){header .kpis{grid-template-columns:repeat(auto-fit,minmax(110px,1fr));width:100%}}
 @media (max-width:720px){.wrap{padding:12px;gap:14px}.card{padding:14px}.pt,.ft{display:block;overflow-x:auto}}
 .col{display:flex;flex-direction:column;gap:20px;min-width:0}
