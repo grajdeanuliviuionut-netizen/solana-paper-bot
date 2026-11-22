@@ -52,6 +52,34 @@ const RULES_V4 = [
   'R8 still losing: net < 0 -> entry.minVolumeToLiquidityH24 +0.05 (max 0.5)',
   'R9 healthy (net >= 0 and win rate >= 40%) -> no change'
 ];
+// t90u v5 (Liviu 22 Nov 13:56): hard rules the Manager may only TIGHTEN: volume spike >= 3x (min = hard),
+// top-10 <= 15%, slippage <= 150 bps, stop <= 6%, time limit <= 25 min. Not in the whitelist at all: the TP tiers
+// (+2..+4%), the breakout window, night hours, feed protection, sizing (5% of equity), rug check, 2-loss pause, halt.
+const BOUNDS_V5 = {
+  'entry.minLiquidityUsd': { min: 100000, max: 300000, step: 25000 },
+  'entry.maxH1': { min: 10, max: 25, step: 5 },
+  'entry.minM5': { min: 0, max: 3, step: 0.5 },
+  'entry.minVolumeToLiquidityH24': { min: 0.1, max: 0.5, step: 0.05 },
+  'entry.breakout.minVolSpike': { min: 3, max: 6, step: 0.5, hard: 'tighten-only (min 3)' },
+  'entry.maxTop10Pct': { min: 5, max: 15, step: 2.5, hard: 'tighten-only' },
+  'entry.maxSlippageBps': { min: 50, max: 150, step: 25, hard: 'tighten-only' },
+  'exit.stopLossPct': { min: 4, max: 6, step: 1, hard: 'tighten-only' },
+  'exit.maxHoldMinutes': { min: 15, max: 25, step: 5, hard: 'tighten-only' }
+};
+// value must stay <= max (or >= min) of these hard limits.
+const HARD_V5 = { 'entry.maxTop10Pct': { max: 15 }, 'entry.maxSlippageBps': { max: 150 }, 'exit.stopLossPct': { max: 6 }, 'exit.maxHoldMinutes': { max: 25 }, 'entry.breakout.minVolSpike': { min: 3 } };
+const RULES_V5 = [
+  'R1 stops overshoot: >= 2 stops and avg stop overshoot <= -2 pts -> entry.minLiquidityUsd +25k (max 300k)',
+  'R2 fast stops: win rate < 40% and >= 3 stops -> stronger spike: entry.breakout.minVolSpike +0.5 (max 6)',
+  'R3 fast stops, spike at max -> cut losers sooner: exit.stopLossPct -1 (min 4; tighten only)',
+  'R4 TP not reached: >= 4 time exits -> stronger 5-min move: entry.minM5 +0.5 (max 3)',
+  'R6 buying tops: win rate < 40% and losers h1 >= 5 pts above winners -> entry.maxH1 -5 (min 10)',
+  'R7 concentrated losers: losers top10 >= 5 pts above winners -> entry.maxTop10Pct -2.5 (min 5)',
+  'R10 costly fills: avg entry slippage >= 1% -> entry.maxSlippageBps -25 (min 50)',
+  'R8 still losing: net < 0 -> entry.minVolumeToLiquidityH24 +0.05 (max 0.5)',
+  'R9 healthy (net >= 0 and win rate >= 40%) -> no change'
+];
+const isV5 = book => !!(book && book.exit && book.exit.takeProfit);
 const isV4 = book => !!(book && ((book.entry && book.entry.rugCheck) || (book.exit && book.exit.breakevenAtPct != null)));
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const r = (v, d) => (v == null || !Number.isFinite(v) ? null : +v.toFixed(d == null ? 6 : d));
@@ -85,12 +113,32 @@ function stats(trades) {
 
 // Pure: picks one change. params = { entry, exit }. Returns { rule, knob, from, to, why } or { rule: 'R9'|'none', knob: null, why }.
 function decide(s, params, v4) {
-  const BB = v4 ? BOUNDS_V4 : BOUNDS;
+  const v5 = v4 === 'v5';
+  const BB = v5 ? BOUNDS_V5 : v4 ? BOUNDS_V4 : BOUNDS;
   const at = k => getPath(params, k);
   const can = (k, dir) => { const b = BB[k], v = at(k); if (!b) return false; return v != null && (dir > 0 ? v + 1e-9 < b.max : v - 1e-9 > b.min); };
   const move = (k, dir) => { const b = BB[k]; const v = at(k); return +Math.min(b.max, Math.max(b.min, v + dir * b.step)).toFixed(4); };
   const pick = (rule, k, dir, why) => (can(k, dir) ? { rule, knob: k, from: at(k), to: move(k, dir), why } : null);
   const lowWin = s.winRatePct != null && s.winRatePct < 40;
+  if (v5) {
+    const c5 = [
+      () => s.stops >= 2 && s.avgStopOvershootPct != null && s.avgStopOvershootPct <= -2 && pick('R1', 'entry.minLiquidityUsd', +1, s.stops + ' stops filled ' + s.avgStopOvershootPct + ' pts past the level on average: thicker pools fill closer to the stop'),
+      () => lowWin && s.stops >= 3 && pick('R2', 'entry.breakout.minVolSpike', +1, 'win rate ' + s.winRatePct + '% with ' + s.stops + ' stops: require a bigger volume spike'),
+      () => lowWin && s.stops >= 3 && !can('entry.breakout.minVolSpike', +1) && pick('R3', 'exit.stopLossPct', -1, s.stops + ' stops and the spike filter at its cap: cut losers one point sooner'),
+      () => s.timeExits >= 4 && pick('R4', 'entry.minM5', +1, s.timeExits + ' trades missed the TP within the time limit: require a stronger 5-min move'),
+      () => lowWin && s.losersAvgH1 != null && s.winnersAvgH1 != null && s.losersAvgH1 - s.winnersAvgH1 >= 5 && pick('R6', 'entry.maxH1', -1, 'losers entered on h1 ' + s.losersAvgH1 + '% vs winners ' + s.winnersAvgH1 + '%'),
+      () => s.losersAvgTop10 != null && s.winnersAvgTop10 != null && s.losersAvgTop10 - s.winnersAvgTop10 >= 5 && pick('R7', 'entry.maxTop10Pct', -1, 'losers had top-10 ' + s.losersAvgTop10 + '% vs winners ' + s.winnersAvgTop10 + '%'),
+      () => s.avgEntrySlippagePct != null && s.avgEntrySlippagePct >= 1 && pick('R10', 'entry.maxSlippageBps', -1, 'average entry slippage ' + s.avgEntrySlippagePct + '%'),
+      () => s.netSol < 0 && pick('R8', 'entry.minVolumeToLiquidityH24', +1, 'net ' + s.netSol + ' SOL over the last ' + s.trades + ' trades: only busier coins')
+    ];
+    if (s.netSol >= 0 && !lowWin) return { rule: 'R9', knob: null, why: 'healthy: net ' + s.netSol + ' SOL, win rate ' + s.winRatePct + '%: no change' };
+    for (const c of c5) {
+      const d = c();
+      const hl = d && HARD_V5[d.knob];
+      if (d && !(hl && ((hl.max != null && d.to > hl.max) || (hl.min != null && d.to < hl.min)))) return d;   // never loosen a hard rule
+    }
+    return { rule: 'none', knob: null, why: 'no rule fired with a knob inside its bounds: no change' };
+  }
   if (v4) {
     const c4 = [
       () => s.stops >= 2 && s.avgStopOvershootPct != null && s.avgStopOvershootPct <= -2 && pick('R1', 'entry.minLiquidityUsd', +1, s.stops + ' stops filled ' + s.avgStopOvershootPct + ' pts past the level on average: thicker pools fill closer to the stop'),
@@ -157,7 +205,7 @@ function step(state, book, opts) {
     const s = stats(blk);
     if (opts && opts.rejects) s.rejectsByFilter = opts.rejects;
     const params = { entry: JSON.parse(JSON.stringify(book.entry)), exit: JSON.parse(JSON.stringify(book.exit)) };
-    const d = decide(s, params, isV4(book));
+    const d = decide(s, params, isV5(book) ? 'v5' : isV4(book));
     const entry = { at: nowIso, epoch: sb.epoch, tradeIndex: m.reviewedThrough + 10, fromVersion: book.version, stats: s, rule: d.rule, change: d.knob, from: d.from == null ? null : d.from, to: d.to == null ? null : d.to, why: d.why, toVersion: book.version };
     if (d.knob) {
       const prev = { version: book.version, until: nowIso, entry: JSON.parse(JSON.stringify(params.entry)), exit: JSON.parse(JSON.stringify(params.exit)), by: 'manager', rule: d.rule };
@@ -185,4 +233,4 @@ function restore(state, book, baseVersion) {
   return true;
 }
 
-module.exports = { step, decide, stats, restore, isV4, BOUNDS, RULES, BOUNDS_V4, RULES_V4, HARD_V4 };
+module.exports = { step, decide, stats, restore, isV4, isV5, BOUNDS_V5, RULES_V5, HARD_V5, BOUNDS, RULES, BOUNDS_V4, RULES_V4, HARD_V4 };

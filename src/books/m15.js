@@ -9,15 +9,38 @@
 // No data from either -> null (the entry rejects: fail closed).
 const MIN = 60000;
 const GT = 'https://api.geckoterminal.com/api/v2/networks/solana/pools/';
+const KEEP_MIN = 60;   // t90u: 60 min of own ticks (m15 + the breakout's prior high)
 
 function recordTick(ticks, row, t) {
   if (!row || !row.pairAddress || !(row.priceUsd > 0) || row.stale) return;
   const s = ticks[row.pairAddress] || (ticks[row.pairAddress] = []);
   if (!s.length || t - s[s.length - 1][0] >= 40000) s.push([t, Number(row.priceUsd)]);
-  while (s.length && t - s[0][0] > 20 * MIN) s.shift();
+  while (s.length && t - s[0][0] > KEEP_MIN * MIN) s.shift();
 }
 function pruneTicks(ticks, t) {
   for (const k of Object.keys(ticks)) if (!ticks[k].length || t - ticks[k][ticks[k].length - 1][0] > 20 * MIN) delete ticks[k];
+}
+// t90u v5 breakout ("resistance break"): the prior high = the highest price in [now - lookbackMin, now - excludeMin]
+// (the last excludeMin minutes are the breakout itself). Own history needs a point at least minCoverMin old.
+// Returns { priorHigh, fromMin, toMin, points, source } or null.
+function priorHighFromTicks(series, t, o) {
+  if (!Array.isArray(series) || !series.length) return null;
+  const oldest = (t - series[0][0]) / MIN;
+  if (oldest < o.minCoverMin) return null;
+  let hi = null, n = 0;
+  for (const [ts, p] of series) { const age = (t - ts) / MIN; if (age > o.lookbackMin || age < o.excludeMin || !(p > 0)) continue; n++; if (hi == null || p > hi) hi = p; }
+  return hi == null || n < 3 ? null : { priorHigh: hi, fromMin: +Math.min(oldest, o.lookbackMin).toFixed(1), toMin: o.excludeMin, points: n, source: 'own-history' };
+}
+// GeckoTerminal 1m candles (newest first or any order): max HIGH of candles in the same window.
+function priorHighFromOhlcv(list, t, o) {
+  if (!Array.isArray(list) || !list.length) return null;
+  const nowSec = t / 1000;
+  const rows = list.filter(r => Array.isArray(r) && r.length >= 5 && Number(r[2]) > 0).sort((a, b) => b[0] - a[0]);
+  if (!rows.length || nowSec - rows[0][0] > 180) return null;
+  const inWin = rows.filter(r => { const age = (nowSec - r[0]) / 60; return age <= o.lookbackMin && age >= o.excludeMin; });
+  const oldest = (nowSec - rows[rows.length - 1][0]) / 60;
+  if (inWin.length < 10 || oldest < o.minCoverMin) return null;
+  return { priorHigh: Math.max(...inWin.map(r => Number(r[2]))), fromMin: +Math.min(oldest, o.lookbackMin).toFixed(1), toMin: o.excludeMin, points: inWin.length, source: 'geckoterminal-ohlcv-1m' };
 }
 // Own-history m15 (pure). Returns { pct, fromAgeMin } or null.
 function m15FromTicks(series, priceNow, t) {
@@ -43,7 +66,7 @@ function m15FromOhlcv(list, t) {
   return { pct: (Number(rows[0][4]) / Number(best[4]) - 1) * 100, fromAgeMin: +((rows[0][0] - best[0]) / 60).toFixed(2), source: 'geckoterminal-ohlcv-1m' };
 }
 function makeM15(limiter) {
-  const cache = new Map();
+  const cache = new Map(), lists = new Map();
   const stats = { ownHistory: 0, gtCalls: 0, gtOk: 0, gtNoData: 0, gtErrors: 0, cacheHits: 0, method: 'own 45 s price history (12.5-17.5 min point) else GeckoTerminal 1m OHLCV; none -> reject' };
   async function gt(pairAddress, t = Date.now()) {
     const c = cache.get(pairAddress);
@@ -51,8 +74,10 @@ function makeM15(limiter) {
     let r = null;
     try {
       stats.gtCalls++;
-      const res = await limiter.get('gecko', GT + pairAddress + '/ohlcv/minute?aggregate=1&limit=20&currency=usd', { headers: { accept: 'application/json' } });
+      const res = await limiter.get('gecko', GT + pairAddress + '/ohlcv/minute?aggregate=1&limit=60&currency=usd', { headers: { accept: 'application/json' } });
       const list = res && res.data && res.data.data && res.data.data.attributes && res.data.data.attributes.ohlcv_list;
+      lists.set(pairAddress, { at: t, list: Array.isArray(list) ? list : null });
+      if (lists.size > 500) lists.delete(lists.keys().next().value);
       r = m15FromOhlcv(list, t);
       if (r) stats.gtOk++; else stats.gtNoData++;
     } catch (e) { stats.gtErrors++; stats.lastError = String(e.message || e).slice(0, 80); r = null; }
@@ -60,7 +85,13 @@ function makeM15(limiter) {
     if (cache.size > 2000) cache.delete(cache.keys().next().value);
     return r;
   }
-  return { gt, stats };
+  // t90u: prior high from the same cached GT candles (one call serves m15 and the breakout).
+  async function priorHighGt(pairAddress, t, o) {
+    let l = lists.get(pairAddress);
+    if (!l || t - l.at >= 60000) { await gt(pairAddress, t); l = lists.get(pairAddress); }
+    return l && l.list ? priorHighFromOhlcv(l.list, t, o) : null;
+  }
+  return { gt, priorHighGt, stats };
 }
 
-module.exports = { recordTick, pruneTicks, m15FromTicks, m15FromOhlcv, makeM15 };
+module.exports = { recordTick, pruneTicks, m15FromTicks, m15FromOhlcv, priorHighFromTicks, priorHighFromOhlcv, makeM15, KEEP_MIN };
