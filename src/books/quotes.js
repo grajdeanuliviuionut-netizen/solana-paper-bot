@@ -44,7 +44,7 @@ function makeQuotes(limiter) {
   }
 
   async function buyQuote(mint, solIn) { return quote(SOL_MINT, mint, toRaw(solIn, 9)); }
-  async function sellQuote(mint, tokensRaw) { return quote(mint, SOL_MINT, String(tokensRaw)); }
+  async function sellQuote(mint, tokensRaw, slippageBps) { return quote(mint, SOL_MINT, String(tokensRaw), slippageBps || 300); }   // t96u: exit ladder passes 200/300/1000/2500
 
   async function getSolUsd() {
     if (solUsd.v && Date.now() - solUsd.at < 60000) return solUsd;

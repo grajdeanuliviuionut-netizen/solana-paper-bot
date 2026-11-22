@@ -234,6 +234,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     if (!b.entryFilters) b.entryFilters = {};
     if (!b.feed) b.feed = { staleEvents: 0, openStale: 0, recent: [] };
     if (!b.night) b.night = { skips: 0, lastAt: null, lastLoggedWindow: null };
+    if (!b.exitLadder) b.exitLadder = { passes: 0, escalations: 0, noFreshQuote: 0, exits: 0, byFillBps: {}, recentExits: [], recentEscalations: [] };
     if (!b.executor) b.executor = { slippageAborts: 0, exitSlippageExceeded: 0, recentAborts: [], recentExceeded: [] };
     const gb = C.list.find(x => x.id === 'graduation-sniper');
     if (gb && (!b.gradSniper || b.gradSniper.version !== gb.version)) {
@@ -389,7 +390,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       for (const row of (pairs || []).concat(extraOnly)) {
         if (!row || !row.mint) continue;
         const why = entryFails(book, row, ctx);
-        if (v3) { const f = filterStats(state, book); f.evaluated++; if (why) countFilter(state, book, why); else { f.passedRules++; f.lastScan.passedRules++; } }
+        if (v3) { const f = filterStats(state, book); f.evaluated++; if (why) countFilter(state, book, why); else { f.passedRules++; f.lastScan.passedRules++; const pm = f.passMints || (f.passMints = {}); if (!pm[row.mint]) pm[row.mint] = { first: t, symbol: row.symbol }; } }
         if (book.id === 'graduation-sniper' && b.gradSniper && (!why || /^pool younger/.test(why))) {
           const g = b.gradSniper;
           if (!g.candidateMints.includes(row.mint)) { g.candidateMints.push(row.mint); if (g.candidateMints.length > 300) g.candidateMints.shift(); g.candidates++; }
@@ -425,7 +426,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         const t = nowFn();
         curV2 = book.id === 'graduation-sniper' ? { poolAgeMin: +num(poolAgeMin(row, t)).toFixed(2), liquidityUsd: row.liquidityUsd, txnsM5: row.txnsM5 || null } : null;
         const openHere = b.open.filter(p => p.book === book.id);
-        if (openHere.length >= C.maxOpenPerBook) continue;                  // capacity: not a reject
+        if (openHere.length >= C.maxOpenPerBook) { if (v3plus(book.entry)) filterStats(state, book).capacitySkips = (filterStats(state, book).capacitySkips || 0) + 1; continue; }   // capacity: not a reject
         const lp = book.entry && book.entry.lossStreakPause ? lossPaused(state, book.id, t) : null;
         if (lp) { countFilter(state, book, 'lossStreakPause'); continue; }   // t86u guardrail: paused after N losses in a row
         const RC = book.entry && book.entry.rugCheck;
@@ -516,7 +517,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           if (RC && tt.freezeAuthority && tt.freezeAuthority !== 'unknown') { rugFail(state, book, row, 'freeze-authority-not-revoked (RugCheck)'); continue; }
           if (RC && tt.rugged) { rugFail(state, book, row, 'RugCheck marks token rugged'); continue; }
           if (RC && tt.top10Pct > RC.maxTop10Pct) { rugFail(state, book, row, 'top10 > ' + RC.maxTop10Pct + '%', +tt.top10Pct.toFixed(2)); continue; }
-          if (RC) rugState(state).passed++;
+          if (RC) { rugState(state).passed++; const fs = filterStats(state, book); const rp = fs.rugPassMints || (fs.rugPassMints = {}); if (!rp[row.mint]) rp[row.mint] = { at: t, symbol: row.symbol, top10Pct: tt.top10Pct }; }
           if (tt.top10Pct > E.maxTop10Pct) { countFilter(state, book, 'top10'); reject(state, book, row, 'top10: ' + tt.top10Pct.toFixed(1) + '% > ' + E.maxTop10Pct + '%'); continue; }
         }
         let holder = null;
@@ -663,7 +664,10 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const ec = pos.entryCosts || {};
       const entryPart = frac * (num(ec.feeSol) + num(ec.priorityFeeSol));
       if (q) {
-        const sim = execMod.simSell({ quoteOutLamports: q.outAmount, cm: pos.exit.costModel, isStopLoss: isStopExit(reason), fee: feeNow(t, pos.pairAddress), random });
+        // t96u: an escalated exit-ladder fill is simulated at the slippage used (3/10/25%) when that exceeds the flat 2%.
+        let cmx = pos.exit.costModel;
+        if (q.ladderBps != null && q.ladderBps / 100 > num(cmx.simSlipMaxPct)) cmx = Object.assign({}, cmx, { simSlipMinPct: q.ladderBps / 100, simSlipMaxPct: q.ladderBps / 100 });
+        const sim = execMod.simSell({ quoteOutLamports: q.outAmount, cm: cmx, isStopLoss: isStopExit(reason), fee: feeNow(t, pos.pairAddress), random });
         solOut = sim.solOut; costs = sim.costs;
         cost = entryPart + sim.costs.feeSol + sim.costs.priorityFeeSol;
         // Exits are never aborted: over the slippage limit the leg is still sold and flagged.
@@ -698,7 +702,26 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     let changed = false;
     for (const pos of b.open.slice()) {
       const ex = pos.exit;
-      let q = await quotes.sellQuote(pos.mint, pos.tokensRemainingRaw);
+      let q, ladder = null;
+      const XL = (ex && ex.exitLadder) || C.exitLadder;   // t96u: ladder for ALL exits (global books.exitLadder)
+      if (XL) {
+        // t96u exit slippage ladder: first sell quote at bps[0]; failed or older than maxQuoteAgeMs (2 s) -> retry at
+        // 3%, 10%, 25% in the same pass. The first fresh quote is both the trigger price and the paper fill (simulated
+        // at that quote minus the slippage used). No fresh quote at all -> nothing is decided this pass.
+        const L = XL; ladder = [];
+        for (const bps of L.bps) {
+          const t0 = nowFn();
+          const qq = await quotes.sellQuote(pos.mint, pos.tokensRemainingRaw, bps);
+          const t1 = nowFn();
+          const fresh = !!(qq && qq.ok && qq.at && t1 - qq.at <= L.maxQuoteAgeMs && t1 >= qq.at - 1000);
+          ladder.push({ slippageBps: bps, result: fresh ? 'ok' : qq && qq.ok ? 'stale' : qq && qq.noRoute ? 'no-route' : 'failed', ms: t1 - t0, error: qq && !qq.ok && qq.error ? String(qq.error).slice(0, 60) : undefined });
+          q = qq;
+          if (fresh) { q = Object.assign({}, qq, { ladderBps: bps }); break; }
+        }
+        const lb = ensure(state).exitLadder;
+        lb.passes++; if (ladder.length > 1) { lb.escalations++; lb.recentEscalations = [{ at: new Date(nowFn()).toISOString(), symbol: pos.symbol, attempts: ladder }].concat(lb.recentEscalations).slice(0, 20); }
+        if (!(q && q.ladderBps != null)) { lb.noFreshQuote++; pos.lastLadderFail = { at: new Date(nowFn()).toISOString(), attempts: ladder }; if (q && q.ok) q = Object.assign({}, q, { at: 0 }); }
+      } else q = await quotes.sellQuote(pos.mint, pos.tokensRemainingRaw);
       let t = nowFn();
       const minsOpen = (t - Date.parse(pos.entryTime)) / MIN;
       pos.quoteChecks = (pos.quoteChecks || 0) + 1;
@@ -800,7 +823,13 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (log) log('PARTIAL', pos.symbol, pos.strategyVersion + ' sold ' + d.sellPct + '% at +' + pct.toFixed(1) + '%');
         continue;
       }
-      bookLeg(state, pos, d.reason, pos.tokensRemainingRaw, q, t);
+      const lgx = bookLeg(state, pos, d.reason, pos.tokensRemainingRaw, q, t);
+      if (ladder && lgx) {
+        lgx.exitLadder = ladder; lgx.fillSlippageBps = q.ladderBps;
+        const lb = ensure(state).exitLadder; lb.exits++; lb.byFillBps[q.ladderBps] = (lb.byFillBps[q.ladderBps] || 0) + 1;
+        lb.recentExits = [{ at: new Date(t).toISOString(), symbol: pos.symbol, reason: d.reason, fillBps: q.ladderBps, attempts: ladder }].concat(lb.recentExits).slice(0, 20);
+        if (log) log('LADDER', pos.symbol, d.reason + ' filled at ' + q.ladderBps + ' bps after ' + ladder.length + ' attempt(s)');
+      }
       if (isStopExit(d.reason)) {
         const netPct = (pos.legs.reduce((a, l) => a + l.pnlSol, 0) / pos.sizeSol) * 100;
         pos.stopFill = stopFills.record(state, stopFills.build({ pos, strategyId: pos.book, strategyVersion: pos.strategyVersion, stopLevelPct: d.reason === 'breakeven' ? 0 : ex.stopLossPct, entryPriceSolPerToken: pos.entryPrice,

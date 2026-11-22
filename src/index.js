@@ -647,7 +647,17 @@ function bossRulesView() {
     strategy: RH && RH.entry && RH.entry.trend ? { name: RH.name, version: RH.version, minLiquidityUsd: RH.entry.minLiquidityUsd, maPeriod: RH.entry.trend.maPeriod, candle: '1m', stopLossPct: X.stopLossPct, takeProfitPct: X.takeProfitPct, maxHoldMinutes: X.maxHoldMinutes, slipPctPerFill: (X.costModel || {}).flatSlipPct, priceBasis: X.priceBasis,
       maMethod: 'SMA of the last 50 one-minute closes: own ~45 s pool price history resampled to 1 min (last price at or before each minute end, carried forward) when it covers >= 50 min, else GeckoTerminal 1m OHLCV closes (>= 50 candles, newest <= 3 min old); no data -> no entry' } : null,
     trendStats: RH && RH.entry && RH.entry.trend ? { gtSma: m15.stats } : null,
-    positions: open, breakoutRejects: rejects, breakout: E.breakout || null
+    positions: open, breakoutRejects: rejects, breakout: E.breakout || null,
+    entryReview: (function () {
+      const ef = (bk.entryFilters || {})['runner-hunter'] || {};
+      const hrs = ef.since ? Math.max(1 / 60, (now - Date.parse(ef.since)) / 3600000) : null;
+      const pm = Object.keys(ef.passMints || {}).length, rp = Object.keys(ef.rugPassMints || {}).length;
+      const rs = (bk.rug || {});
+      return { since: ef.since || null, hours: hrs == null ? null : +hrs.toFixed(2), uniqueTokensPassLiqMA: pm, perHourLiqMA: hrs ? +(pm / hrs).toFixed(2) : null,
+        uniqueTokensPassAllRules: rp, perHourAllRules: hrs ? +(rp / hrs).toFixed(2) : null, rugChecks: rs.checks || 0, rugFailedByReason: rs.byReason || {}, capacitySkips: ef.capacitySkips || 0, maxOpen: config.books.maxOpenPerBook,
+        note: 'pre-screen = liquidity > $50k and (when the own 50 min history exists) price > MA, before the GeckoTerminal MA fallback; all rules = liquidity > $50k + price > 50 MA + rug gates (mint/freeze revoked, top-10 <= 15%); rug gates only run while a slot is free (max ' + config.books.maxOpenPerBook + ' open)' };
+    })(),
+    exitLadder: Object.assign({ config: config.books.exitLadder || null }, (function () { const l = bk.exitLadder || {}; return { passes: l.passes || 0, escalations: l.escalations || 0, noFreshQuote: l.noFreshQuote || 0, exits: l.exits || 0, byFillBps: l.byFillBps || {}, recentExits: (l.recentExits || []).slice(0, 5), recentEscalations: (l.recentEscalations || []).slice(0, 5) }; })())
   };
 }
 // t86u: the Manager's improvement loop for runner-hunter (log of every review, 30-trade reports, bounds, rules).
