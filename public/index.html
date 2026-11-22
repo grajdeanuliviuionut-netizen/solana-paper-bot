@@ -64,18 +64,15 @@ table{width:100%;border-collapse:collapse}
 .empty{padding:18px 6px;color:var(--sub);font-size:14px;border-top:1px solid var(--line)}
 .ft td{padding:7px 4px;border-top:1px solid var(--line);font-size:13.5px;white-space:nowrap}
 .ft td small{display:block;color:var(--mute);font-size:11.5px}
-/* paused */
-.ps{padding:10px 0;border-top:1px solid var(--line)}.ps:first-child{border-top:0}
-.psh{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.psh .n{font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.psm{font-size:12px;color:var(--mute);margin-top:2px}
-.pp{display:flex;justify-content:space-between;font-size:13px;margin:6px 0 0 12px;padding-left:10px;border-left:2px solid var(--warn)}
+.tg{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.5px;padding:1px 7px;border-radius:5px;margin-left:8px;vertical-align:2px;text-transform:uppercase}
+.tg.rh{background:rgba(47,214,123,.14);color:var(--up)}.tg.lo{background:rgba(245,178,61,.16);color:var(--warn)}
+.oc{font-size:13px;color:var(--mute)}
 footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
 @media (max-width:2100px){.hs b{font-size:24px}.kpi{min-width:130px}.kpi b{font-size:21px}#nucleus .st{font-size:12px}#nucleus .ag,#nucleus .lb{font-size:12px}}
 @media (min-width:2560px){html,body{font-size:17px}.wrap{gap:26px;padding:26px 34px 34px}.col{gap:26px}.card{padding:24px 28px}.card h2{font-size:15px}.card h2 small{font-size:14px}
   .kpi{min-width:230px;padding:12px 24px}.kpi b{font-size:36px}.kpi label{font-size:13px}.brand b{font-size:28px}.brand span{font-size:15px}.health{font-size:15px}
   .hh .t{font-size:32px}.hh .t small{font-size:17px}.hs b{font-size:44px}.hs label{font-size:13px}.pt td{font-size:19px;padding:13px 8px}.pt th{font-size:13px}.pt td small{font-size:14.5px}.empty{font-size:17px}
-  .ft td{font-size:17px;padding:10px 4px}.ft td small{font-size:14px}.psh .n{font-size:18px}.psm{font-size:14.5px}.pp{font-size:16px}.sp{font-size:12.5px}.sect{font-size:14px}canvas{height:340px}footer{font-size:14px}}
+  .ft td{font-size:17px;padding:10px 4px}.ft td small{font-size:14px}.psh .n{font-size:18px}.psm{font-size:14.5px}.pp{font-size:16px}.sp{font-size:12.5px}.sect{font-size:14px}canvas{height:420px}footer{font-size:14px}}
 </style>
 </head>
 <body>
@@ -96,11 +93,6 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
       <h2>Agents <small id="nucNote">live status · last activity</small></h2>
       <svg id="nucleus" viewBox="0 0 560 560" role="img" aria-label="Agent bots"></svg>
     </div>
-    <div class="card">
-      <h2>Equity <span class="seg" id="eqRange"><button data-r="scoreboard" class="on">reset</button><button data-r="6">6h</button><button data-r="24">24h</button></span></h2>
-      <canvas id="eq"></canvas>
-      <div class="mu num" style="font-size:12px;margin-top:8px" id="eqLegend">–</div>
-    </div>
   </section>
 
   <section class="col">
@@ -113,20 +105,21 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
         <div><label>Win rate</label><b class="num" id="hWin">–</b></div>
         <div><label>Net SOL</label><b class="num" id="hNet">–</b></div>
       </div>
-      <div class="sect">Open positions <span class="mu" style="text-transform:none;letter-spacing:0">· mark = Jupiter sell quote · net after 1.1% costs · times London</span></div>
-      <table class="pt"><thead><tr><th>Token</th><th>Entry</th><th class="r">Mark</th><th class="r">Net</th><th class="r">P&amp;L SOL</th><th class="r">Stop / exit</th></tr></thead><tbody id="heroPos"></tbody></table>
-      <div class="sect">Runner hunter fills</div>
-      <table class="ft"><tbody id="heroFills"></tbody></table>
+    </div>
+    <div class="card" id="openCard">
+      <h2>Open positions <small id="openNote">mark = Jupiter sell quote · net after 1.1% costs · times London</small></h2>
+      <table class="pt"><thead><tr><th>Token</th><th>Entry</th><th class="r">Mark</th><th class="r">Net</th><th class="r">P&amp;L SOL</th><th class="r">Stop / TP</th><th class="r">Age</th></tr></thead><tbody id="openPos"></tbody></table>
+    </div>
+    <div class="card">
+      <h2>Equity <span class="seg" id="eqRange"><button data-r="scoreboard" class="on">reset</button><button data-r="6">6h</button><button data-r="24">24h</button></span></h2>
+      <canvas id="eq"></canvas>
+      <div class="mu num" style="font-size:12px;margin-top:8px" id="eqLegend">–</div>
     </div>
   </section>
 
   <section class="col">
     <div class="card">
-      <h2>Paused strategies <small>no new entries · open trades still exit</small></h2>
-      <div id="paused"></div>
-    </div>
-    <div class="card">
-      <h2>Recent fills <small>all strategies</small></h2>
+      <h2>Recent fills <small>runner hunter + exiting leftovers</small></h2>
       <table class="ft"><tbody id="fills"></tbody></table>
     </div>
   </section>
@@ -149,7 +142,6 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
   function ago(sec) { if (!isNum(sec)) return 'never'; if (sec < 90) return Math.round(sec) + 's ago'; if (sec < 5400) return Math.round(sec / 60) + 'm ago'; return (sec / 3600).toFixed(1) + 'h ago'; }
   function get(u) { return fetch(u, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(u + ' ' + r.status); return r.json(); }); }
   function group(id) { return (D.positionsByStrategy || []).filter(function (g) { return g.id === id; })[0] || null; }
-  function botRow(id) { return ((D.bots && D.bots.strategies) || []).filter(function (s) { return s.id === id; })[0] || {}; }
 
   function renderTop() {
     var a = D.account || {};
@@ -175,32 +167,38 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
     $('hTrades').textContent = b.trades == null ? '–' : b.trades;
     $('hWin').textContent = isNum(b.winRatePct) ? Math.round(b.winRatePct) + '%' : '–';
     $('hNet').textContent = sol(b.netSol); $('hNet').className = 'num ' + cl(b.netSol);
-    var now = Date.now();
-    $('heroPos').innerHTML = (g.positions || []).map(function (p) {
-      var tok = p.dexUrl ? '<a href="' + esc(p.dexUrl) + '" target="_blank" rel="noopener">' + esc(p.symbol) + '</a>' : esc(p.symbol);
-      var stop = (isNum(p.stopPct) ? p.stopPct + '%' : '–') + ' / ' + (isNum(p.targetPct) ? '+' + p.targetPct + '%' : isNum(p.trailPct) ? 'trail ' + p.trailPct + '%' : '–');
-      return '<tr><td>' + tok + '<small class="num">' + (isNum(p.sizeSol) ? p.sizeSol.toFixed(3) : '–') + ' SOL · ' + dur(now - Date.parse(p.entryTime)) + '</small></td>' +
-        '<td class="num">' + tL(p.entryTime) + '<small>' + px(p.entryPrice) + '</small></td>' +
-        '<td class="r num">' + px(p.markPrice) + '<small>' + (isNum(p.quoteAgeSec) ? Math.round(p.quoteAgeSec) + 's old' : '–') + '</small></td>' +
-        '<td class="r num ' + cl(p.netPnlPct) + '">' + pct(p.netPnlPct) + '</td><td class="r num ' + cl(p.unrealizedSol) + '">' + sol(p.unrealizedSol, 5) + '</td><td class="r num mu">' + stop + '</td></tr>';
-    }).join('') || '<tr><td colspan="6" class="empty">No open runner-hunter trades · ' + esc(g.idleReason || 'watching the scan') + '</td></tr>';
-    var rf = (D.recentTrades || []).filter(function (t) { return t.strategyId === 'runner-hunter'; }).slice(0, 8);
-    $('heroFills').innerHTML = rf.map(fillRow).join('') || '<tr><td class="mu">no runner-hunter closes yet</td></tr>';
   }
   function fillRow(t) {
     return '<tr><td class="num">' + tL(t.closedAt) + '<small>' + esc(t.exitReason || '') + '</small></td><td>' + esc(t.symbol) + '<small>' + esc(t.strategyVersion || t.strategyId || '') + '</small></td><td class="r num ' + cl(t.pnlSol) + '">' + sol(t.pnlSol) + '<small class="' + cl(t.pnlPct) + '">' + pct(t.pnlPct) + '</small></td></tr>';
   }
-  function renderPaused() {
-    var gs = (D.positionsByStrategy || []).filter(function (g) { return g.status === 'paused'; });
-    $('paused').innerHTML = gs.map(function (g) {
-      var s = botRow(g.id);
-      var pos = (g.positions || []).map(function (p) { return '<div class="pp num"><span>' + esc(p.symbol) + ' <span class="mu">' + (isNum(p.sizeSol) ? p.sizeSol.toFixed(3) : '') + ' SOL</span></span><span class="' + cl(p.netPnlPct) + '">' + pct(p.netPnlPct) + ' · ' + sol(p.unrealizedSol, 5) + '</span></div>'; }).join('');
-      return '<div class="ps"><div class="psh"><span class="n">' + esc(String(g.name).replace(' (legacy)', '')) + (g.kind === 'legacy' ? ' <span class="mu" style="font-weight:400">legacy</span>' : '') + '</span><span class="sp amber">PAUSED</span></div>' +
-        '<div class="psm num">' + (s.trades || 0) + ' trades · win ' + (isNum(s.winRatePct) ? Math.round(s.winRatePct) + '%' : '–') + ' · net <span class="' + cl(s.netSol) + '">' + sol(s.netSol) + '</span>' + (g.openCount ? ' · <b style="color:var(--warn)">' + g.openCount + ' open, exiting</b>' : '') + '</div>' + pos + '</div>';
-    }).join('') || '<div class="mu">none</div>';
+  // Every live open position (runner-hunter + leftovers of strategies that no longer enter, still exiting).
+  function activeIds() { return (D.positionsByStrategy || []).filter(function (g) { return g.status !== 'paused'; }).map(function (g) { return g.id; }); }
+  function renderOpen() {
+    var act = activeIds(), now = Date.now(), rows = [], n = 0, pnl = 0;
+    (D.positionsByStrategy || []).forEach(function (g) {
+      (g.positions || []).forEach(function (p) {
+        n++; pnl += isNum(p.unrealizedSol) ? p.unrealizedSol : 0;
+        var live = act.indexOf(g.id) >= 0;
+        var tag = '<span class="tg ' + (live ? 'rh' : 'lo') + '">' + esc(live ? g.id : g.id + ' · exiting') + '</span>';
+        var tok = p.dexUrl ? '<a href="' + esc(p.dexUrl) + '" target="_blank" rel="noopener">' + esc(p.symbol) + '</a>' : esc(p.symbol);
+        var tp = isNum(p.targetPct) ? '+' + p.targetPct + '%' : isNum(p.trailPct) ? 'trail ' + p.trailPct + '%' : '–';
+        rows.push({ live: live, t: Date.parse(p.entryTime) || 0, html: '<tr><td>' + tok + tag + '<small class="num">' + (isNum(p.sizeSol) ? p.sizeSol.toFixed(3) : '–') + ' SOL</small></td>' +
+          '<td class="num">' + tL(p.entryTime) + '<small>' + px(p.entryPrice) + '</small></td>' +
+          '<td class="r num">' + px(p.markPrice) + '<small>' + (isNum(p.quoteAgeSec) ? Math.round(p.quoteAgeSec) + 's old' : '–') + '</small></td>' +
+          '<td class="r num ' + cl(p.netPnlPct) + '">' + pct(p.netPnlPct) + '</td><td class="r num ' + cl(p.unrealizedSol) + '">' + sol(p.unrealizedSol, 5) + '</td>' +
+          '<td class="r num mu">' + (isNum(p.stopPct) ? p.stopPct + '%' : '–') + ' / ' + tp + '</td><td class="r num">' + dur(now - Date.parse(p.entryTime)) + '</td></tr>' });
+      });
+    });
+    rows.sort(function (a, b) { return (b.live - a.live) || (b.t - a.t); });
+    $('openPos').innerHTML = rows.map(function (r) { return r.html; }).join('') || '<tr><td colspan="7" class="empty">Nothing open right now.</td></tr>';
+    $('openNote').innerHTML = n ? '<span class="num">' + n + ' open · <span class="' + cl(pnl) + '">' + sol(pnl, 5) + ' SOL</span></span> · mark = Jupiter sell quote · net after 1.1% costs · London' : 'mark = Jupiter sell quote · net after 1.1% costs · London';
   }
+  // Closes since the runner-hunter focus went live (22 Nov 06:52 London): runner-hunter, plus leftovers that exited after it.
+  var FOCUS_SINCE = Date.parse('2026-11-22T06:52:57Z');
   function renderFills() {
-    $('fills').innerHTML = (D.recentTrades || []).slice(0, 12).map(fillRow).join('') || '<tr><td class="mu">no closed trades yet</td></tr>';
+    var act = activeIds();
+    var rows = (D.recentTrades || []).filter(function (t) { return act.indexOf(t.strategyId) >= 0 || (Date.parse(t.closedAt) >= FOCUS_SINCE); }).slice(0, 16);
+    $('fills').innerHTML = rows.map(fillRow).join('') || '<tr><td class="mu">no closes yet</td></tr>';
   }
 
   // Agents as a nucleus: Manager in the centre, five agents on an orbit, linked to it.
@@ -259,7 +257,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
   function refresh() {
     return get('/api/dashboard').then(function (d) {
       D = d; lastOk = Date.now();
-      [renderTop, renderNucleus, renderHero, renderPaused, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
+      [renderTop, renderNucleus, renderHero, renderOpen, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
       clock();
     }).catch(function (e) { console.error(e); $('hDot').className = 'd bad'; $('hTxt').textContent = 'API error, retrying'; });
   }
