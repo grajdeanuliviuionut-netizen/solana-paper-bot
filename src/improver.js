@@ -1,0 +1,140 @@
+// t86u (Liviu 22 Nov 12:12): the Manager's continuous improvement loop for runner-hunter (PAPER ONLY).
+// Every 10 closed runner-hunter trades in the current scoreboard epoch it reviews those 10 trades, picks
+// exactly ONE bounded change from a whitelist of paper knobs with fixed, deterministic rules (first rule that
+// fires and whose knob is not at its bound wins), applies it as a new runner-hunter version (old config kept
+// in previousVersions), logs { at, tradeIndex, stats, change, from, to, why } in state.manager.log and keeps
+// trading. Every 30 closed trades it stores a report (win rate, avg win, avg loss, net) in state.manager.reports.
+// It never touches sizes, wallets, keys, LIVE_TRADING or anything outside these knobs.
+const BOUNDS = {
+  'entry.minLiquidityUsd': { min: 100000, max: 300000, step: 25000 },
+  'entry.maxH1': { min: 10, max: 25, step: 5 },
+  'entry.minM5': { min: 0, max: 3, step: 0.5 },
+  'entry.minVolumeToLiquidityH24': { min: 0.1, max: 0.5, step: 0.05 },
+  'entry.maxTop10Pct': { min: 15, max: 30, step: 5 },
+  'exit.stopLossPct': { min: 5, max: 8, step: 1 },
+  'exit.partial.atPct': { min: 6, max: 12, step: 1 },
+  'exit.trailPct': { min: 6, max: 12, step: 1 }
+};
+const RULES = [
+  'R1 stops overshoot: >= 2 stops and avg stop overshoot <= -2 pts -> raise entry.minLiquidityUsd +25k (max 300k)',
+  'R2 fast stops: win rate < 40% and >= 3 stops within 15 min -> require stronger 5-min move: entry.minM5 +0.5 (max 3)',
+  'R3 noise stops: R2 fired but minM5 at max -> widen exit.stopLossPct +1 (max 8)',
+  'R4 early trails: >= 3 trail exits averaging < +3% -> widen exit.trailPct +1 (max 12)',
+  'R5 no partials: 0 partial sells and >= 3 time exits -> lower exit.partial.atPct -1 (min 6)',
+  'R6 buying tops: win rate < 40% and losers entered on h1 >= 5 pts higher than winners -> lower entry.maxH1 -5 (min 10)',
+  'R7 concentrated losers: losers top10 >= 5 pts higher than winners -> lower entry.maxTop10Pct -5 (min 15)',
+  'R8 still losing: net < 0 -> busier coins only: entry.minVolumeToLiquidityH24 +0.05 (max 0.5)',
+  'R9 healthy (net >= 0 and win rate >= 40%) -> no change'
+];
+const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+const r = (v, d) => (v == null || !Number.isFinite(v) ? null : +v.toFixed(d == null ? 6 : d));
+const avg = a => (a.length ? a.reduce((s, x) => s + x, 0) / a.length : null);
+
+function getPath(o, p) { return p.split('.').reduce((a, k) => (a == null ? undefined : a[k]), o); }
+function setPath(o, p, v) { const ks = p.split('.'); let a = o; for (const k of ks.slice(0, -1)) a = a[k] || (a[k] = {}); a[ks[ks.length - 1]] = v; }
+
+function stats(trades) {
+  const pnl = trades.map(t => num(t.pnlSol));
+  const wins = trades.filter(t => num(t.pnlSol) > 0), losses = trades.filter(t => num(t.pnlSol) <= 0);
+  const stops = trades.filter(t => t.exitReason === 'sl');
+  const over = stops.map(t => t.stopFill && t.stopFill.overshootPct).filter(x => Number.isFinite(Number(x))).map(Number);
+  const trails = trades.filter(t => t.exitReason === 'trail');
+  const h1 = a => avg(a.map(t => t.entrySignal && t.entrySignal.h1).filter(x => Number.isFinite(Number(x))).map(Number));
+  const top = a => avg(a.map(t => t.entrySignal && t.entrySignal.top10Pct).filter(x => Number.isFinite(Number(x))).map(Number));
+  return {
+    trades: trades.length, wins: wins.length, losses: losses.length, winRatePct: trades.length ? r((100 * wins.length) / trades.length, 1) : null,
+    avgWinSol: r(avg(wins.map(t => num(t.pnlSol)))), avgLossSol: r(avg(losses.map(t => num(t.pnlSol)))),
+    avgWinPct: r(avg(wins.map(t => num(t.pnlPct))), 3), avgLossPct: r(avg(losses.map(t => num(t.pnlPct))), 3),
+    netSol: r(pnl.reduce((s, x) => s + x, 0)),
+    stops: stops.length, fastStops: stops.filter(t => num(t.holdMinutes) < 15).length, avgStopOvershootPct: r(avg(over), 3),
+    trails: trails.length, trailAvgPct: r(avg(trails.map(t => num(t.pnlPct))), 3),
+    timeExits: trades.filter(t => t.exitReason === 'time').length,
+    partials: trades.filter(t => (t.legs || []).some(l => /partial/.test(String(l.reason)))).length,
+    winnersAvgH1: r(h1(wins), 2), losersAvgH1: r(h1(losses), 2), winnersAvgTop10: r(top(wins), 2), losersAvgTop10: r(top(losses), 2)
+  };
+}
+
+// Pure: picks one change. params = { entry, exit }. Returns { rule, knob, from, to, why } or { rule: 'R9'|'none', knob: null, why }.
+function decide(s, params) {
+  const at = k => getPath(params, k);
+  const can = (k, dir) => { const b = BOUNDS[k], v = at(k); return v != null && (dir > 0 ? v + 1e-9 < b.max : v - 1e-9 > b.min); };
+  const move = (k, dir) => { const b = BOUNDS[k]; const v = at(k); return +Math.min(b.max, Math.max(b.min, v + dir * b.step)).toFixed(4); };
+  const pick = (rule, k, dir, why) => (can(k, dir) ? { rule, knob: k, from: at(k), to: move(k, dir), why } : null);
+  const lowWin = s.winRatePct != null && s.winRatePct < 40;
+  const cands = [
+    () => s.stops >= 2 && s.avgStopOvershootPct != null && s.avgStopOvershootPct <= -2 && pick('R1', 'entry.minLiquidityUsd', +1, s.stops + ' stops filled ' + s.avgStopOvershootPct + ' pts past the level on average: thicker pools fill closer to the stop'),
+    () => lowWin && s.fastStops >= 3 && pick('R2', 'entry.minM5', +1, 'win rate ' + s.winRatePct + '% with ' + s.fastStops + ' stops inside 15 min: require a stronger 5-min move'),
+    () => lowWin && s.fastStops >= 3 && !can('entry.minM5', +1) && pick('R3', 'exit.stopLossPct', +1, s.fastStops + ' fast stops and minM5 already at its cap: give the stop one more point'),
+    () => s.trails >= 3 && s.trailAvgPct != null && s.trailAvgPct < 3 && pick('R4', 'exit.trailPct', +1, s.trails + ' trail exits averaging ' + s.trailAvgPct + '%: the trail gives back too early'),
+    () => s.partials === 0 && s.timeExits >= 3 && pick('R5', 'exit.partial.atPct', -1, 'no trade reached the partial and ' + s.timeExits + ' timed out: take the first third earlier'),
+    () => lowWin && s.losersAvgH1 != null && s.winnersAvgH1 != null && s.losersAvgH1 - s.winnersAvgH1 >= 5 && pick('R6', 'entry.maxH1', -1, 'losers entered on h1 ' + s.losersAvgH1 + '% vs winners ' + s.winnersAvgH1 + '%: stop buying extended moves'),
+    () => s.losersAvgTop10 != null && s.winnersAvgTop10 != null && s.losersAvgTop10 - s.winnersAvgTop10 >= 5 && pick('R7', 'entry.maxTop10Pct', -1, 'losers had top-10 ' + s.losersAvgTop10 + '% vs winners ' + s.winnersAvgTop10 + '%: tighten holder concentration'),
+    () => s.netSol < 0 && pick('R8', 'entry.minVolumeToLiquidityH24', +1, 'net ' + s.netSol + ' SOL over the last ' + s.trades + ' trades: only busier coins')
+  ];
+  if (s.netSol >= 0 && !lowWin) return { rule: 'R9', knob: null, why: 'healthy: net ' + s.netSol + ' SOL, win rate ' + s.winRatePct + '%: no change' };
+  for (const c of cands) { const d = c(); if (d) return d; }
+  return { rule: 'none', knob: null, why: 'no rule fired with a knob inside its bounds: no change' };
+}
+
+function ensure(state, epoch, since) {
+  const m = state.manager && typeof state.manager === 'object' ? state.manager : (state.manager = {});
+  if (!Array.isArray(m.log)) m.log = [];
+  if (!Array.isArray(m.reports)) m.reports = [];
+  if (m.epoch !== epoch) { m.epoch = epoch; m.since = since; m.reviewedThrough = 0; m.reportedThrough = 0; }
+  return m;
+}
+
+// One step (cheap; called every exit pass). book = the live runner-hunter config object (mutated on a change).
+// Returns the log entry when a review ran, else null.
+function step(state, book, opts) {
+  const sb = state.scoreboard || {};
+  if (!book || !sb.epoch || !sb.since) return null;
+  const m = ensure(state, sb.epoch, sb.since);
+  const sinceMs = Date.parse(sb.since);
+  const trades = ((state.books && state.books.trades) || []).filter(t => t.book === book.id && Date.parse(t.closedAt) >= sinceMs
+      && !(opts && opts.baseVersion && t.bookVersion != null && Number(t.bookVersion) < opts.baseVersion))   // v2 leftovers closing in the v3 epoch are not v3 results
+    .sort((a, b) => Date.parse(a.closedAt) - Date.parse(b.closedAt));
+  const nowIso = new Date((opts && opts.now) || Date.now()).toISOString();
+  m.closedTrades = trades.length;
+  let out = null;
+  while (trades.length >= m.reportedThrough + 30) {
+    const blk = trades.slice(m.reportedThrough, m.reportedThrough + 30);
+    const s = stats(blk);
+    m.reports.push({ at: nowIso, epoch: sb.epoch, fromTrade: m.reportedThrough + 1, toTrade: m.reportedThrough + 30, trades: s.trades, winRatePct: s.winRatePct, avgWinSol: s.avgWinSol, avgLossSol: s.avgLossSol, avgWinPct: s.avgWinPct, avgLossPct: s.avgLossPct, netSol: s.netSol,
+      netWithoutBestSol: r(s.netSol - Math.max(...blk.map(t => num(t.pnlSol)))), worstLossPct: r(Math.min(...blk.map(t => num(t.pnlPct))), 3), version: book.version });
+    m.reportedThrough += 30;
+  }
+  if (trades.length >= m.reviewedThrough + 10) {
+    const blk = trades.slice(m.reviewedThrough, m.reviewedThrough + 10);
+    const s = stats(blk);
+    if (opts && opts.rejects) s.rejectsByFilter = opts.rejects;
+    const params = { entry: JSON.parse(JSON.stringify(book.entry)), exit: JSON.parse(JSON.stringify(book.exit)) };
+    const d = decide(s, params);
+    const entry = { at: nowIso, epoch: sb.epoch, tradeIndex: m.reviewedThrough + 10, fromVersion: book.version, stats: s, rule: d.rule, change: d.knob, from: d.from == null ? null : d.from, to: d.to == null ? null : d.to, why: d.why, toVersion: book.version };
+    if (d.knob) {
+      const prev = { version: book.version, until: nowIso, entry: JSON.parse(JSON.stringify(params.entry)), exit: JSON.parse(JSON.stringify(params.exit)), by: 'manager', rule: d.rule };
+      setPath(params, d.knob, d.to);
+      book.previousVersions = [prev].concat(book.previousVersions || []).slice(0, 40);
+      book.version = +(book.version + 0.01).toFixed(2);
+      book.entry = params.entry; book.exit = params.exit;
+      entry.toVersion = book.version;
+      m.params = { baseVersion: (opts && opts.baseVersion) || null, version: book.version, entry: params.entry, exit: params.exit, previousVersions: book.previousVersions, at: nowIso };
+    }
+    m.log.unshift(entry);
+    if (m.log.length > 200) m.log.length = 200;
+    m.reviewedThrough += 10;
+    out = entry;
+  }
+  return out;
+}
+
+// On boot: re-apply the manager's last version if it was built on the same code version.
+function restore(state, book, baseVersion) {
+  const p = state.manager && state.manager.params;
+  if (!book || !p || p.baseVersion !== baseVersion || !p.entry || !p.exit) return false;
+  book.version = p.version; book.entry = p.entry; book.exit = p.exit;
+  if (Array.isArray(p.previousVersions)) book.previousVersions = p.previousVersions;
+  return true;
+}
+
+module.exports = { step, decide, stats, restore, BOUNDS, RULES };
