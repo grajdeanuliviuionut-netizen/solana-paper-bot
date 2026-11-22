@@ -43,6 +43,8 @@ const booksLimiter = new Limiter({
   buckets: {
     jupiter: { minGapMs: 1100, maxRetries: 1, cooldownMs: 20000 },   // <= ~55 requests/min (lite-api free 60/min)
     rpc: { minGapMs: 400, maxRetries: 1, cooldownMs: 30000 },
+    top10rpc: { minGapMs: 1200, maxRetries: 0, cooldownMs: 60000 }, // t86u runner v3 top-10 holders (getTokenSupply/LargestAccounts/MultipleAccounts)
+    gecko: { minGapMs: 2500, maxRetries: 0, cooldownMs: 600000 },     // t86u runner v3 m15 fallback: GeckoTerminal 1m OHLCV, no retries, 10 min pause on 429
     rugcheck: { minGapMs: 3000, maxRetries: 0, cooldownMs: 600000 }   // grad sniper v2: free RugCheck report, no retries, 10 min pause on 429
   },
   baseBackoffMs: 1000, maxBackoffMs: 10000
@@ -68,8 +70,11 @@ if (typeof state.balance !== 'number') state.balance = config.startingSol;
 if (!Array.isArray(state.decisions)) state.decisions = [];
 console.log('Re-entry cooldowns seeded from closed trades: ' + reentry.seed(state, config));
 
+const top10 = require('./books/top10').makeTop10(booksLimiter);
+const m15 = require('./books/m15').makeM15(booksLimiter);
+const improver = require('./improver');
 const books = makeBooks({
-  config, quotes, mintAuth, reentry, holderCheck,
+  config, quotes, mintAuth, reentry, holderCheck, top10, m15,
   log: function (type, symbol, reason) {
     state.decisions.unshift(logDecision(type, symbol, reason));
     if (type !== 'SKIP') addActivity(type + ' ' + symbol + ' ' + reason);
@@ -77,6 +82,10 @@ const books = makeBooks({
   saveTrade: function (trade) { logTrade(trade); }
 });
 books.ensure(state);
+// t86u Manager loop: re-apply the manager's last runner-hunter version if it was built on this code version.
+const RH = (config.books.list || []).find(function (b) { return b.id === 'runner-hunter'; });
+const RH_BASE = RH ? RH.version : null;
+try { if (config.manager && config.manager.enabled && improver.restore(state, RH, RH_BASE)) console.log('Manager: runner-hunter v' + RH.version + ' restored'); } catch (e) { console.error('manager restore', e.message); }
 
 // PR11 scoreboard reset (once per epoch): the old trades are archived on the volume (state copy +
 // trades.jsonl copy; nothing is deleted), the scoreboard restarts empty from `since` with the build hash.
@@ -526,7 +535,7 @@ app.get('/api/positions', function (req, res) {
 });
 app.get('/api/dashboard', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  try { const p = dashApi().payload(); try { p.pause = pauseView(); } catch (e) { p.pause = null; } try { const v = pnlView(); p.pnl = { epoch: v.window && v.window.epoch, since: v.window && v.window.since, startEquity: v.startEquity, startMarkedEquity: v.startMarkedEquity, equity: v.equity, equityChangeSol: v.equityChangeSol, realisedSol: v.realisedSol, unrealisedSol: v.unrealisedSol, markedEquity: v.markedEquity, markedChangeSol: v.markedChangeSol, residualSol: v.residualSol, reconciled: v.reconciled, byStrategy: v.byStrategy }; } catch (e) { p.pnl = null; } p.epochSwitch = state.epochSwitch || null; p.onlyStrategies = config.onlyStrategies || null; try { p.bots = botsView(); } catch (e) { p.bots = { error: String(e.message || e) }; } res.json(p); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
+  try { const p = dashApi().payload(); try { p.pause = pauseView(); } catch (e) { p.pause = null; } try { const v = pnlView(); p.pnl = { epoch: v.window && v.window.epoch, since: v.window && v.window.since, startEquity: v.startEquity, startMarkedEquity: v.startMarkedEquity, equity: v.equity, equityChangeSol: v.equityChangeSol, realisedSol: v.realisedSol, unrealisedSol: v.unrealisedSol, markedEquity: v.markedEquity, markedChangeSol: v.markedChangeSol, residualSol: v.residualSol, reconciled: v.reconciled, byStrategy: v.byStrategy }; } catch (e) { p.pnl = null; } p.epochSwitch = state.epochSwitch || null; p.onlyStrategies = config.onlyStrategies || null; try { p.manager = managerView(true); } catch (e) { p.manager = null; } try { p.bots = botsView(); } catch (e) { p.bots = { error: String(e.message || e) }; } res.json(p); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
 });
 // Equity curve: snapshots from equity.jsonl on the volume (1/min) plus the current live point.
 // ?hours=N (default 24, max 720) or ?since=scoreboard; ?max=N points (default 600).
@@ -552,6 +561,31 @@ function pnlView(epoch, listTrades) { return pnlMod.report(state, config, { trad
 app.get('/api/pnl', function (req, res) {
   res.set('Cache-Control', 'no-store');
   try { res.json(Object.assign({ build: BUILD, liveTrading: false, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null }, pnlView(req.query.epoch, req.query.trades === '1'))); } catch (e) { console.error('pnl view', e); res.status(500).json({ error: String(e.message || e) }); }
+});
+// t86u: the Manager's improvement loop for runner-hunter (log of every review, 30-trade reports, bounds, rules).
+function managerView(compact) {
+  const m = state.manager || {};
+  const bk = books.ensure(state);
+  const g = books.guard(state);
+  const sc = state.stopCooldowns || {};
+  const now = Date.now();
+  const ep = state.scoreboard ? state.scoreboard.epoch : null;
+  const same = m.epoch === ep;
+  const activeSc = Object.keys(sc).filter(function (k) { return /^mint:/.test(k) && Date.parse(sc[k].until) > now; }).map(function (k) { return { mint: k.slice(5), symbol: sc[k].symbol, until: sc[k].until }; });
+  const v = { enabled: !!(config.manager && config.manager.enabled), epoch: ep, since: state.scoreboard ? state.scoreboard.since : null,
+    closedTrades: same ? (m.closedTrades || 0) : 0, reviewEvery: 10, nextReviewAtTrade: (same ? (m.reviewedThrough || 0) : 0) + 10, reportEvery: 30, nextReportAtTrade: (same ? (m.reportedThrough || 0) : 0) + 30,
+    current: RH ? { version: RH.version, label: 'runner-hunter v' + RH.version, entry: RH.entry, exit: RH.exit } : null,
+    guardrail: RH && RH.entry && RH.entry.lossStreakPause ? { lossStreak: g.streak['runner-hunter'] || 0, losses: RH.entry.lossStreakPause.losses, pauseMinutes: RH.entry.lossStreakPause.minutes, pausedUntil: books.lossPaused(state, 'runner-hunter', now), pauses: g.pauses.slice(0, compact ? 3 : 30) } : null,
+    stopCooldowns: { hours: RH && RH.entry ? RH.entry.stopCooldownHours || null : null, active: activeSc.length, list: compact ? undefined : activeSc },
+    entryFilters: bk.entryFilters['runner-hunter'] || null,
+    log: (m.log || []).slice(0, compact ? 5 : 200), reports: compact ? (m.reports || []).slice(-3) : (m.reports || []) };
+  if (!compact) Object.assign(v, { bounds: improver.BOUNDS, rules: improver.RULES, top10: Object.assign({}, top10.stats), m15: Object.assign({}, m15.stats), previousVersions: RH ? RH.previousVersions || [] : [],
+    note: 'Paper only. The Manager changes only whitelisted runner-hunter knobs inside these bounds; never size, wallets, keys or LIVE_TRADING.' });
+  return v;
+}
+app.get('/api/manager', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(Object.assign({ build: BUILD, liveTrading: false }, managerView(false))); } catch (e) { console.error('manager view', e); res.status(500).json({ error: String(e.message || e) }); }
 });
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
@@ -609,7 +643,13 @@ async function exitLoop() {
     exitLoopStats.positionsChecked += n;
     botTracker.beat('executor');
     if (n > 0) botTracker.work('executor', n);
-    if ((changed || n) && !ticking) saveState(state);
+    // t86u: Manager review every 10 closed runner-hunter trades (one bounded change) + a report every 30.
+    let mv = null;
+    if (config.manager && config.manager.enabled && RH) {
+      mv = improver.step(state, RH, { baseVersion: RH_BASE, rejects: (books.ensure(state).entryFilters['runner-hunter'] || {}).byFilter || null });
+      if (mv) addActivity('MANAGER review @' + mv.tradeIndex + ': ' + (mv.change ? mv.change + ' ' + mv.from + ' -> ' + mv.to + ' (v' + mv.toVersion + ')' : 'no change') + ' - ' + mv.why);
+    }
+    if ((changed || n || mv) && !ticking) saveState(state);
   } catch (e) {
     exitLoopStats.errors += 1;
     exitLoopStats.lastError = String(e.message || e).slice(0, 120);
@@ -654,7 +694,9 @@ function pauseView() {
   const rows = (config.books.list || []).map(function (b) { return { id: b.id, kind: 'book', name: b.name + ' v' + b.version, paused: !!b.paused, open: (bk.open || []).filter(function (p) { return p.book === b.id; }).length }; })
     .concat((config.strategies || []).map(function (s) { return { id: s.id, kind: 'legacy', name: s.name, paused: !!s.paused || (state.pausedIds || []).indexOf(s.id) >= 0, open: legacyOpen.filter(function (p) { return p.strategyId === s.id; }).length }; }));
   return { activeStrategies: rows.filter(function (r) { return !r.paused; }).map(function (r) { return r.id; }), pausedStrategies: rows.filter(function (r) { return r.paused; }).map(function (r) { return r.id; }),
-    strategies: rows, onlyStrategies: config.onlyStrategies || null, newPoolsFeed: newPoolsEnabled() ? 'on' : 'off (graduation sniper paused)', slotReserve: config.slotReserve || {},
+    strategies: rows, onlyStrategies: config.onlyStrategies || null,
+    guardrail: (function () { try { return managerView(true).guardrail; } catch (e) { return null; } })(),
+    newPoolsFeed: newPoolsEnabled() ? 'on' : 'off (graduation sniper paused)', slotReserve: config.slotReserve || {},
     note: 'paused = no new entries; open positions are still marked and exited by the exit loop (Liviu t83u)' };
 }
 function botsView() {
@@ -717,4 +759,4 @@ if (require.main === module) app.listen(config.port, function () {
   setInterval(recordEquity, 60000);
 });
 
-module.exports = { app, pnlView, startEpoch, closeLeftovers, leftovers, exitLoopOnce: function () { return exitLoop(); }, pauseView, newPoolsEnabled, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };
+module.exports = { app, managerView, top10, m15, improver, pnlView, startEpoch, closeLeftovers, leftovers, exitLoopOnce: function () { return exitLoop(); }, pauseView, newPoolsEnabled, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };

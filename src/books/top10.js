@@ -8,7 +8,7 @@
 // top10Pct = the 10 largest remaining owners' balance / supply x 100. Anything else (lockers, other pools of the
 // same token, exchanges) is COUNTED, so the number is conservative. Fails closed: any RPC error, missing supply
 // or unparsed account -> { ok: false } (the entry is rejected). Cached per mint 10 min (errors 2 min). Calls go
-// through the limiter's 'rpc' bucket (400 ms apart, 30 s pause after a 429). Read-only: no transaction is built.
+// through its own limiter bucket 'top10rpc' (1.2 s apart, no retries, 60 s pause after a 429, so a 429 here never stalls the mint-authority check on 'rpc'). Read-only: no transaction is built.
 const PUBLIC_RPC = 'https://api.mainnet-beta.solana.com';
 const BURN = new Set(['1nc1nerator11111111111111111111111111111111', '11111111111111111111111111111111', 'deaddeaddeaddeaddeaddeaddeaddeaddeaddeaddead']);
 const AMM_AUTHORITIES = {
@@ -43,7 +43,7 @@ function makeTop10(limiter, opts = {}) {
   const ttl = r => (r.ok ? (opts.ttlMs || 600000) : 120000);
   async function rpc(method, params) {
     stats.rpcCalls++;
-    const res = await limiter.post('rpc', url, { jsonrpc: '2.0', id: 1, method, params });
+    const res = await limiter.post(opts.bucket || 'top10rpc', url, { jsonrpc: '2.0', id: 1, method, params });
     const body = res && res.data;
     if (!body || body.error || body.result === undefined) throw new Error((body && body.error && body.error.message) || method + ': no result');
     return body.result;

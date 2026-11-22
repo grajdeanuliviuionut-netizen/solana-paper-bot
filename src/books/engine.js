@@ -13,6 +13,7 @@
 const { classifyBlocked } = require('./blocklist');
 const stopFills = require('../stopFills');
 const { heldMint, REASON: REASON_SAME_MINT } = require('./sameMint');
+const m15Mod = require('./m15');
 
 const MIN = 60000;
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -50,7 +51,7 @@ function dropFromHighPct(row, snaps, now) {
 // Returns null (passes) or the first failed rule as a short reason.
 function entryFails(book, row, ctx) {
   const e = book.entry, now = ctx.now, pc = row.priceChange || {};
-  if (e.minLiquidityUsd && num(row.liquidityUsd) < e.minLiquidityUsd) return 'liquidity < ' + e.minLiquidityUsd;
+  if (e.minLiquidityUsd && num(row.liquidityUsd) < e.minLiquidityUsd) return (e.maxLiquidityUsd != null ? 'liquidityMin: < ' : 'liquidity < ') + e.minLiquidityUsd;
   if (book.id === 'graduation-sniper') {
     if (e.pumpOrigin && !isPumpOrigin(row)) return 'not pump.fun origin';
     const age = poolAgeMin(row, now);
@@ -59,6 +60,19 @@ function entryFails(book, row, ctx) {
     if (e.minPoolAgeMin && age < e.minPoolAgeMin) return 'pool younger than ' + e.minPoolAgeMin + 'm';
     const t = row.txnsM5 || {};
     if (e.m5BuysGtSells && !(num(t.buys) > num(t.sells))) return 'm5 buys <= sells';
+    return null;
+  }
+  if (book.id === 'runner-hunter' && e.maxLiquidityUsd != null) {
+    // t86u v3 (Liviu): liquidity $100k-$900k, 24 h volume >= 0.1x liquidity, h1 <= 25, rising on m5 AND m15.
+    // (top-10 holders <= 30% and the 24 h stop cooldown are checked in runEntries; m15 without own history too.)
+    const liq = num(row.liquidityUsd);
+    if (liq > e.maxLiquidityUsd) return 'liquidityMax: > ' + e.maxLiquidityUsd;
+    const v24 = num(row.volumeH24) / (liq || 1);
+    if (v24 < e.minVolumeToLiquidityH24) return 'vol24Liq: < ' + e.minVolumeToLiquidityH24;
+    if (num(pc.h1) > e.maxH1) return 'h1Max: > ' + e.maxH1;
+    if (!(num(pc.m5) > e.minM5)) return 'm5: <= ' + e.minM5;
+    const m = m15Mod.m15FromTicks(ctx.ticks && ctx.ticks[row.pairAddress], num(row.priceUsd), now);
+    if (m && !(m.pct > e.minM15)) return 'm15: <= ' + e.minM15;
     return null;
   }
   if (book.id === 'runner-hunter') {
@@ -92,6 +106,10 @@ function signalFields(book, row, ctx) {
   const f = { liquidityUsd: row.liquidityUsd, volumeH1: row.volumeH1, m5: pc.m5, h1: pc.h1, h24: pc.h24, dexId: row.dexId };
   if (book.id === 'graduation-sniper') Object.assign(f, { poolAgeMin: +num(poolAgeMin(row, ctx.now)).toFixed(1), txnsM5: row.txnsM5, pumpOrigin: isPumpOrigin(row) });
   if (book.id === 'runner-hunter') f.volumeToLiquidityH1 = +(num(row.volumeH1) / (num(row.liquidityUsd) || 1)).toFixed(3);
+  if (book.id === 'runner-hunter' && book.entry && book.entry.maxLiquidityUsd != null) {
+    const m = m15Mod.m15FromTicks(ctx.ticks && ctx.ticks[row.pairAddress], num(row.priceUsd), ctx.now);
+    Object.assign(f, { volumeH24: row.volumeH24, volumeToLiquidityH24: +(num(row.volumeH24) / (num(row.liquidityUsd) || 1)).toFixed(3), m15: m ? +m.pct.toFixed(3) : null, m15Source: m ? m.source : null, m15FromAgeMin: m ? m.fromAgeMin : null });
+  }
   if (book.id === 'volume-explosion') Object.assign(f, { volumeM5: row.volumeM5, m5VolumeVsHourAvg: +num(m5VolumeVsHourAvg(row)).toFixed(2) });
   if (book.id === 'trending-pullback') Object.assign(f, { volumeH6: row.volumeH6, high24Est: high24Estimate(row, ctx.snaps && ctx.snaps[row.mint], ctx.now), dropFromHighPct: +num(dropFromHighPct(row, ctx.snaps && ctx.snaps[row.mint], ctx.now)).toFixed(2) });
   return f;
@@ -132,7 +150,7 @@ function bookStats(trades, open, target) {
 }
 
 // ---------- runtime ----------
-function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep }) {
+function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15 }) {
   const sleepFn = sleep || (ms => new Promise(r => setTimeout(r, ms)));
   let curV2 = null;   // grad sniper v2: checks gathered for the candidate being evaluated (logged on reject/entry)
   const C = config.books;
@@ -151,6 +169,8 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     if (!b.stockBlocks) b.stockBlocks = { count: 0, recent: [] };
     if (!b.snaps) b.snaps = {};
     if (!b.entries) b.entries = { attempts: 0, opened: 0 };
+    if (!b.ticks) b.ticks = {};
+    if (!b.entryFilters) b.entryFilters = {};
     const gb = C.list.find(x => x.id === 'graduation-sniper');
     if (gb && (!b.gradSniper || b.gradSniper.version !== gb.version)) {
       b.gradSniper = { label: label(gb), version: gb.version, since: new Date(nowFn()).toISOString(), candidates: 0, candidateMints: [],
@@ -158,6 +178,33 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         rejectsByReason: {}, entries: 0, closes: 0, confirmsTriggered: 0, confirmsConfirmed: 0, confirms: [] };
     }
     return b;
+  }
+  // t86u: per-filter counters for books with v3-style entries (first failing rule per candidate row per scan).
+  function filterStats(state, book) {
+    const b = ensure(state);
+    const f = b.entryFilters[book.id];
+    const ep = state.scoreboard && state.scoreboard.epoch;
+    if (!f || f.epoch !== ep) b.entryFilters[book.id] = { epoch: ep || null, since: new Date(nowFn()).toISOString(), evaluated: 0, passedRules: 0, entered: 0, byFilter: {}, lastScan: null };
+    return b.entryFilters[book.id];
+  }
+  const filterKey = reason => String(reason).split(':')[0].trim();
+  function countFilter(state, book, reason) {
+    if (!(book && book.entry && book.entry.maxLiquidityUsd != null)) return;
+    const f = filterStats(state, book), k = filterKey(reason);
+    f.byFilter[k] = (f.byFilter[k] || 0) + 1;
+    if (f.lastScan) f.lastScan.byFilter[k] = (f.lastScan.byFilter[k] || 0) + 1;
+  }
+  // t86u guardrail: N consecutive losing closes of a book -> no new entries for M minutes, then auto-resume.
+  function guard(state) {
+    const b = ensure(state);
+    if (!b.guardrail) b.guardrail = { streak: {}, pauses: [], pausedUntil: {} };
+    return b.guardrail;
+  }
+  function lossPaused(state, bookId, t) { const g = guard(state); const u = g.pausedUntil[bookId]; return u && Date.parse(u) > t ? u : null; }
+  function stopCooldown(state, row, t) {
+    const m = state.stopCooldowns || {};
+    for (const k of ['mint:' + row.mint, 'pair:' + row.pairAddress]) if (m[k] && Date.parse(m[k].until) > t) return m[k];
+    return null;
   }
   // Same-mint guard counters (books and legacy) in state.books.sameMint.
   function sameMintCount(state, strategyId) {
@@ -232,22 +279,28 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       while (s.length && t - s[0][0] > 24 * 3600000) s.shift();
     }
     for (const m of Object.keys(b.snaps)) if (!b.snaps[m].length || t - b.snaps[m][b.snaps[m].length - 1][0] > 24 * 3600000) delete b.snaps[m];
+    // t86u: ~45 s pool price ticks (last 20 min) for m15, pools with liquidity >= $50k.
+    for (const r of pairs || []) if (r && num(r.liquidityUsd) >= 50000) m15Mod.recordTick(b.ticks, r, t);
+    m15Mod.pruneTicks(b.ticks, t);
   }
 
   // extraByBook: { bookId: rows } extra candidate rows for one book only (PR13: new-pools feed rows
   // go to the graduation sniper only). onExtraPass(book, row) is called for each extra row that passes.
   function signals(state, pairs, extraByBook, onExtraPass) {
     const b = ensure(state), t = nowFn(), out = [];
-    const ctx = { now: t, snaps: b.snaps };
+    const ctx = { now: t, snaps: b.snaps, ticks: b.ticks };
     for (const book of C.list) {
       if (book.paused || !allowed(book.id)) continue;   // t83u/t85u: paused or not allowed -> no new entries (open positions still exit)
       const extra = (extraByBook && extraByBook[book.id]) || [];
       const seen = new Set((pairs || []).map(r => r && r.mint));
       const extraOnly = extra.filter(r => r && !seen.has(r.mint));
       for (const r of extra) if (r && !entryFails(book, r, ctx) && onExtraPass) onExtraPass(book, r);
+      const v3 = book.entry && book.entry.maxLiquidityUsd != null;
+      if (v3) filterStats(state, book).lastScan = { at: new Date(t).toISOString(), rows: (pairs || []).length, passedRules: 0, byFilter: {} };
       for (const row of (pairs || []).concat(extraOnly)) {
         if (!row || !row.mint) continue;
         const why = entryFails(book, row, ctx);
+        if (v3) { const f = filterStats(state, book); f.evaluated++; if (why) countFilter(state, book, why); else { f.passedRules++; f.lastScan.passedRules++; } }
         if (book.id === 'graduation-sniper' && b.gradSniper && (!why || /^pool younger/.test(why))) {
           const g = b.gradSniper;
           if (!g.candidateMints.includes(row.mint)) { g.candidateMints.push(row.mint); if (g.candidateMints.length > 300) g.candidateMints.shift(); g.candidates++; }
@@ -270,6 +323,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       recordSnaps(state, pairs);
       if (state.epochSwitch && state.epochSwitch.pending) { b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: {}, note: 'epoch switch pending: leftovers closing, no entries' }; return; }
       const sigs = signals(state, pairs, extraByBook, onExtraPass);
+      let gtBudget = C.m15GtPerScan || 6;   // t86u: at most 6 GeckoTerminal m15 lookups per scan (keeps the scan short)
       // PR14 dashboard: candidates per book in the last scan (why an empty book is idle).
       const cand = {};
       for (const bk of C.list) if (!bk.paused && allowed(bk.id)) cand[bk.id] = 0;
@@ -282,6 +336,12 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         curV2 = book.id === 'graduation-sniper' ? { poolAgeMin: +num(poolAgeMin(row, t)).toFixed(2), liquidityUsd: row.liquidityUsd, txnsM5: row.txnsM5 || null } : null;
         const openHere = b.open.filter(p => p.book === book.id);
         if (openHere.length >= C.maxOpenPerBook) continue;                  // capacity: not a reject
+        const lp = book.entry && book.entry.lossStreakPause ? lossPaused(state, book.id, t) : null;
+        if (lp) { countFilter(state, book, 'lossStreakPause'); continue; }   // t86u guardrail: paused after N losses in a row
+        if (book.entry && book.entry.stopCooldownHours) {
+          const sc = stopCooldown(state, row, t);
+          if (sc) { countFilter(state, book, 'stopCooldown24h'); reject(state, book, row, 'stopCooldown24h', { until: sc.until }); continue; }
+        }
         // Cross-strategy same-mint guard: no book opens a mint held by ANY book or legacy strategy (fail closed).
         const held = heldMint(state, row);
         if (held) { sameMintCount(state, book.id); reject(state, book, row, REASON_SAME_MINT, { detail: held.detail, heldBy: held.heldBy }); continue; }
@@ -295,10 +355,26 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         b.entries.attempts++;
         const g = await gate({ symbol: row.symbol, mint: row.mint, pairAddress: row.pairAddress, strategyId: book.id }, row);
         if (!g || !g.ok) { reject(state, book, row, 'main-pool check: ' + ((g && g.reason) || 'failed')); continue; }
+        // t86u v3: m15 from GeckoTerminal 1m OHLCV when the bot's own 15-min price history is missing (fail closed).
+        if (book.entry && book.entry.minM15 != null && fields.m15 == null) {
+          if (gtBudget <= 0) { countFilter(state, book, 'm15Pending'); continue; }   // no data yet this scan: not entered (fail closed)
+          gtBudget--;
+          const g15 = m15 ? await m15.gt(row.pairAddress, nowFn()) : null;
+          if (!g15) { countFilter(state, book, 'm15NoData'); reject(state, book, row, 'm15: no 15-min data (own history + GeckoTerminal)'); continue; }
+          Object.assign(fields, { m15: +g15.pct.toFixed(3), m15Source: g15.source, m15FromAgeMin: g15.fromAgeMin });
+          if (!(g15.pct > book.entry.minM15)) { countFilter(state, book, 'm15'); reject(state, book, row, 'm15: <= ' + book.entry.minM15 + ' (GeckoTerminal)'); continue; }
+        }
         const rug = await mintAuth.check(row.mint);
         const rugCheck = { pass: rug.pass, reason: rug.reason, mintAuthority: rug.mintAuthority === undefined ? null : rug.mintAuthority, freezeAuthority: rug.freezeAuthority === undefined ? null : rug.freezeAuthority, program: rug.program || null, decimals: rug.decimals, checkedAt: rug.checkedAt, source: rug.source };
         if (!rug.pass) { reject(state, book, row, 'rug-check: ' + rug.reason); continue; }
         const E = book.entry || {};
+        // t86u v3: top-10 holders (Solana RPC largest accounts, pool/AMM/burn excluded), fail closed.
+        if (E.maxTop10Pct != null && E.maxLiquidityUsd != null) {
+          const tt = top10 ? await top10.check(row.mint, row.pairAddress, nowFn()) : { ok: false, reason: 'top10: no checker configured' };
+          if (!tt.ok) { countFilter(state, book, 'top10Unavailable'); reject(state, book, row, 'top10: unavailable (' + (tt.reason || 'error') + ')'); continue; }
+          Object.assign(fields, { top10Pct: tt.top10Pct, top10MaxHolderPct: tt.maxHolderPct, top10ExcludedPct: tt.excludedPct });
+          if (tt.top10Pct > E.maxTop10Pct) { countFilter(state, book, 'top10'); reject(state, book, row, 'top10: ' + tt.top10Pct.toFixed(1) + '% > ' + E.maxTop10Pct + '%'); continue; }
+        }
         let holder = null;
         if (E.lpLockedMinPct != null) {
           // v2: LP lock/burn + holder concentration (RugCheck), fail closed.
@@ -343,6 +419,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         b.open.push(pos);
         state.balance -= C.sizeSol;
         b.entries.opened++;
+        if (book.entry && book.entry.maxLiquidityUsd != null) filterStats(state, book).entered++;
         if (book.id === 'graduation-sniper' && b.gradSniper && book.version === b.gradSniper.version) {
           b.gradSniper.entries++;
           pos.v2Checks = Object.assign({}, curV2);
@@ -367,6 +444,26 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     b.trades.unshift(trade);
     if (b.trades.length > 3000) b.trades.length = 3000;
     reentry.recordExit(state, trade, config, t);
+    const live = C.list.find(x => x.id === pos.book);
+    const LE = (live && live.entry) || {};
+    if (LE.stopCooldownHours && stopFills.isStop(reason)) {
+      // t86u: no re-buy of a coin for 24 h after it stops out (mint and pool), persisted in state.
+      const m = state.stopCooldowns || (state.stopCooldowns = {});
+      const until = new Date(t + LE.stopCooldownHours * 3600000).toISOString();
+      for (const k of ['mint:' + pos.mint, 'pair:' + pos.pairAddress]) m[k] = { until, symbol: pos.symbol, at: trade.closedAt, reason: 'stopCooldown24h', book: pos.book };
+      for (const k of Object.keys(m)) if (Date.parse(m[k].until) <= t) delete m[k];
+    }
+    if (LE.lossStreakPause) {
+      const g = guard(state);
+      g.streak[pos.book] = trade.pnlSol < 0 ? (g.streak[pos.book] || 0) + 1 : 0;
+      if (g.streak[pos.book] >= LE.lossStreakPause.losses) {
+        const until = new Date(t + LE.lossStreakPause.minutes * MIN).toISOString();
+        g.pausedUntil[pos.book] = until;
+        g.pauses = [{ book: pos.book, at: trade.closedAt, until, streak: g.streak[pos.book], lastSymbol: pos.symbol }].concat(g.pauses).slice(0, 30);
+        g.streak[pos.book] = 0;
+        if (log) log('PAUSE', pos.symbol, pos.book + ' ' + LE.lossStreakPause.losses + ' losses in a row: no new entries until ' + until);
+      }
+    }
     if (saveTrade) saveTrade(trade);
     if (log) log('EXIT', pos.symbol, pos.strategyVersion + ' ' + reason + ' pnl ' + trade.pnlSol.toFixed(5) + ' SOL (' + trade.pnlPct.toFixed(2) + '%)');
     return trade;
@@ -516,6 +613,9 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         { open: open.map(p => ({ symbol: p.symbol, mint: p.mint, entryTime: p.entryTime, markPct: p.markPct, peakPct: p.peakPct, markSource: p.markSource, markAt: p.markAt, markAgeSec: p.markAt ? +((t - Date.parse(p.markAt)) / 1000).toFixed(1) : null, remainingFrac: p.remainingFrac, partialDone: p.partialDone })),
           firstEntries: trades.slice(-3).reverse().map(x => ({ symbol: x.symbol, entryTime: x.entryTime, exitReason: x.exitReason, pnlPct: x.pnlPct })).concat(open.slice(0, 2).map(p => ({ symbol: p.symbol, entryTime: p.entryTime, open: true }))),
           rejects: b.rejects.byBook[book.id] || {}, previousVersions, previousConfigs: book.previousVersions || [], allowed: allowed(book.id),
+          epochStats: state.scoreboard && state.scoreboard.since ? bookStats(all.filter(x => Date.parse(x.closedAt) >= Date.parse(state.scoreboard.since)), open, C.targetTrades) : null,
+          entryFilters: b.entryFilters[book.id] || null,
+          guardrail: book.entry && book.entry.lossStreakPause ? { lossStreak: guard(state).streak[book.id] || 0, losses: book.entry.lossStreakPause.losses, pauseMinutes: book.entry.lossStreakPause.minutes, pausedUntil: lossPaused(state, book.id, t) } : null,
           v2: book.id === 'graduation-sniper' && b.gradSniper ? gradView(b.gradSniper) : undefined });
     });
   }
@@ -526,7 +626,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   }
   function lockedSol(state) { return ensure(state).open.reduce((a, p) => a + num(p.costBasisRemainingSol), 0); }
 
-  return { ensure, heldMint, rejectLegacy, closeNowInner, allowed, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
+  return { ensure, heldMint, rejectLegacy, closeNowInner, allowed, guard, lossPaused, filterStats, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
 }
 
 module.exports = { makeBooks, entryFails, decideExit, quoteFresh, bookStats, high24Estimate, dropFromHighPct, m5VolumeVsHourAvg, isPumpOrigin, label };
