@@ -34,6 +34,7 @@ const { makeDashboardApi, equityLog } = require('./dashboardApi');
 const newPools = require('./newPools');
 const { makeLegacyExits, nextDelayMs, makeStats } = require('./exitLoop');
 const stopFillsMod = require('./stopFills');
+const pnlMod = require('./pnl');
 const SERVER_STARTED_AT = new Date().toISOString();
 
 const BUILD = process.env.RAILWAY_GIT_COMMIT_SHA || process.env.SOURCE_COMMIT || null;
@@ -80,27 +81,76 @@ books.ensure(state);
 // PR11 scoreboard reset (once per epoch): the old trades are archived on the volume (state copy +
 // trades.jsonl copy; nothing is deleted), the scoreboard restarts empty from `since` with the build hash.
 // Balance carries over unchanged (same balance). Open legacy positions stay open and score on the new board.
-function resetScoreboard() {
+function resetScoreboard(extra) {
   const epoch = config.books.epoch;
   if (state.scoreboard && state.scoreboard.epoch === epoch) return null;
+  const prev = state.scoreboard || null;
   const dir = path.dirname(process.env.STATE_FILE || './data/state.json');
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const archiveFile = path.join(dir, 'archive', 'pre-' + epoch + '-' + stamp + '.json');
   const tradesFile = process.env.TRADES_FILE || path.join(dir, 'trades.jsonl');
   const tradesCopy = path.join(dir, 'archive', 'trades-pre-' + epoch + '-' + stamp + '.jsonl');
   fs.mkdirSync(path.dirname(archiveFile), { recursive: true });
-  fs.writeFileSync(archiveFile, JSON.stringify({ archivedAt: new Date().toISOString(), epochBefore: (state.scoreboard && state.scoreboard.epoch) || 'legacy', balance: state.balance, equity: equity(), openPositions: state.openPositions, trades: state.trades, strategyStats: state.strategyStats || null, fetchStats: state.fetchStats || null, poolChecks: state.poolChecks || null }, null, 1));
+  fs.writeFileSync(archiveFile, JSON.stringify({ archivedAt: new Date().toISOString(), epochBefore: (state.scoreboard && state.scoreboard.epoch) || 'legacy', balance: state.balance, equity: equity(), openPositions: state.openPositions, trades: state.trades, bookTrades: books.ensure(state).trades, bookOpen: books.ensure(state).open, strategyStats: state.strategyStats || null, fetchStats: state.fetchStats || null, poolChecks: state.poolChecks || null }, null, 1));
   let copied = 0;
   try { if (fs.existsSync(tradesFile)) { fs.copyFileSync(tradesFile, tradesCopy); copied = fs.readFileSync(tradesCopy, 'utf8').split('\n').filter(Boolean).length; } } catch (e) { console.error('trades.jsonl archive copy failed', e.message); }
   const archivedTrades = (state.trades || []).length;
   state.managerHistory = (state.trades || []).slice(0, 100).map(function (t) { return { strategyId: t.strategyId, pnlSol: t.pnlSol, closedAt: t.closedAt }; });
   state.trades = [];
   state.riskResetAt = Date.now();
-  state.scoreboard = { epoch: epoch, since: new Date().toISOString(), build: BUILD, startBalance: state.balance, startEquity: equity(), archiveFile: archiveFile, tradesJsonlCopy: copied ? tradesCopy : null, archivedStateTrades: archivedTrades, archivedJsonlTrades: copied, legacyOpenCarried: (state.openPositions || []).length };
+  // t85u: a board started right after leftover closes begins 1 ms after the last close (never counts them).
+  const nowIso = (extra && extra.since) || new Date().toISOString();
+  // t85u: the closed epoch is kept (window + start/end equity) so /api/pnl?epoch=<old> still reconciles it.
+  if (prev && prev.epoch && prev.since) {
+    if (!Array.isArray(state.scoreboardHistory)) state.scoreboardHistory = [];
+    state.scoreboardHistory.push({ epoch: prev.epoch, since: prev.since, until: nowIso, startEquity: prev.startEquity, startBalance: prev.startBalance, endEquity: equity(), endBalance: state.balance, endMarkedEquity: markedEquityNow(), build: prev.build || null });
+  }
+  const carried = (state.openPositions || []).concat(books.ensure(state).open).map(function (p) { return { id: p.id, symbol: p.symbol, strategyId: p.strategyId || p.book, strategyVersion: p.strategyVersion || null, costBasisSol: p.book ? p.costBasisRemainingSol : p.sizeSol, entryTime: p.entryTime }; });
+  state.scoreboard = Object.assign({ epoch: epoch, since: nowIso, build: BUILD, startBalance: state.balance, startEquity: equity(), startMarkedEquity: markedEquityNow(), archiveFile: archiveFile, tradesJsonlCopy: copied ? tradesCopy : null, archivedStateTrades: archivedTrades, archivedJsonlTrades: copied, archivedBookTrades: books.ensure(state).trades.length, legacyOpenCarried: (state.openPositions || []).length, carriedOpen: carried, onlyStrategies: config.onlyStrategies || null }, extra || {});
   addActivity('SCOREBOARD reset (' + epoch + '): ' + archivedTrades + ' trades archived to ' + path.basename(archiveFile) + ', balance unchanged ' + Number(state.balance).toFixed(4));
   return state.scoreboard;
 }
-try { resetScoreboard(); } catch (e) { console.error('Scoreboard reset failed', e.message); }
+// t85u: an epoch with epochCloseout (runner-v2) first closes every open position of a strategy that is not
+// in config.onlyStrategies (paper close at a Jupiter sell quote, in the exit loop), then starts the board, so
+// the new board's equity change is the allowed strategies' P&L alone. Entries wait while it is pending.
+function leftovers() {
+  if (!Array.isArray(config.onlyStrategies)) return [];
+  const ok = function (p) { return config.onlyStrategies.indexOf(p.strategyId || p.book) >= 0; };
+  return (state.openPositions || []).filter(function (p) { return !ok(p); }).concat(books.ensure(state).open.filter(function (p) { return !ok(p); }));
+}
+function markedEquityNow() {
+  const c = config.costRoundtripPct || 1.1;
+  let un = 0;
+  for (const p of (state.openPositions || []).concat(books.ensure(state).open)) { const u = pnlMod.unrealisedOf(p, c); if (u != null) un += u; }
+  return equity() + un;
+}
+function startEpoch() {
+  const epoch = config.books.epoch;
+  if (state.scoreboard && state.scoreboard.epoch === epoch) { if (state.epochSwitch && state.epochSwitch.pending) state.epochSwitch.pending = false; return null; }
+  if (state.scoreboard && config.books.epochCloseout && leftovers().length) {
+    if (!state.epochSwitch || state.epochSwitch.to !== epoch) state.epochSwitch = { to: epoch, from: state.scoreboard.epoch, requestedAt: new Date().toISOString(), build: BUILD, pending: true, closes: [] };
+    state.epochSwitch.pending = true;
+    return null;
+  }
+  const sw = state.epochSwitch && state.epochSwitch.to === epoch ? state.epochSwitch : null;
+  const lastClose = sw ? sw.closes.reduce(function (a, c) { return Math.max(a, Date.parse(c.closedAt) || 0); }, 0) : 0;
+  const sinceIso = new Date(Math.max(Date.now(), lastClose + 1)).toISOString();
+  const sb = resetScoreboard(sw ? { since: sinceIso, leftoverCloses: sw.closes, switchRequestedAt: sw.requestedAt } : null);
+  if (sw) { sw.pending = false; sw.doneAt = sb ? sb.since : new Date().toISOString(); }
+  return sb;
+}
+async function closeLeftovers() {
+  const sw = state.epochSwitch;
+  if (!sw || !sw.pending) return 0;
+  let closed = 0;
+  for (const pos of leftovers()) {
+    const tr = pos.book ? await books.locked(function () { return books.closeNowInner(state, pos, 'epoch-close'); }) : await legacyExits.closeNow(state, pos, 'epoch-close');
+    if (tr) { closed++; sw.closes.push({ symbol: tr.symbol, strategyId: tr.strategyId, strategyVersion: tr.strategyVersion, sizeSol: tr.sizeSol, entryTime: tr.entryTime, closedAt: tr.closedAt, pnlSol: +Number(tr.pnlSol).toFixed(6), pnlPct: tr.pnlPct, source: 'jupiter-sell-quote' }); addActivity('EPOCH close ' + tr.symbol + ' (' + tr.strategyId + ') pnl ' + Number(tr.pnlSol).toFixed(5)); }
+  }
+  if (!leftovers().length) { const sb = startEpoch(); if (sb) addActivity('SCOREBOARD ' + sb.epoch + ' started at equity ' + Number(sb.startEquity).toFixed(4) + ' after ' + sw.closes.length + ' leftover closes'); }
+  return closed;
+}
+try { startEpoch(); } catch (e) { console.error('Scoreboard reset failed', e.message); }
 if (state.scoreboard) state.scoreboard.build = BUILD || state.scoreboard.build;
 
 const app = express();
@@ -276,6 +326,8 @@ async function tick() {
     // PR14 dashboard: legacy signals per strategy in the last scan (why an empty strategy is idle).
     state.lastLegacyScan = { at: new Date().toISOString(), pairs: pairs.length, signalsByStrategy: (result.signals || []).reduce(function (a, sg) { a[sg.strategyId] = (a[sg.strategyId] || 0) + 1; return a; }, {}) };
     result.signals = (result.signals || []).filter(function (sig) {
+      // t85u: only config.onlyStrategies may open (paused flags stay too); nothing opens while an epoch switch is pending.
+      if (!books.allowed(sig.strategyId) || (state.epochSwitch && state.epochSwitch.pending)) return false;
       const why = books.stockBlock(state, { mint: sig.mint, symbol: sig.symbol, name: sig.pair && sig.pair.name }, 'legacy');
       if (why) state.decisions.unshift(logDecision('SKIP', sig.symbol, 'stock-block: ' + why + ' (' + sig.strategyId + ')'));
       return !why;
@@ -474,7 +526,7 @@ app.get('/api/positions', function (req, res) {
 });
 app.get('/api/dashboard', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  try { const p = dashApi().payload(); try { p.pause = pauseView(); } catch (e) { p.pause = null; } try { p.bots = botsView(); } catch (e) { p.bots = { error: String(e.message || e) }; } res.json(p); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
+  try { const p = dashApi().payload(); try { p.pause = pauseView(); } catch (e) { p.pause = null; } try { const v = pnlView(); p.pnl = { epoch: v.window && v.window.epoch, since: v.window && v.window.since, startEquity: v.startEquity, startMarkedEquity: v.startMarkedEquity, equity: v.equity, equityChangeSol: v.equityChangeSol, realisedSol: v.realisedSol, unrealisedSol: v.unrealisedSol, markedEquity: v.markedEquity, markedChangeSol: v.markedChangeSol, residualSol: v.residualSol, reconciled: v.reconciled, byStrategy: v.byStrategy }; } catch (e) { p.pnl = null; } p.epochSwitch = state.epochSwitch || null; p.onlyStrategies = config.onlyStrategies || null; try { p.bots = botsView(); } catch (e) { p.bots = { error: String(e.message || e) }; } res.json(p); } catch (e) { console.error('dashboard payload', e); res.status(500).json({ error: String(e.message || e) }); }
 });
 // Equity curve: snapshots from equity.jsonl on the volume (1/min) plus the current live point.
 // ?hours=N (default 24, max 720) or ?since=scoreboard; ?max=N points (default 600).
@@ -494,6 +546,13 @@ function recordEquity() {
   try { const p = dashApi().snapshot(); equityLog.append(p); return p; } catch (e) { console.error('equity snapshot', e.message); return null; }
 }
 
+// t85u: realised + open P&L by strategy/book since the scoreboard start (?epoch=<closed epoch> for an older
+// window), from trades.jsonl + memory, reconciled against the equity change (residualSol ~ 0).
+function pnlView(epoch) { return pnlMod.report(state, config, { tradesFile: process.env.TRADES_FILE || path.join(path.dirname(process.env.STATE_FILE || './data/state.json'), 'trades.jsonl'), epoch: epoch }); }
+app.get('/api/pnl', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  try { res.json(Object.assign({ build: BUILD, liveTrading: false, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null }, pnlView(req.query.epoch))); } catch (e) { console.error('pnl view', e); res.status(500).json({ error: String(e.message || e) }); }
+});
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
   res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, pause: pauseView(), rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
@@ -501,7 +560,7 @@ app.get('/api/books', function (req, res) {
 
 app.get('/api/health', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, scoreboard: state.scoreboard || null, exitLoop: exitLoopView(), stopFills: stopFillsView().summary, fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
+  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null, exitLoop: exitLoopView(), stopFills: stopFillsView().summary, fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
 });
 
 function booksPayload() {
@@ -542,6 +601,7 @@ async function exitLoop() {
   exitLoopStats.lastPassStart = t0;
   let n = 0;
   try {
+    if (state.epochSwitch && state.epochSwitch.pending) { try { if (await closeLeftovers()) saveState(state); } catch (e) { exitLoopStats.lastError = 'epoch closeout: ' + String(e.message || e).slice(0, 100); } }
     n = books.ensure(state).open.length;
     const changed = await books.runExitsInner(state, exitLoopStats);
     n += await legacyExits.run(state, exitLoopStats);
@@ -594,7 +654,7 @@ function pauseView() {
   const rows = (config.books.list || []).map(function (b) { return { id: b.id, kind: 'book', name: b.name + ' v' + b.version, paused: !!b.paused, open: (bk.open || []).filter(function (p) { return p.book === b.id; }).length }; })
     .concat((config.strategies || []).map(function (s) { return { id: s.id, kind: 'legacy', name: s.name, paused: !!s.paused || (state.pausedIds || []).indexOf(s.id) >= 0, open: legacyOpen.filter(function (p) { return p.strategyId === s.id; }).length }; }));
   return { activeStrategies: rows.filter(function (r) { return !r.paused; }).map(function (r) { return r.id; }), pausedStrategies: rows.filter(function (r) { return r.paused; }).map(function (r) { return r.id; }),
-    strategies: rows, newPoolsFeed: newPoolsEnabled() ? 'on' : 'off (graduation sniper paused)', slotReserve: config.slotReserve || {},
+    strategies: rows, onlyStrategies: config.onlyStrategies || null, newPoolsFeed: newPoolsEnabled() ? 'on' : 'off (graduation sniper paused)', slotReserve: config.slotReserve || {},
     note: 'paused = no new entries; open positions are still marked and exited by the exit loop (Liviu t83u)' };
 }
 function botsView() {
@@ -657,4 +717,4 @@ if (require.main === module) app.listen(config.port, function () {
   setInterval(recordEquity, 60000);
 });
 
-module.exports = { app, pauseView, newPoolsEnabled, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };
+module.exports = { app, pnlView, startEpoch, closeLeftovers, leftovers, exitLoopOnce: function () { return exitLoop(); }, pauseView, newPoolsEnabled, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };

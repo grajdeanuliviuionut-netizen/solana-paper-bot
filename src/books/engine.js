@@ -139,6 +139,8 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   const nowFn = clock || Date.now;
   let chain = Promise.resolve();
   const locked = fn => { const p = chain.then(fn, fn); chain = p.catch(() => {}); return p; };
+  // t85u: config.onlyStrategies (allow-list) blocks every other book at entry, on top of the paused flags.
+  const allowed = id => !Array.isArray(config.onlyStrategies) || config.onlyStrategies.includes(id);
 
   function ensure(state) {
     if (!state.books || typeof state.books !== 'object') state.books = {};
@@ -238,7 +240,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     const b = ensure(state), t = nowFn(), out = [];
     const ctx = { now: t, snaps: b.snaps };
     for (const book of C.list) {
-      if (book.paused) continue;   // t83u: a paused book takes no new entries (its open positions still exit)
+      if (book.paused || !allowed(book.id)) continue;   // t83u/t85u: paused or not allowed -> no new entries (open positions still exit)
       const extra = (extraByBook && extraByBook[book.id]) || [];
       const seen = new Set((pairs || []).map(r => r && r.mint));
       const extraOnly = extra.filter(r => r && !seen.has(r.mint));
@@ -266,10 +268,11 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     return locked(async () => {
       const b = ensure(state);
       recordSnaps(state, pairs);
+      if (state.epochSwitch && state.epochSwitch.pending) { b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: {}, note: 'epoch switch pending: leftovers closing, no entries' }; return; }
       const sigs = signals(state, pairs, extraByBook, onExtraPass);
       // PR14 dashboard: candidates per book in the last scan (why an empty book is idle).
       const cand = {};
-      for (const bk of C.list) if (!bk.paused) cand[bk.id] = 0;
+      for (const bk of C.list) if (!bk.paused && allowed(bk.id)) cand[bk.id] = 0;
       for (const sg of sigs) cand[sg.book.id] = (cand[sg.book.id] || 0) + 1;
       b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: cand };
       let tried = 0;
@@ -464,7 +467,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const d = decideExit(pos, ex, pct, pos.peakPct, minsOpen);
       if (!d) continue;
       if (d.action === 'partial') {
-        const part = (BigInt(pos.tokensRaw) * BigInt(Math.round(d.sellPct * 100))) / 10000n;
+        const part = (BigInt(pos.tokensRaw) * BigInt(Math.round(d.sellPct * 10000))) / 1000000n;
         const pq = part > 0n ? await quotes.sellQuote(pos.mint, String(part)) : null;
         const t3 = nowFn();
         if (!pq || !quoteFresh(pq, t3, maxAge)) continue; // retry next pass
@@ -486,6 +489,17 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     }
     return changed;
   }
+  // t85u epoch switch: close one open book position now at a fresh Jupiter sell quote (paper close).
+  async function closeNowInner(state, pos, reason) {
+    const b = ensure(state);
+    if (!b.open.includes(pos)) return null;
+    const q = await quotes.sellQuote(pos.mint, pos.tokensRemainingRaw);
+    const t = nowFn();
+    if (!q || !q.ok || !quoteFresh(q, t, C.maxExitQuoteAgeSec || 10)) { pos.closeNowFailures = (pos.closeNowFailures || 0) + 1; return null; }
+    pos.markPct = +((Number(q.outAmount) / 1e9 / pos.costBasisRemainingSol - 1) * 100).toFixed(3);
+    bookLeg(state, pos, reason, pos.tokensRemainingRaw, q, t);
+    return closeTrade(state, pos, reason, t);
+  }
   function runExits(state, hooks) { return locked(() => runExitsInner(state, hooks)); }
 
   function report(state) {
@@ -497,11 +511,11 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const open = b.open.filter(x => x.book === book.id);
       const prevVers = [...new Set(all.map(x => x.bookVersion || 1).filter(v => v !== book.version))].sort();
       const previousVersions = prevVers.map(v => Object.assign({ label: book.id + ' v' + v, version: v }, bookStats(all.filter(x => (x.bookVersion || 1) === v), [], C.targetTrades)));
-      return Object.assign({ strategyId: book.id, name: book.name, version: book.version, label: label(book), paused: !!book.paused, status: book.paused ? 'paused' : 'active', sizeSol: C.sizeSol, stratSizeMult: 1, maxOpen: C.maxOpenPerBook, entry: book.entry, exit: book.exit },
+      return Object.assign({ strategyId: book.id, name: book.name, version: book.version, label: label(book), paused: !!book.paused || !allowed(book.id), status: (book.paused || !allowed(book.id)) ? 'paused' : 'active', sizeSol: C.sizeSol, stratSizeMult: 1, maxOpen: C.maxOpenPerBook, entry: book.entry, exit: book.exit },
         bookStats(trades, open, C.targetTrades),
         { open: open.map(p => ({ symbol: p.symbol, mint: p.mint, entryTime: p.entryTime, markPct: p.markPct, peakPct: p.peakPct, markSource: p.markSource, markAt: p.markAt, markAgeSec: p.markAt ? +((t - Date.parse(p.markAt)) / 1000).toFixed(1) : null, remainingFrac: p.remainingFrac, partialDone: p.partialDone })),
           firstEntries: trades.slice(-3).reverse().map(x => ({ symbol: x.symbol, entryTime: x.entryTime, exitReason: x.exitReason, pnlPct: x.pnlPct })).concat(open.slice(0, 2).map(p => ({ symbol: p.symbol, entryTime: p.entryTime, open: true }))),
-          rejects: b.rejects.byBook[book.id] || {}, previousVersions,
+          rejects: b.rejects.byBook[book.id] || {}, previousVersions, previousConfigs: book.previousVersions || [], allowed: allowed(book.id),
           v2: book.id === 'graduation-sniper' && b.gradSniper ? gradView(b.gradSniper) : undefined });
     });
   }
@@ -512,7 +526,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   }
   function lockedSol(state) { return ensure(state).open.reduce((a, p) => a + num(p.costBasisRemainingSol), 0); }
 
-  return { ensure, heldMint, rejectLegacy, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
+  return { ensure, heldMint, rejectLegacy, closeNowInner, allowed, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
 }
 
 module.exports = { makeBooks, entryFails, decideExit, quoteFresh, bookStats, high24Estimate, dropFromHighPct, m5VolumeVsHourAvg, isPumpOrigin, label };

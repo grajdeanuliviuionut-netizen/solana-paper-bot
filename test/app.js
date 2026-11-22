@@ -14,6 +14,8 @@ const config = require('../src/config');
 for (const s of config.strategies) s.paused = s.id === 'aggressive-flow';
 for (const b of config.books.list) b.paused = false;
 config.slotReserve = { 'dip-hold': 1 };
+config.onlyStrategies = null;            // t85u allow-list off for these behaviour tests (test/runner2.js covers the live set)
+config.books.epochCloseout = false;
 const { review, sizeFor } = require('../src/manager');
 const reentry = require('../src/reentry');
 const hb = require('../src/httpBackoff');
@@ -249,7 +251,11 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     // PR11 scoreboard reset: old trades archived on the volume, fresh board, same balance.
     assert.ok(j.pausedIds && j.reentryCooldowns);
     assert.strictEqual(j.legacyTrades.length, 0, 'fresh scoreboard');
-    assert.strictEqual(j.scoreboard.epoch, 'books-v1');
+    assert.strictEqual(j.scoreboard.epoch, config.books.epoch);
+    // t85u: /api/pnl answers with a reconciliation (residual ~0 on a fresh board)
+    const pn = JSON.parse((await get('/api/pnl')).body);
+    assert.ok(pn.window && pn.window.since && Array.isArray(pn.rows) && Array.isArray(pn.byStrategy), JSON.stringify(pn).slice(0, 300));
+    assert.ok(Math.abs(pn.residualSol) < 1e-6, 'residual ' + pn.residualSol);
     assert.ok(j.scoreboard.since && 'build' in j.scoreboard);
     const arch = JSON.parse(fs.readFileSync(j.scoreboard.archiveFile, 'utf8'));
     assert.strictEqual(arch.trades.length, 9, 'old trades archived, not destroyed');
@@ -291,7 +297,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     const ej = JSON.parse(eq.body);
     assert.ok(Array.isArray(ej.points) && ej.points.length >= 1, 'stored snapshot returned');
     assert.ok(ej.current && typeof ej.current.markEquity === 'number');
-    assert.strictEqual(ej.scoreboard.epoch, 'books-v1');
+    assert.strictEqual(ej.scoreboard.epoch, config.books.epoch);
     assert.ok(fs.existsSync(path.join(TMP, 'equity.jsonl')), 'equity.jsonl lives in the data dir (volume)');
     const db = await get('/api/dashboard');
     assert.strictEqual(db.status, 200);
@@ -317,7 +323,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
 (async () => {
   for (const [name, fn] of tests) {
     try { await fn(); passed++; console.log('ok  ', name); }
-    catch (e) { console.log('FAIL', name, '\n    ', e && e.stack ? e.stack.split('\n').slice(0, 3).join('\n     ') : e); }
+    catch (e) { console.log('FAIL', name, '\n    ', e && e.stack ? e.stack.split('\n').slice(0, 12).join('\n     ') : e); }
   }
   console.log(`${passed}/${tests.length} app tests passed`);
   process.exit(passed === tests.length ? 0 : 1);
