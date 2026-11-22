@@ -17,11 +17,16 @@ module.exports = {
   reentryCooldownMin: 45,       // no re-entry on the same token (mint / pool) for 45 min after any exit
   costRoundtripPct: 1.1,
   brokenGapPct: 15,
+  // t85u (Liviu 22 Nov 09:30, explicit): truly one strategy. Only these ids may open (books AND legacy), on top
+  // of the paused flags. Leftover positions of every other strategy are closed at a Jupiter sell quote before
+  // the runner-v2 board starts (books.epochCloseout).
+  onlyStrategies: ['runner-hunter'],
 
   // PR11 (Liviu t64u, 21 Nov): four aggressive PAPER books, side by side, same size, own capacity.
   // Fills and marks come only from Jupiter quotes (read-only quote API, never a swap).
   books: {
-    epoch: 'books-v1',            // scoreboard epoch: old trades archived on the volume, fresh board from here
+    epoch: 'runner-v2',           // t85u: fresh runner-hunter board (books-v1 since 21 Nov 18:42 London archived, kept in scoreboardHistory)
+    epochCloseout: true,          // t85u: close non-onlyStrategies leftovers (paper, Jupiter sell quote) before the board starts
     sizeSol: 0.05,                // SAME size per trade for every book (manager never cuts the books)
     maxOpenPerBook: 2,            // own capacity per book, separate from the legacy maxOpen 4
     targetTrades: 30,             // report each book after 30 trades
@@ -50,9 +55,16 @@ module.exports = {
           confirmDropPct: 50, confirmImpactPct: 50, confirmDelayMs: 4000, confirmProbeFrac: 0.1 }
       },
       {
-        id: 'runner-hunter', name: 'Runner hunter', version: 1,
+        // v2 (Liviu t85u, 22 Nov 09:30): at a 28% win rate a -12% stop with a +10% target cannot make money.
+        // Entry unchanged. Exits on Jupiter sell quotes in the exit loop (5 s): stop -6%, sell 1/3 at +8%, trail
+        // the remaining 2/3 8% below the highest mark since entry, max hold 4 h. 1.1% round trip pro rata per leg.
+        id: 'runner-hunter', name: 'Runner hunter', version: 2,
         entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },
-        exit: { stopLossPct: 12, partial: { atPct: 10, sellPct: 20 }, trailAfterPartial: true, trailPct: 15, maxHoldMinutes: 240 }
+        exit: { stopLossPct: 6, partial: { atPct: 8, sellPct: 33.3333 }, trailAfterPartial: true, trailPct: 8, maxHoldMinutes: 240 },
+        previousVersions: [
+          { version: 1, until: '2026-11-22', entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },
+            exit: { stopLossPct: 12, partial: { atPct: 10, sellPct: 20 }, trailAfterPartial: true, trailPct: 15, maxHoldMinutes: 240 } }
+        ]
       },
       {
         id: 'volume-explosion', name: 'Volume explosion', version: 1, paused: true,   // t83u
