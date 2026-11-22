@@ -14,6 +14,9 @@ const { classifyBlocked } = require('./blocklist');
 const stopFills = require('../stopFills');
 const { heldMint, REASON: REASON_SAME_MINT } = require('./sameMint');
 const m15Mod = require('./m15');
+const execMod = require('./executor');
+// t89u: stop-loss style exits (the -6% stop and the breakeven stop at entry) for penalties, cooldowns and logs.
+const isStopExit = r => stopFills.isStop(r) || r === 'breakeven';
 
 const MIN = 60000;
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -120,6 +123,16 @@ function signalFields(book, row, ctx) {
 // the 1.1% cost, which is charged inside pnlSol). Returns null | { action: 'close'|'partial', reason, sellPct }.
 function decideExit(pos, ex, pct, peakPct, minsOpen) {
   if (pct <= -ex.stopLossPct) return { action: 'close', reason: 'sl' };
+  if (ex.breakevenAtPct != null) {
+    // t89u v4: once +4% was reached the stop moves to entry (0%) and a 3% trail below the peak is armed;
+    // not +4% within 15 min -> exit at market; 30 min max hold.
+    const armed4 = peakPct >= ex.breakevenAtPct;
+    if (armed4 && pct <= 0) return { action: 'close', reason: 'breakeven' };
+    if (ex.trailAfterPct != null && peakPct >= ex.trailAfterPct && ex.trailPct && (1 + pct / 100) <= (1 + peakPct / 100) * (1 - ex.trailPct / 100)) return { action: 'close', reason: 'trail' };
+    if (ex.momentum && !armed4 && minsOpen >= ex.momentum.withinMinutes && peakPct < ex.momentum.minPct) return { action: 'close', reason: 'no-momentum' };
+    if (minsOpen >= ex.maxHoldMinutes) return { action: 'close', reason: 'time' };
+    return null;
+  }
   if (ex.takeProfitPct != null && pct >= ex.takeProfitPct) return { action: 'close', reason: 'tp' };
   if (ex.partial && !pos.partialDone && pct >= ex.partial.atPct) return { action: 'partial', reason: 'partial-tp', sellPct: ex.partial.sellPct };
   const armed = ex.trailAfterPartial ? !!pos.partialDone : (ex.trailAfterPct != null && peakPct >= ex.trailAfterPct);
@@ -150,7 +163,9 @@ function bookStats(trades, open, target) {
 }
 
 // ---------- runtime ----------
-function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15 }) {
+function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15, fees, sendPath, random }) {
+  const send = sendPath || execMod.makeSendPath();
+  const feeNow = (t, acct) => (fees ? fees.current(t, acct) : { microLamports: 0, sol: 0, fallback: true, lamports: 0 });
   const sleepFn = sleep || (ms => new Promise(r => setTimeout(r, ms)));
   let curV2 = null;   // grad sniper v2: checks gathered for the candidate being evaluated (logged on reject/entry)
   const C = config.books;
@@ -171,6 +186,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     if (!b.entries) b.entries = { attempts: 0, opened: 0 };
     if (!b.ticks) b.ticks = {};
     if (!b.entryFilters) b.entryFilters = {};
+    if (!b.executor) b.executor = { slippageAborts: 0, exitSlippageExceeded: 0, recentAborts: [], recentExceeded: [] };
     const gb = C.list.find(x => x.id === 'graduation-sniper');
     if (gb && (!b.gradSniper || b.gradSniper.version !== gb.version)) {
       b.gradSniper = { label: label(gb), version: gb.version, since: new Date(nowFn()).toISOString(), candidates: 0, candidateMints: [],
@@ -193,6 +209,19 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     const f = filterStats(state, book), k = filterKey(reason);
     f.byFilter[k] = (f.byFilter[k] || 0) + 1;
     if (f.lastScan) f.lastScan.byFilter[k] = (f.lastScan.byFilter[k] || 0) + 1;
+  }
+  // t89u Rug Check agent: hard gates (fail closed); a definite fail blacklists the mint for this epoch.
+  function rugState(state) {
+    const b = ensure(state), ep = (state.scoreboard && state.scoreboard.epoch) || null;
+    if (!b.rug || b.rug.epoch !== ep) b.rug = { epoch: ep, since: new Date(nowFn()).toISOString(), checks: 0, passed: 0, failed: 0, unavailable: 0, byReason: {}, blacklist: {} };
+    return b.rug;
+  }
+  function rugFail(state, book, row, reason, detail) {
+    const r = rugState(state);
+    r.failed++; r.byReason[reason] = (r.byReason[reason] || 0) + 1;
+    r.blacklist[row.mint] = { at: new Date(nowFn()).toISOString(), symbol: row.symbol, pairAddress: row.pairAddress, reason, detail: detail == null ? null : detail };
+    countFilter(state, book, 'rug:' + reason);
+    reject(state, book, row, 'Rug Check: ' + reason + (detail != null ? ' (' + detail + ')' : '') + ' -> blacklisted');
   }
   // t86u guardrail: N consecutive losing closes of a book -> no new entries for M minutes, then auto-resume.
   function guard(state) {
@@ -291,6 +320,8 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     const ctx = { now: t, snaps: b.snaps, ticks: b.ticks };
     for (const book of C.list) {
       if (book.paused || !allowed(book.id)) continue;   // t83u/t85u: paused or not allowed -> no new entries (open positions still exit)
+      // t89u: loss-streak pause stops scanning for this book too (exits keep running).
+      if (book.entry && book.entry.lossStreakPause && book.entry.lossStreakPause.pauseScanning && lossPaused(state, book.id, t)) { countFilter(state, book, 'lossStreakPause'); continue; }
       const extra = (extraByBook && extraByBook[book.id]) || [];
       const seen = new Set((pairs || []).map(r => r && r.mint));
       const extraOnly = extra.filter(r => r && !seen.has(r.mint));
@@ -321,6 +352,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     return locked(async () => {
       const b = ensure(state);
       recordSnaps(state, pairs);
+      if (state.halt && state.halt.halted) { b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: {}, note: 'HALTED (' + (state.halt.reason || 'equity drawdown') + '): no new trading until a manual restart' }; return; }
       if (state.epochSwitch && state.epochSwitch.pending) { b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: {}, note: 'epoch switch pending: leftovers closing, no entries' }; return; }
       const sigs = signals(state, pairs, extraByBook, onExtraPass);
       let gtBudget = C.m15GtPerScan || 6;   // t86u: at most 6 GeckoTerminal m15 lookups per scan (keeps the scan short)
@@ -338,6 +370,12 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (openHere.length >= C.maxOpenPerBook) continue;                  // capacity: not a reject
         const lp = book.entry && book.entry.lossStreakPause ? lossPaused(state, book.id, t) : null;
         if (lp) { countFilter(state, book, 'lossStreakPause'); continue; }   // t86u guardrail: paused after N losses in a row
+        const RC = book.entry && book.entry.rugCheck;
+        if (RC) {
+          const bl = rugState(state).blacklist[row.mint];
+          if (bl) { countFilter(state, book, 'rugBlacklisted'); continue; }
+          if (!(num(row.liquidityUsd) > RC.minLiquidityUsd)) { rugState(state).checks++; rugFail(state, book, row, 'liquidity <= $' + RC.minLiquidityUsd, Math.round(num(row.liquidityUsd))); continue; }
+        }
         if (book.entry && book.entry.stopCooldownHours) {
           const sc = stopCooldown(state, row, t);
           if (sc) { countFilter(state, book, 'stopCooldown24h'); reject(state, book, row, 'stopCooldown24h', { until: sc.until }); continue; }
@@ -366,13 +404,21 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         }
         const rug = await mintAuth.check(row.mint);
         const rugCheck = { pass: rug.pass, reason: rug.reason, mintAuthority: rug.mintAuthority === undefined ? null : rug.mintAuthority, freezeAuthority: rug.freezeAuthority === undefined ? null : rug.freezeAuthority, program: rug.program || null, decimals: rug.decimals, checkedAt: rug.checkedAt, source: rug.source };
+        if (RC) {
+          rugState(state).checks++;
+          if (!rug.pass && /^missing-data/.test(String(rug.reason))) { rugState(state).unavailable++; countFilter(state, book, 'rugUnavailable'); reject(state, book, row, 'Rug Check unavailable: ' + rug.reason + ' (fail closed, not blacklisted)'); continue; }
+          if (!rug.pass) { rugFail(state, book, row, rug.reason); continue; }
+        }
         if (!rug.pass) { reject(state, book, row, 'rug-check: ' + rug.reason); continue; }
         const E = book.entry || {};
         // t86u v3: top-10 holders (Solana RPC largest accounts, pool/AMM/burn excluded), fail closed.
         if (E.maxTop10Pct != null && E.maxLiquidityUsd != null) {
           const tt = top10 ? await top10.check(row.mint, row.pairAddress, nowFn()) : { ok: false, reason: 'top10: no checker configured' };
+          if (!tt.ok && RC) rugState(state).unavailable++;
           if (!tt.ok) { countFilter(state, book, 'top10Unavailable'); reject(state, book, row, 'top10: unavailable (' + (tt.reason || 'error') + ')'); continue; }
           Object.assign(fields, { top10Pct: tt.top10Pct, top10MaxHolderPct: tt.maxHolderPct, top10ExcludedPct: tt.excludedPct });
+          if (RC && tt.top10Pct > RC.maxTop10Pct) { rugFail(state, book, row, 'top10 > ' + RC.maxTop10Pct + '%', +tt.top10Pct.toFixed(2)); continue; }
+          if (RC) rugState(state).passed++;
           if (tt.top10Pct > E.maxTop10Pct) { countFilter(state, book, 'top10'); reject(state, book, row, 'top10: ' + tt.top10Pct.toFixed(1) + '% > ' + E.maxTop10Pct + '%'); continue; }
         }
         let holder = null;
@@ -399,6 +445,18 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         const fillSolPerToken = C.sizeSol / tokensUi;
         const quoteGapPct = row.priceNative > 0 ? (fillSolPerToken / row.priceNative - 1) * 100 : null;
         if (quoteGapPct != null && quoteGapPct > C.maxQuoteGapPct) { reject(state, book, row, 'Jupiter fill ' + quoteGapPct.toFixed(1) + '% over DexScreener price'); continue; }
+        // t89u Executor: hard slippage limit on entries (Jupiter impact or fill vs DexScreener reference).
+        const slipPct = execMod.entrySlippagePct(buy, quoteGapPct);
+        if (E.maxSlippageBps != null && slipPct > E.maxSlippageBps / 100) {
+          b.executor.slippageAborts++;
+          b.executor.recentAborts = [{ at: new Date(t2).toISOString(), symbol: row.symbol, mint: row.mint, slippagePct: +slipPct.toFixed(3), priceImpactPct: buy.priceImpactPct, quoteGapPct: quoteGapPct == null ? null : +quoteGapPct.toFixed(3), limitBps: E.maxSlippageBps }].concat(b.executor.recentAborts).slice(0, 20);
+          countFilter(state, book, 'slippageAbort');
+          reject(state, book, row, 'Slippage Abort: ' + slipPct.toFixed(2) + '% > ' + (E.maxSlippageBps / 100) + '%');
+          continue;
+        }
+        const CM = book.exit && book.exit.costModel;
+        let sim = null;
+        if (CM) { const pf = fees && fees.forAccount ? await fees.forAccount(row.pairAddress, nowFn()) : feeNow(t2, row.pairAddress); sim = execMod.simBuy({ sizeSol: C.sizeSol, quoteOutRaw: buy.outAmount, cm: CM, fee: pf, random }); await send.submit({ side: 'buy', mint: row.mint, sizeSol: C.sizeSol, quote: buy }); }
         const at = new Date(t2).toISOString();
         const pos = {
           id: 'bk-' + t2 + '-' + Math.random().toString(36).slice(2, 7),
@@ -410,9 +468,21 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           entryQuote: { side: 'buy', inMint: 'SOL', inAmount: buy.inAmount, outAmount: buy.outAmount, priceImpactPct: buy.priceImpactPct, route: buy.route, at: new Date(buy.at).toISOString() },
           entrySellCheck: { inAmount: sell.inAmount, outAmount: sell.outAmount, priceImpactPct: sell.priceImpactPct, roundTripPct: +roundTripPct.toFixed(3), at: new Date(sell.at).toISOString() },
           entrySignal: fields, rugCheck, holderCheck: holder, exit: book.exit,
+          entrySlippagePct: +slipPct.toFixed(3), maxSlippageBps: E.maxSlippageBps == null ? null : E.maxSlippageBps,
           markPct: +roundTripPct.toFixed(3), peakPct: +roundTripPct.toFixed(3), markSource: 'jupiter-sell-quote', markAt: new Date(sell.at).toISOString(),
           legs: [], partialDone: false, noRouteSince: null
         };
+        if (sim) {
+          // t89u paper realism: the position holds the tokens left after the simulated adverse slippage.
+          pos.tokensRaw = sim.tokensRaw; pos.tokensRemainingRaw = sim.tokensRaw;
+          pos.entryQuoteFillPrice = fillSolPerToken;
+          pos.entryPrice = C.sizeSol / (Number(sim.tokensRaw) / 10 ** rug.decimals);
+          pos.entryPriceUnit = 'SOL/token (simulated fill: Jupiter quote - ' + sim.costs.simSlipPct + '%)';
+          pos.entryCosts = sim.costs; pos.costModel = 'v4';
+          const rt = ((Number(sell.outAmount) * (1 - sim.costs.simSlipPct / 100)) / lamportsIn - 1) * 100;
+          pos.markPct = +rt.toFixed(3); pos.peakPct = pos.markPct;
+          if (RC) pos.rugCheckV4 = { pass: true, liquidityUsd: row.liquidityUsd, mintRevoked: true, freezeRevoked: true, top10Pct: fields.top10Pct == null ? null : fields.top10Pct, limits: RC };
+        }
         // Re-check after the awaits above (quotes): never push a second holding of the same mint.
         const heldLate = heldMint(state, row);
         if (heldLate) { sameMintCount(state, book.id); reject(state, book, row, REASON_SAME_MINT, { detail: heldLate.detail, heldBy: heldLate.heldBy, late: true }); continue; }
@@ -446,7 +516,15 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     reentry.recordExit(state, trade, config, t);
     const live = C.list.find(x => x.id === pos.book);
     const LE = (live && live.entry) || {};
-    if (LE.stopCooldownHours && stopFills.isStop(reason)) {
+    if (pos.costModel === 'v4') {
+      const sum = k => +pos.legs.reduce((a, l) => a + num(l.costs && l.costs[k]), 0).toFixed(9);
+      const ec = pos.entryCosts || {};
+      trade.costPctRoundTrip = null;
+      trade.costs = { model: 'v4', doc: execMod.COST_MODEL_DOC, entry: ec, quoteFillSol: sum('quoteFillSol'), simFillSol: sum('simFillSol'), simSlipSol: sum('simSlipSol'), stopPenaltySol: sum('stopPenaltySol'),
+        feeSol: +(num(ec.feeSol) + sum('feeSol')).toFixed(9), priorityFeeSol: +(num(ec.priorityFeeSol) + sum('priorityFeeSol')).toFixed(9), slippageExceeded: pos.legs.some(l => l.slippageExceeded) };
+      trade.quoteFillPnlSol = +(trade.costs.quoteFillSol - pos.sizeSol).toFixed(9);
+    }
+    if (LE.stopCooldownHours && isStopExit(reason)) {
       // t86u: no re-buy of a coin for 24 h after it stops out (mint and pool), persisted in state.
       const m = state.stopCooldowns || (state.stopCooldowns = {});
       const until = new Date(t + LE.stopCooldownHours * 3600000).toISOString();
@@ -472,11 +550,29 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   function bookLeg(state, pos, reason, tokensRaw, q, t) {
     const frac = Number(BigInt(tokensRaw)) / Number(BigInt(pos.tokensRaw));
     const basis = pos.sizeSol * frac;
-    const solOut = q ? Number(q.outAmount) / 1e9 : 0;
-    const cost = basis * (config.costRoundtripPct / 100);
+    let solOut = q ? Number(q.outAmount) / 1e9 : 0;
+    let cost = basis * (config.costRoundtripPct / 100);
+    let costs = null, exceeded = false;
+    if (pos.costModel === 'v4' && pos.exit && pos.exit.costModel) {
+      // t89u: paper fill realism replaces the flat 1.1% (entry fee + entry priority fee booked pro rata per leg).
+      const ec = pos.entryCosts || {};
+      const entryPart = frac * (num(ec.feeSol) + num(ec.priorityFeeSol));
+      if (q) {
+        const sim = execMod.simSell({ quoteOutLamports: q.outAmount, cm: pos.exit.costModel, isStopLoss: isStopExit(reason), fee: feeNow(t, pos.pairAddress), random });
+        solOut = sim.solOut; costs = sim.costs;
+        cost = entryPart + sim.costs.feeSol + sim.costs.priorityFeeSol;
+        // Exits are never aborted: over the slippage limit the leg is still sold and flagged.
+        if (pos.maxSlippageBps != null && Number(q.priceImpactPct) > pos.maxSlippageBps / 100) {
+          exceeded = true; const ex = ensure(state).executor; ex.exitSlippageExceeded++;
+          ex.recentExceeded = [{ at: new Date(t).toISOString(), symbol: pos.symbol, reason, priceImpactPct: q.priceImpactPct, limitBps: pos.maxSlippageBps }].concat(ex.recentExceeded).slice(0, 20);
+        }
+        send.submit({ side: 'sell', mint: pos.mint, reason, quote: q }).catch(() => {});
+      } else { cost = entryPart; costs = { side: 'sell', totalLoss: true }; }
+    }
     const leg = { reason, at: new Date(t).toISOString(), sellPctOfOriginal: +(frac * 100).toFixed(3), tokensRaw: String(tokensRaw), basisSol: +basis.toFixed(9), solOut: +solOut.toFixed(9), costSol: +cost.toFixed(9),
       pnlSol: +(solOut - basis - cost).toFixed(9), fillSolPerToken: tokensRaw === '0' ? 0 : solOut / (Number(tokensRaw) / 10 ** pos.decimals),
       quote: q ? { side: 'sell', inAmount: q.inAmount, outAmount: q.outAmount, outMint: 'SOL', priceImpactPct: q.priceImpactPct, route: q.route, at: new Date(q.at).toISOString(), ageSec: +((t - q.at) / 1000).toFixed(1) } : { totalLoss: true } };
+    if (costs) { leg.costs = costs; leg.slippageExceeded = exceeded; }
     pos.legs.push(leg);
     state.balance += solOut - cost;
     const left = BigInt(pos.tokensRemainingRaw) - BigInt(tokensRaw);
@@ -574,11 +670,13 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         continue;
       }
       bookLeg(state, pos, d.reason, pos.tokensRemainingRaw, q, t);
-      if (stopFills.isStop(d.reason)) {
+      if (isStopExit(d.reason)) {
         const netPct = (pos.legs.reduce((a, l) => a + l.pnlSol, 0) / pos.sizeSol) * 100;
-        pos.stopFill = stopFills.record(state, stopFills.build({ pos, strategyId: pos.book, strategyVersion: pos.strategyVersion, stopLevelPct: ex.stopLossPct, entryPriceSolPerToken: pos.entryPrice,
+        pos.stopFill = stopFills.record(state, stopFills.build({ pos, strategyId: pos.book, strategyVersion: pos.strategyVersion, stopLevelPct: d.reason === 'breakeven' ? 0 : ex.stopLossPct, entryPriceSolPerToken: pos.entryPrice,
           prevCheck, fill: { price, pct, quoteAgeSec: (t - q.at) / 1000, priceImpactPct: q.priceImpactPct }, netPnlPct: netPct,
           liquidityUsd: pos.lastLiquidityUsd != null ? pos.lastLiquidityUsd : (pos.entrySignal && pos.entrySignal.liquidityUsd), now: t }));
+        const lg = pos.legs[pos.legs.length - 1];
+        if (lg && lg.costs && lg.costs.simFillSol != null) Object.assign(pos.stopFill, { stopType: d.reason, quoteFillPct: +pct.toFixed(3), simFillPct: +((lg.costs.simFillSol / lg.basisSol - 1) * 100).toFixed(3), simSlipPct: lg.costs.simSlipPct, stopPenaltyPct: lg.costs.stopPenaltyPct, slippageExceeded: lg.slippageExceeded });
         if (confirm) Object.assign(pos.stopFill, { firstQuote: confirm.firstQuote, confirmQuote: confirm.confirmQuote, probeQuote: confirm.probeQuote, confirmed: confirm.confirmed });
       }
       if (confirm) pos.exitConfirm = confirm;
@@ -615,6 +713,8 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           rejects: b.rejects.byBook[book.id] || {}, previousVersions, previousConfigs: book.previousVersions || [], allowed: allowed(book.id),
           epochStats: state.scoreboard && state.scoreboard.since ? bookStats(all.filter(x => Date.parse(x.closedAt) >= Date.parse(state.scoreboard.since)), open, C.targetTrades) : null,
           entryFilters: b.entryFilters[book.id] || null,
+          rugCheck: book.entry && book.entry.rugCheck ? Object.assign({ limits: book.entry.rugCheck }, (() => { const r = rugState(state); return { epoch: r.epoch, checks: r.checks, passed: r.passed, failed: r.failed, unavailable: r.unavailable, byReason: r.byReason, blacklisted: Object.keys(r.blacklist).length }; })()) : null,
+          executor: book.entry && book.entry.maxSlippageBps != null ? { maxSlippageBps: book.entry.maxSlippageBps, slippageAborts: b.executor.slippageAborts, exitSlippageExceeded: b.executor.exitSlippageExceeded, sendPath: send.mode, jito: { enabled: false, note: send.paths.jito.note }, priorityFee: fees && fees.stats ? fees.stats.last : null, costModel: book.exit && book.exit.costModel ? execMod.COST_MODEL_DOC : null } : null,
           guardrail: book.entry && book.entry.lossStreakPause ? { lossStreak: guard(state).streak[book.id] || 0, losses: book.entry.lossStreakPause.losses, pauseMinutes: book.entry.lossStreakPause.minutes, pausedUntil: lossPaused(state, book.id, t) } : null,
           v2: book.id === 'graduation-sniper' && b.gradSniper ? gradView(b.gradSniper) : undefined });
     });
@@ -626,7 +726,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   }
   function lockedSol(state) { return ensure(state).open.reduce((a, p) => a + num(p.costBasisRemainingSol), 0); }
 
-  return { ensure, heldMint, rejectLegacy, closeNowInner, allowed, guard, lossPaused, filterStats, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
+  return { ensure, heldMint, rejectLegacy, closeNowInner, allowed, guard, lossPaused, filterStats, rugState, send, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
 }
 
 module.exports = { makeBooks, entryFails, decideExit, quoteFresh, bookStats, high24Estimate, dropFromHighPct, m5VolumeVsHourAvg, isPumpOrigin, label };

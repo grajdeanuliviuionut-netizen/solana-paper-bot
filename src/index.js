@@ -44,6 +44,7 @@ const booksLimiter = new Limiter({
     jupiter: { minGapMs: 1100, maxRetries: 1, cooldownMs: 20000 },   // <= ~55 requests/min (lite-api free 60/min)
     rpc: { minGapMs: 400, maxRetries: 1, cooldownMs: 30000 },
     top10rpc: { minGapMs: 1200, maxRetries: 0, cooldownMs: 60000 }, // t86u runner v3 top-10 holders (getTokenSupply/LargestAccounts/MultipleAccounts)
+    feerpc: { minGapMs: 2000, maxRetries: 0, cooldownMs: 60000 },    // t89u getRecentPrioritizationFees (read-only), cached 45 s
     gecko: { minGapMs: 2500, maxRetries: 0, cooldownMs: 600000 },     // t86u runner v3 m15 fallback: GeckoTerminal 1m OHLCV, no retries, 10 min pause on 429
     rugcheck: { minGapMs: 3000, maxRetries: 0, cooldownMs: 600000 }   // grad sniper v2: free RugCheck report, no retries, 10 min pause on 429
   },
@@ -73,8 +74,12 @@ console.log('Re-entry cooldowns seeded from closed trades: ' + reentry.seed(stat
 const top10 = require('./books/top10').makeTop10(booksLimiter);
 const m15 = require('./books/m15').makeM15(booksLimiter);
 const improver = require('./improver');
+const execMod = require('./books/executor');
+const haltMod = require('./halt');
+const fees = execMod.makePriorityFee(booksLimiter, { cuLimit: 200000 });
+const sendPath = execMod.makeSendPath();
 const books = makeBooks({
-  config, quotes, mintAuth, reentry, holderCheck, top10, m15,
+  config, quotes, mintAuth, reentry, holderCheck, top10, m15, fees, sendPath,
   log: function (type, symbol, reason) {
     state.decisions.unshift(logDecision(type, symbol, reason));
     if (type !== 'SKIP') addActivity(type + ' ' + symbol + ' ' + reason);
@@ -85,6 +90,8 @@ books.ensure(state);
 // t86u Manager loop: re-apply the manager's last runner-hunter version if it was built on this code version.
 const RH = (config.books.list || []).find(function (b) { return b.id === 'runner-hunter'; });
 const RH_BASE = RH ? RH.version : null;
+// t89u: a halt is cleared at boot only by env HALT_CLEAR_ID equal to the persisted halt id (set by Liviu).
+try { if (haltMod.isHalted(state) && process.env.HALT_CLEAR_ID && process.env.HALT_CLEAR_ID === state.halt.id) { haltMod.clear(state, 'env HALT_CLEAR_ID', Date.now()); console.log('Halt ' + state.halt.id + ' cleared by HALT_CLEAR_ID'); } } catch (e) { console.error('halt clear', e.message); }
 try { if (config.manager && config.manager.enabled && improver.restore(state, RH, RH_BASE)) console.log('Manager: runner-hunter v' + RH.version + ' restored'); } catch (e) { console.error('manager restore', e.message); }
 
 // PR11 scoreboard reset (once per epoch): the old trades are archived on the volume (state copy +
@@ -200,6 +207,7 @@ function skipSummary(rejections) {
 }
 
 function canOpen() {
+  if (haltMod.isHalted(state)) { state.blockReason = 'HALTED: ' + (state.halt.reason || 'equity drawdown'); return false; }
   if (equity() < config.fullStopBalance) { state.blockReason = 'equity under 2.5'; return false; }
   if ((state.openPositions || []).length >= config.maxOpen) { state.blockReason = 'slots full'; return false; }
   if (state.coolUntil && Date.now() < state.coolUntil) { state.blockReason = 'cooldown'; return false; }
@@ -552,8 +560,43 @@ app.get('/api/equity', function (req, res) {
   res.json({ build: BUILD, intervalSec: 60, file: path.basename(equityLog.FILE), since: new Date(sinceMs).toISOString(), scoreboard: sb ? { epoch: sb.epoch, since: sb.since, startEquity: sb.startEquity, startBalance: sb.startBalance } : null, storedPoints: raw.length, points: equityLog.downsample(raw, max), current });
 });
 function recordEquity() {
-  try { const p = dashApi().snapshot(); equityLog.append(p); return p; } catch (e) { console.error('equity snapshot', e.message); return null; }
+  let p = null;
+  try { p = dashApi().snapshot(); equityLog.append(p); } catch (e) { console.error('equity snapshot', e.message); }
+  try { haltCheck(p); } catch (e) { console.error('halt check', e.message); }
+  return p;
 }
+// t89u Manager hard halt: equity -5% within any rolling 24 h (equity.jsonl, every epoch) -> persisted halt.
+function haltCheck(current) {
+  const H = config.halt;
+  if (!H || !H.enabled) return null;
+  const now = Date.now();
+  const pts = equityLog.read(now - H.windowHours * 3600000).concat(current ? [current] : []);
+  const r = haltMod.check(state, pts, now, H);
+  if (r.triggered) {
+    addActivity('HALT ' + state.halt.reason + ': all new trading stopped; open positions keep exiting; manual restart required');
+    state.decisions.unshift(logDecision('HALT', '-', state.halt.reason));
+    saveState(state);
+  }
+  return r;
+}
+function haltView() {
+  const H = config.halt || {};
+  return { enabled: !!H.enabled, limitPct: H.dropPct || null, windowHours: H.windowHours || null, halted: haltMod.isHalted(state), halt: state.halt || null, lastCheck: state.haltLastCheck || null,
+    adminTokenConfigured: haltMod.tokenOk('', process.env) !== null,
+    howToClear: 'POST /api/admin/halt/clear with header x-admin-token: <ADMIN_TOKEN or KILL_TOKEN> (if set, >= 16 chars), or set env HALT_CLEAR_ID=<halt.id> and redeploy. Never auto-cleared.' };
+}
+// Manual restart after a halt (authenticated). Paper only: it only re-allows new paper entries.
+app.post('/api/admin/halt/clear', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  const ok = haltMod.tokenOk(req.get('x-admin-token'), process.env);
+  if (ok === null) return res.status(503).json({ ok: false, error: 'no ADMIN_TOKEN/KILL_TOKEN configured: use env HALT_CLEAR_ID=<halt.id> + redeploy' });
+  if (!ok) return res.status(401).json({ ok: false, error: 'bad token' });
+  if (!haltMod.isHalted(state)) return res.json({ ok: true, halted: false, note: 'not halted' });
+  haltMod.clear(state, 'admin POST', Date.now());
+  addActivity('HALT cleared by an authenticated admin action');
+  saveState(state);
+  res.json({ ok: true, halted: false, halt: state.halt });
+});
 
 // t85u: realised + open P&L by strategy/book since the scoreboard start (?epoch=<closed epoch> for an older
 // window), from trades.jsonl + memory, reconciled against the equity change (residualSol ~ 0).
@@ -578,8 +621,12 @@ function managerView(compact) {
     guardrail: RH && RH.entry && RH.entry.lossStreakPause ? { lossStreak: g.streak['runner-hunter'] || 0, losses: RH.entry.lossStreakPause.losses, pauseMinutes: RH.entry.lossStreakPause.minutes, pausedUntil: books.lossPaused(state, 'runner-hunter', now), pauses: g.pauses.slice(0, compact ? 3 : 30) } : null,
     stopCooldowns: { hours: RH && RH.entry ? RH.entry.stopCooldownHours || null : null, active: activeSc.length, list: compact ? undefined : activeSc },
     entryFilters: bk.entryFilters['runner-hunter'] || null,
+    halt: haltView(),
+    executor: (function () { const ex = bk.executor || {}; const E = (RH && RH.entry) || {}; return { maxSlippageBps: E.maxSlippageBps == null ? null : E.maxSlippageBps, slippageAborts: ex.slippageAborts || 0, exitSlippageExceeded: ex.exitSlippageExceeded || 0, recentAborts: (ex.recentAborts || []).slice(0, compact ? 3 : 20), recentExceeded: (ex.recentExceeded || []).slice(0, compact ? 3 : 20), priorityFee: fees.stats.last ? fees.current(Date.now(), fees.stats.last.account === 'global' ? '' : fees.stats.last.account) : null, priorityFeeStats: compact ? undefined : fees.stats, sendPath: 'paper', jito: { enabled: false, note: sendPath.paths.jito.note }, exitPolicy: 'exits are never aborted on slippage: the leg is sold and flagged slippageExceeded' }; })(),
+    rugCheck: RH && RH.entry && RH.entry.rugCheck ? (function () { const r = books.rugState(state); return { limits: RH.entry.rugCheck, epoch: r.epoch, checks: r.checks, passed: r.passed, failed: r.failed, unavailable: r.unavailable, byReason: r.byReason, blacklisted: Object.keys(r.blacklist).length, blacklist: compact ? undefined : r.blacklist, note: 'a definite fail blacklists the mint for this epoch; RPC/data errors reject (fail closed) without blacklisting' }; })() : null,
+    costModel: RH && RH.exit && RH.exit.costModel ? { config: RH.exit.costModel, doc: execMod.COST_MODEL_DOC } : null,
     log: (m.log || []).slice(0, compact ? 5 : 200), reports: compact ? (m.reports || []).slice(-3) : (m.reports || []) };
-  if (!compact) Object.assign(v, { bounds: improver.BOUNDS, rules: improver.RULES, top10: Object.assign({}, top10.stats), m15: Object.assign({}, m15.stats), previousVersions: RH ? RH.previousVersions || [] : [],
+  if (!compact) Object.assign(v, { bounds: improver.isV4(RH) ? improver.BOUNDS_V4 : improver.BOUNDS, rules: improver.isV4(RH) ? improver.RULES_V4 : improver.RULES, hardCeilings: improver.isV4(RH) ? improver.HARD_V4 : null, top10: Object.assign({}, top10.stats), m15: Object.assign({}, m15.stats), previousVersions: RH ? RH.previousVersions || [] : [],
     note: 'Paper only. The Manager changes only whitelisted runner-hunter knobs inside these bounds; never size, wallets, keys or LIVE_TRADING.' });
   return v;
 }
@@ -589,7 +636,7 @@ app.get('/api/manager', function (req, res) {
 });
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, pause: pauseView(), rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
+  res.json({ build: BUILD, halt: haltView(), scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, pause: pauseView(), rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
 });
 
 app.get('/api/health', function (req, res) {
@@ -696,6 +743,7 @@ function pauseView() {
   return { activeStrategies: rows.filter(function (r) { return !r.paused; }).map(function (r) { return r.id; }), pausedStrategies: rows.filter(function (r) { return r.paused; }).map(function (r) { return r.id; }),
     strategies: rows, onlyStrategies: config.onlyStrategies || null,
     guardrail: (function () { try { return managerView(true).guardrail; } catch (e) { return null; } })(),
+    halt: (function () { try { return haltView(); } catch (e) { return null; } })(),
     newPoolsFeed: newPoolsEnabled() ? 'on' : 'off (graduation sniper paused)', slotReserve: config.slotReserve || {},
     note: 'paused = no new entries; open positions are still marked and exited by the exit loop (Liviu t83u)' };
 }
@@ -752,11 +800,13 @@ function renderBooks() {
 
 if (require.main === module) app.listen(config.port, function () {
   console.log('Dashboard running on port ' + config.port);
+  try { haltCheck(null); } catch (e) { console.error('halt check', e.message); }   // t89u: before the first scan
   tick();
   setInterval(tick, config.pollIntervalMs);
   startExitLoop();
   setTimeout(recordEquity, 5000);
+  fees.refresh().catch(function () {});
   setInterval(recordEquity, 60000);
 });
 
-module.exports = { app, managerView, top10, m15, improver, pnlView, startEpoch, closeLeftovers, leftovers, exitLoopOnce: function () { return exitLoop(); }, pauseView, newPoolsEnabled, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };
+module.exports = { app, haltCheck, haltView, fees, managerView, top10, m15, improver, pnlView, startEpoch, closeLeftovers, leftovers, exitLoopOnce: function () { return exitLoop(); }, pauseView, newPoolsEnabled, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };
