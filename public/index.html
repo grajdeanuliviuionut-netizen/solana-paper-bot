@@ -69,6 +69,10 @@ table{width:100%;border-collapse:collapse}
 .tg{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.5px;padding:1px 7px;border-radius:5px;margin-left:8px;vertical-align:2px;text-transform:uppercase}
 .tg.rh{background:rgba(47,214,123,.14);color:var(--up)}.tg.lo{background:rgba(245,178,61,.16);color:var(--warn)}
 .oc{font-size:13px;color:var(--mute)}
+.mg{font-size:13px}.mg .row{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid var(--line)}.mg .row span{color:var(--mute)}
+.mg .lg{padding:7px 0;border-top:1px solid var(--line);font-size:12.5px;line-height:1.35}.mg .lg b{color:var(--txt)}.mg .lg small{display:block;color:var(--mute);font-size:11.5px;white-space:normal}
+.mg .rj{display:flex;flex-wrap:wrap;gap:5px;padding:6px 0;border-top:1px solid var(--line)}.mg .rj i{font-style:normal;font-size:11.5px;background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:var(--sub)}
+.hx2{font-size:13px;color:var(--mute);margin:-8px 0 14px}
 footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
 @media (max-width:2100px){.brand>span:last-child{display:none}.kpis{gap:10px}.kpi label{white-space:nowrap}.hs b{font-size:24px}.kpi{min-width:118px;padding:8px 12px}.kpi b{font-size:21px}#nucleus .st{font-size:12px}#nucleus .ag,#nucleus .lb{font-size:12px}}
 @media (min-width:2560px){html,body{font-size:17px}.wrap{gap:26px;padding:26px 34px 34px}.col{gap:26px}.card{padding:24px 28px}.card h2{font-size:15px}.card h2 small{font-size:14px}
@@ -96,12 +100,17 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
       <h2>Agents <small id="nucNote">live status · last activity</small></h2>
       <svg id="nucleus" viewBox="0 0 560 560" role="img" aria-label="Agent bots"></svg>
     </div>
+    <div class="card mg" id="mgCard">
+      <h2>Manager loop <small id="mgNote">review every 10 trades · one change · report every 30</small></h2>
+      <div id="mgBody"><div class="empty">–</div></div>
+    </div>
   </section>
 
   <section class="col">
     <div class="card hero" id="hero">
       <div class="hh"><div class="t">Runner hunter <small id="heroSub">v2</small></div><span class="sp green" id="heroSt">ACTIVE</span></div>
       <div class="hx num" id="heroEx">–</div>
+      <div class="hx2 num" id="heroEn"></div>
       <div class="hs">
         <div><label>Open P&amp;L</label><b class="num" id="hOpen">–</b></div>
         <div><label>Open</label><b class="num" id="hCount">–</b></div>
@@ -128,7 +137,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
     </div>
   </section>
 </main>
-<footer>Paper only · no wallet · live trading off · refresh 5 s · <a href="/api/books">/api/books</a> · <a href="/api/bots">/api/bots</a> · <a href="/api/trades">/api/trades</a> · <a href="/classic">classic</a></footer>
+<footer>Paper only · no wallet · live trading off · refresh 5 s · <a href="/api/books">/api/books</a> · <a href="/api/manager">/api/manager</a> · <a href="/api/bots">/api/bots</a> · <a href="/api/trades">/api/trades</a> · <a href="/classic">classic</a></footer>
 
 <script>
 (function () {
@@ -178,9 +187,27 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
     $('heroEx').innerHTML = esc(exTxt) + (P.epoch ? ' · board <b>' + esc(P.epoch) + '</b> since ' + tL(P.since) + (rh ? ' · all runner P&amp;L since start <b class="' + cl(rh.totalSol) + '">' + sol(rh.totalSol) + '</b>' : '') : '');
     $('hOpen').textContent = sol(g.openPnlSol); $('hOpen').className = 'num ' + cl(g.openPnlSol);
     $('hCount').textContent = (g.openCount || 0) + ' / ' + (g.maxOpen || b.maxOpen || 2);
+    var en = b.entry || {};
+    $('heroEn').textContent = en.maxLiquidityUsd != null ? 'entry: liq $' + Math.round(en.minLiquidityUsd / 1000) + 'k–$' + Math.round(en.maxLiquidityUsd / 1000) + 'k · top10 ≤ ' + en.maxTop10Pct + '% · 24h vol ≥ ' + en.minVolumeToLiquidityH24 + '× liq · m5 > ' + en.minM5 + ' & m15 > ' + en.minM15 + ' · h1 ≤ ' + en.maxH1 + '% · 24 h no re-buy after a stop' : '';
+    if (b.epochStats) b = Object.assign({}, b, { trades: b.epochStats.trades, winRatePct: b.epochStats.winRatePct, netSol: b.epochStats.netSol, progress: b.epochStats.progress });
     $('hTrades').textContent = b.trades == null ? '–' : b.trades + ' / ' + (b.progress ? String(b.progress).split('/')[1] : 30);
     $('hWin').textContent = isNum(b.winRatePct) ? Math.round(b.winRatePct) + '%' : '–';
     $('hNet').textContent = sol(b.netSol); $('hNet').className = 'num ' + cl(b.netSol);
+  }
+  function renderManager() {
+    var m = D.manager; if (!m) { $('mgBody').innerHTML = '<div class="empty">manager data unavailable</div>'; return; }
+    var g = m.guardrail || {}, f = m.entryFilters || {}, h = '';
+    h += '<div class="row"><span>Closed trades (' + esc(m.epoch || '') + ')</span><b class="num">' + m.closedTrades + ' · next review @' + m.nextReviewAtTrade + ' · report @' + m.nextReportAtTrade + '</b></div>';
+    h += '<div class="row"><span>Version</span><b class="num">' + esc(m.current ? m.current.label : '–') + '</b></div>';
+    h += '<div class="row"><span>Guardrail</span><b class="num ' + (g.pausedUntil ? 'dn' : '') + '">' + (g.pausedUntil ? 'PAUSED until ' + tL(g.pausedUntil) : 'trading') + ' · loss streak ' + (g.lossStreak || 0) + '/' + (g.losses || 4) + '</b></div>';
+    h += '<div class="row"><span>24 h stop blocks</span><b class="num">' + ((m.stopCooldowns || {}).active || 0) + ' coins</b></div>';
+    var bf = f.byFilter || {}, ks = Object.keys(bf).sort(function (a, b) { return bf[b] - bf[a]; }).slice(0, 8);
+    h += '<div class="rj">' + (ks.length ? ks.map(function (k) { return '<i>' + esc(k) + ' ' + bf[k] + '</i>'; }).join('') : '<i>no rejects yet</i>') + '<i>passed ' + (f.passedRules || 0) + '/' + (f.evaluated || 0) + ' · entered ' + (f.entered || 0) + '</i></div>';
+    var rp = (m.reports || []).slice(-1)[0];
+    if (rp) h += '<div class="lg"><b>Report ' + rp.fromTrade + '–' + rp.toTrade + '</b> · win ' + rp.winRatePct + '% · avg win ' + sol(rp.avgWinSol) + ' · avg loss ' + sol(rp.avgLossSol) + ' · net <b class="' + cl(rp.netSol) + '">' + sol(rp.netSol) + '</b></div>';
+    var lg = (m.log || []).slice(0, 4);
+    h += lg.length ? lg.map(function (e) { return '<div class="lg"><b>@' + e.tradeIndex + ' ' + esc(e.rule) + '</b> ' + (e.change ? esc(e.change) + ' ' + e.from + ' → ' + e.to + ' (v' + e.toVersion + ')' : 'no change') + ' · ' + tL(e.at) + '<small>' + esc(e.why) + '</small></div>'; }).join('') : '<div class="lg"><small>no review yet: first review after 10 closed trades</small></div>';
+    $('mgBody').innerHTML = h;
   }
   function fillRow(t) {
     return '<tr><td class="num">' + tL(t.closedAt) + '<small>' + esc(t.exitReason || '') + '</small></td><td>' + esc(t.symbol) + '<small>' + esc(t.strategyVersion || t.strategyId || '') + '</small></td><td class="r num ' + cl(t.pnlSol) + '">' + sol(t.pnlSol) + '<small class="' + cl(t.pnlPct) + '">' + pct(t.pnlPct) + '</small></td></tr>';
@@ -271,7 +298,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
   function refresh() {
     return get('/api/dashboard').then(function (d) {
       D = d; lastOk = Date.now();
-      [renderTop, renderNucleus, renderHero, renderOpen, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
+      [renderTop, renderNucleus, renderManager, renderHero, renderOpen, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
       clock();
     }).catch(function (e) { console.error(e); $('hDot').className = 'd bad'; $('hTxt').textContent = 'API error, retrying'; });
   }

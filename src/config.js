@@ -21,11 +21,15 @@ module.exports = {
   // of the paused flags. Leftover positions of every other strategy are closed at a Jupiter sell quote before
   // the runner-v2 board starts (books.epochCloseout).
   onlyStrategies: ['runner-hunter'],
+  // t86u (Liviu 22 Nov 12:12): the Manager reviews every 10 closed runner-hunter trades, applies ONE bounded
+  // change (src/improver.js BOUNDS/RULES) as a new version, logs what and why, and reports every 30 trades.
+  // Paper only: it never touches size, wallets, keys or LIVE_TRADING.
+  manager: { enabled: true, reviewEvery: 10, reportEvery: 30 },
 
   // PR11 (Liviu t64u, 21 Nov): four aggressive PAPER books, side by side, same size, own capacity.
   // Fills and marks come only from Jupiter quotes (read-only quote API, never a swap).
   books: {
-    epoch: 'runner-v2',           // t85u: fresh runner-hunter board (books-v1 since 21 Nov 18:42 London archived, kept in scoreboardHistory)
+    epoch: 'runner-v3',           // t86u: fresh runner-hunter v3 board (runner-v2 archived, kept in scoreboardHistory; t85u: runner-v2, books-v1 before)
     epochCloseout: true,          // t85u: close non-onlyStrategies leftovers (paper, Jupiter sell quote) before the board starts
     sizeSol: 0.05,                // SAME size per trade for every book (manager never cuts the books)
     maxOpenPerBook: 2,            // own capacity per book, separate from the legacy maxOpen 4
@@ -58,10 +62,17 @@ module.exports = {
         // v2 (Liviu t85u, 22 Nov 09:30): at a 28% win rate a -12% stop with a +10% target cannot make money.
         // Entry unchanged. Exits on Jupiter sell quotes in the exit loop (5 s): stop -6%, sell 1/3 at +8%, trail
         // the remaining 2/3 8% below the highest mark since entry, max hold 4 h. 1.1% round trip pro rata per leg.
-        id: 'runner-hunter', name: 'Runner hunter', version: 2,
-        entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },
+        // v3 (Liviu t86u, 22 Nov 12:12, copied from the Phantom bot): pool liquidity $100k-$900k, top-10 holders
+        // <= 30% (Solana RPC largest accounts, pool/AMM/burn excluded, fail closed), 24 h volume >= 0.1x liquidity,
+        // rising on m5 AND m15 (own 15-min price history, else GeckoTerminal 1m candles, fail closed), h1 <= 25%.
+        // No re-buy of a coin for 24 h after a stop-out. 4 losses in a row -> no new entries for 30 min. Exits = v2.
+        id: 'runner-hunter', name: 'Runner hunter', version: 3,
+        entry: { minLiquidityUsd: 100000, maxLiquidityUsd: 900000, minVolumeToLiquidityH24: 0.1, minM5: 0, minM15: 0, maxH1: 25, maxTop10Pct: 30,
+          stopCooldownHours: 24, lossStreakPause: { losses: 4, minutes: 30 } },
         exit: { stopLossPct: 6, partial: { atPct: 8, sellPct: 33.3333 }, trailAfterPartial: true, trailPct: 8, maxHoldMinutes: 240 },
         previousVersions: [
+          { version: 2, until: '2026-11-22T12:12', entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },
+            exit: { stopLossPct: 6, partial: { atPct: 8, sellPct: 33.3333 }, trailAfterPartial: true, trailPct: 8, maxHoldMinutes: 240 } },
           { version: 1, until: '2026-11-22', entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },
             exit: { stopLossPct: 12, partial: { atPct: 10, sellPct: 20 }, trailAfterPartial: true, trailPct: 15, maxHoldMinutes: 240 } }
         ]
