@@ -213,12 +213,13 @@ function makeDashboardApi(deps) {
     const rejects = (b.rejects && b.rejects.recent) || [];
     for (const book of (cfg.books && cfg.books.list) || []) {
       const label = book.id + ' v' + book.version;
-      const g = group({ kind: 'book', id: book.id, name: book.name + ' v' + book.version, label, status: 'active', maxOpen: cfg.books.maxOpenPerBook, sizeSol: cfg.books.sizeSol },
+      const g = group({ kind: 'book', id: book.id, name: book.name + ' v' + book.version, label, status: book.paused ? 'paused' : 'active', paused: !!book.paused, maxOpen: cfg.books.maxOpenPerBook, sizeSol: cfg.books.sizeSol },
         open.filter(p => p.kind === 'book' && p.book === book.id), (b.trades || []).filter(t => t.book === book.id));
       if (book.id === 'graduation-sniper' && deps.books.gradView) {
         const v = deps.books.gradView(state);
         if (v) g.v2Checks = { candidates: v.candidates, rejectsByCategory: v.rejectsByCategory, entries: v.entries, closes: v.closes, confirmsTriggered: v.confirmsTriggered, confirmsConfirmed: v.confirmsConfirmed };
       }
+      if (g.empty && book.paused) { g.idleReason = 'PAUSED (no new entries; open trades still exit)'; groups.push(g); continue; }
       if (g.empty) {
         const n = scan && scan.candidatesByBook ? scan.candidatesByBook[book.id] : null;
         const rj = rejects.find(x => x.book === label);
@@ -232,7 +233,7 @@ function makeDashboardApi(deps) {
     const legacyOpenTotal = (state.openPositions || []).length;
     for (const s of cfg.strategies || []) {
       const paused = (state.pausedIds || []).indexOf(s.id) >= 0 || !!s.paused;
-      const g = group({ kind: 'legacy', id: s.id, name: (s.name || s.id) + ' (legacy)', label: s.id + ' legacy', status: paused ? 'paused' : 'active', maxOpen: cfg.maxOpen, maxOpenShared: true,
+      const g = group({ kind: 'legacy', id: s.id, name: (s.name || s.id) + ' (legacy)', label: s.id + ' legacy', status: paused ? 'paused' : 'active', paused: paused, maxOpen: cfg.maxOpen, maxOpenShared: true,
         stratSizeMult: (state.stratSizeMult || {})[s.id] == null ? null : state.stratSizeMult[s.id] },
         open.filter(p => p.kind === 'legacy' && p.strategyId === s.id), (state.trades || []).filter(t => t.strategyId === s.id));
       if (g.empty) {

@@ -238,6 +238,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     const b = ensure(state), t = nowFn(), out = [];
     const ctx = { now: t, snaps: b.snaps };
     for (const book of C.list) {
+      if (book.paused) continue;   // t83u: a paused book takes no new entries (its open positions still exit)
       const extra = (extraByBook && extraByBook[book.id]) || [];
       const seen = new Set((pairs || []).map(r => r && r.mint));
       const extraOnly = extra.filter(r => r && !seen.has(r.mint));
@@ -268,7 +269,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const sigs = signals(state, pairs, extraByBook, onExtraPass);
       // PR14 dashboard: candidates per book in the last scan (why an empty book is idle).
       const cand = {};
-      for (const bk of C.list) cand[bk.id] = 0;
+      for (const bk of C.list) if (!bk.paused) cand[bk.id] = 0;
       for (const sg of sigs) cand[sg.book.id] = (cand[sg.book.id] || 0) + 1;
       b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: cand };
       let tried = 0;
@@ -496,7 +497,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const open = b.open.filter(x => x.book === book.id);
       const prevVers = [...new Set(all.map(x => x.bookVersion || 1).filter(v => v !== book.version))].sort();
       const previousVersions = prevVers.map(v => Object.assign({ label: book.id + ' v' + v, version: v }, bookStats(all.filter(x => (x.bookVersion || 1) === v), [], C.targetTrades)));
-      return Object.assign({ strategyId: book.id, name: book.name, version: book.version, label: label(book), sizeSol: C.sizeSol, stratSizeMult: 1, maxOpen: C.maxOpenPerBook, entry: book.entry, exit: book.exit },
+      return Object.assign({ strategyId: book.id, name: book.name, version: book.version, label: label(book), paused: !!book.paused, status: book.paused ? 'paused' : 'active', sizeSol: C.sizeSol, stratSizeMult: 1, maxOpen: C.maxOpenPerBook, entry: book.entry, exit: book.exit },
         bookStats(trades, open, C.targetTrades),
         { open: open.map(p => ({ symbol: p.symbol, mint: p.mint, entryTime: p.entryTime, markPct: p.markPct, peakPct: p.peakPct, markSource: p.markSource, markAt: p.markAt, markAgeSec: p.markAt ? +((t - Date.parse(p.markAt)) / 1000).toFixed(1) : null, remainingFrac: p.remainingFrac, partialDone: p.partialDone })),
           firstEntries: trades.slice(-3).reverse().map(x => ({ symbol: x.symbol, entryTime: x.entryTime, exitReason: x.exitReason, pnlPct: x.pnlPct })).concat(open.slice(0, 2).map(p => ({ symbol: p.symbol, entryTime: p.entryTime, open: true }))),

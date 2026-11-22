@@ -92,7 +92,7 @@ function buildBots(ctx) {
   const agents = [
     agent('manager', 'Manager', 'main loop / scheduler', poll, { label: 'uptime', value: uptimeMin >= 60 ? Math.floor(uptimeMin / 60) + 'h ' + Math.round(uptimeMin % 60) + 'm' : Math.round(uptimeMin) + 'm', sub: 'build ' + String(ctx.build || 'local').slice(0, 7) + ' · tick ' + Math.round(poll / 1000) + ' s' },
       { uptimeSec: Math.round(uptimeMin * 60), build: ctx.build || null, ticks: T.get('manager').total, lastTickMs: T.get('manager').lastTickMs || null }),
-    agent('scanner', 'Scanner', 'DexScreener scan + GT new_pools', poll, { label: 'pairs/min', value: pairsPerMin, sub: '429s ' + scan429 + (np.pausedUntil && Date.parse(np.pausedUntil) > t ? ' · new_pools paused' : ' · new_pools ' + (np.calls || 0) + ' calls') },
+    agent('scanner', 'Scanner', 'DexScreener scan + GT new_pools', poll, { label: 'pairs/min', value: pairsPerMin, sub: '429s ' + scan429 + (ctx.newPoolsEnabled === false ? ' · new_pools off' : np.pausedUntil && Date.parse(np.pausedUntil) > t ? ' · new_pools paused' : ' · new_pools ' + (np.calls || 0) + ' calls') },
       { pairsPerMin, http429: scan429, lastPairs: T.get('scanner').lastPairs == null ? null : T.get('scanner').lastPairs, newPoolsCalls: np.calls || 0, newPoolsPausedUntil: np.pausedUntil || null }),
     agent('rugCheck', 'Rug Check', 'RPC mint/freeze · stock block · RugCheck holders/LP', poll, { label: 'pass / reject', value: passes + ' / ' + rejects, sub: 'since restart · stock blocks ' + ((ctx.stockBlocks && ctx.stockBlocks.count) || 0) + ' · RugCheck 429s ' + rc429 },
       { passes, rejects, mintAuthority: { checks: ma.checks || 0, passed: ma.passed || 0, rejected: ma.rejected || 0, errors: ma.errors || 0 }, holders: { checks: hc.checks || 0, passed: hc.passed || 0, rejected: hc.rejected || 0, errors: hc.errors || 0, http429: rc429 }, legacy: Object.assign({}, lr), stockBlocks: (ctx.stockBlocks && ctx.stockBlocks.count) || 0 }),
@@ -114,7 +114,7 @@ function buildBots(ctx) {
     strategies.push({ kind: 'legacy', id: s.id, name: s.name, status: st, tone: TONE[st], open: s.open, maxOpen: ctx.maxOpen, maxOpenShared: true, trades: s.trades || 0, winRatePct: s.winRatePct == null ? null : s.winRatePct, netSol: s.netSol == null ? 0 : s.netSol,
       note: s.paused ? 'paused (open trades still exit)' : st === 'EMPTY' ? ((ctx.legacyOpenTotal || 0) >= ctx.maxOpen ? 'shared slots full' : 'no scan yet') : null });
   }
-  return { now: new Date(t).toISOString(), build: ctx.build || null, liveTrading: false, mode: 'paper',
+  return { now: new Date(t).toISOString(), build: ctx.build || null, liveTrading: false, mode: 'paper', pause: ctx.pause || null,
     rules: 'RUNNING = did work in the last 2x interval; IDLE = alive, nothing to do; PAUSED = paused; ERROR = >=3 errors in 10 min (>= work); STALE = no activity for 3x interval. Strategies: RUNNING = open position, WATCHING = active and scanning, EMPTY = cannot enter now (shared slots full / no scan yet), PAUSED.',
     agents, strategies };
 }
