@@ -12,6 +12,7 @@
 // pnlSol per leg = solOut - basis - 1.1% x basis (the round-trip cost stays inside pnlSol).
 const { classifyBlocked } = require('./blocklist');
 const stopFills = require('../stopFills');
+const { heldMint, REASON: REASON_SAME_MINT } = require('./sameMint');
 
 const MIN = 60000;
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -156,6 +157,23 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     }
     return b;
   }
+  // Same-mint guard counters (books and legacy) in state.books.sameMint.
+  function sameMintCount(state, strategyId) {
+    const b = ensure(state);
+    const m = b.sameMint || (b.sameMint = { blocked: 0, byStrategy: {} });
+    m.blocked += 1; m.byStrategy[strategyId] = (m.byStrategy[strategyId] || 0) + 1;
+  }
+  // Legacy strategies record their same-mint skips in the same rejects store (byReason / byBook / recent).
+  function rejectLegacy(state, strategyId, row, reason, extra) {
+    const b = ensure(state);
+    if (reason === REASON_SAME_MINT) sameMintCount(state, strategyId);
+    const key = String(reason).replace(/[-\d.]+%?$/, '').trim();
+    b.rejects.byReason[key] = (b.rejects.byReason[key] || 0) + 1;
+    const lb = strategyId + ' legacy';
+    const bb = b.rejects.byBook[lb] || (b.rejects.byBook[lb] = {});
+    bb[key] = (bb[key] || 0) + 1;
+    b.rejects.recent = [Object.assign({ at: new Date(nowFn()).toISOString(), book: lb, symbol: row && row.symbol, mint: row && row.mint, reason }, extra || {})].concat(b.rejects.recent).slice(0, 50);
+  }
   function reject(state, book, row, reason, extra) {
     const b = ensure(state);
     const key = String(reason).replace(/[-\d.]+%?$/, '').trim();
@@ -260,7 +278,9 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         curV2 = book.id === 'graduation-sniper' ? { poolAgeMin: +num(poolAgeMin(row, t)).toFixed(2), liquidityUsd: row.liquidityUsd, txnsM5: row.txnsM5 || null } : null;
         const openHere = b.open.filter(p => p.book === book.id);
         if (openHere.length >= C.maxOpenPerBook) continue;                  // capacity: not a reject
-        if (b.open.some(p => p.mint === row.mint)) continue;               // one book position per mint
+        // Cross-strategy same-mint guard: no book opens a mint held by ANY book or legacy strategy (fail closed).
+        const held = heldMint(state, row);
+        if (held) { sameMintCount(state, book.id); reject(state, book, row, REASON_SAME_MINT, { detail: held.detail, heldBy: held.heldBy }); continue; }
         const stock = stockBlock(state, row, 'books');
         if (stock) { reject(state, book, row, 'stock-block: ' + stock); continue; }
         const cool = reentry.blocked(state, { mint: row.mint, pairAddress: row.pairAddress }, t);
@@ -313,6 +333,9 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           markPct: +roundTripPct.toFixed(3), peakPct: +roundTripPct.toFixed(3), markSource: 'jupiter-sell-quote', markAt: new Date(sell.at).toISOString(),
           legs: [], partialDone: false, noRouteSince: null
         };
+        // Re-check after the awaits above (quotes): never push a second holding of the same mint.
+        const heldLate = heldMint(state, row);
+        if (heldLate) { sameMintCount(state, book.id); reject(state, book, row, REASON_SAME_MINT, { detail: heldLate.detail, heldBy: heldLate.heldBy, late: true }); continue; }
         b.open.push(pos);
         state.balance -= C.sizeSol;
         b.entries.opened++;
@@ -488,7 +511,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   }
   function lockedSol(state) { return ensure(state).open.reduce((a, p) => a + num(p.costBasisRemainingSol), 0); }
 
-  return { ensure, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
+  return { ensure, heldMint, rejectLegacy, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
 }
 
 module.exports = { makeBooks, entryFails, decideExit, quoteFresh, bookStats, high24Estimate, dropFromHighPct, m5VolumeVsHourAvg, isPumpOrigin, label };

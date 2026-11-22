@@ -4,7 +4,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node test/app.js && node test/pool.js && node test/live.js && node test/books.js && node test/newpools.js && node test/exits.js && node test/grad.js && node test/bots.js",
+    "test": "node test/app.js && node test/pool.js && node test/live.js && node test/books.js && node test/newpools.js && node test/exits.js && node test/grad.js && node test/bots.js && node test/samemint.js",
     "test:legacy": "node test/run.js"
   },
   "dependencies": {
