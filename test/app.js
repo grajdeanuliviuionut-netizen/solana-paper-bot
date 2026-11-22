@@ -283,7 +283,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     const dj2 = JSON.parse((await get("/api/dashboard")).body);
     assert.strictEqual(dj2.positionsByStrategy.length, pz.groups.length);
     const page = await get('/');
-    assert.ok(!/night/i.test(page.body), 'no Night Shift branding');
+    assert.ok(!/night shift/i.test(page.body), 'no Night Shift branding (t90u: "Night hours" is the Boss Rules night skip)');
     assert.ok(/id="hero"/.test(page.body) && /renderHero/.test(page.body) && /id="openPos"/.test(page.body) && /renderOpen/.test(page.body) && !/paused strateg/i.test(page.body) && !/renderPaused|id="paused"/.test(page.body) && /setInterval\(refresh, 5000\)/.test(page.body), 'Paper Terminal: runner-hunter hero + live open positions, no paused-strategy panel (t84u)');
     assert.ok(/Dip and hold/.test(d.body), 'strategy name on close rows (classic dashboard)');
     // Paper Terminal dashboard: static page at '/', assets, equity history and the aggregate endpoint
