@@ -548,10 +548,10 @@ function recordEquity() {
 
 // t85u: realised + open P&L by strategy/book since the scoreboard start (?epoch=<closed epoch> for an older
 // window), from trades.jsonl + memory, reconciled against the equity change (residualSol ~ 0).
-function pnlView(epoch) { return pnlMod.report(state, config, { tradesFile: process.env.TRADES_FILE || path.join(path.dirname(process.env.STATE_FILE || './data/state.json'), 'trades.jsonl'), epoch: epoch }); }
+function pnlView(epoch, listTrades) { return pnlMod.report(state, config, { tradesFile: process.env.TRADES_FILE || path.join(path.dirname(process.env.STATE_FILE || './data/state.json'), 'trades.jsonl'), epoch: epoch, listTrades: !!listTrades }); }
 app.get('/api/pnl', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  try { res.json(Object.assign({ build: BUILD, liveTrading: false, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null }, pnlView(req.query.epoch))); } catch (e) { console.error('pnl view', e); res.status(500).json({ error: String(e.message || e) }); }
+  try { res.json(Object.assign({ build: BUILD, liveTrading: false, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null }, pnlView(req.query.epoch, req.query.trades === '1'))); } catch (e) { console.error('pnl view', e); res.status(500).json({ error: String(e.message || e) }); }
 });
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');

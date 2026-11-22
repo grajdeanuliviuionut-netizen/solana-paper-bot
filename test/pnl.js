@@ -83,6 +83,26 @@ test('a position carried across a start only counts its in-window legs; a closed
   assert.ok(Math.abs(c.rows[0].realisedSol - carried.legs[1].pnlSol) < 1e-9);
 });
 
+test('a position closed twice in trades.jsonl (restart before the state save) counts once: the in-memory close', () => {
+  const w = world();
+  const grad = w.closed.find(t => t.id === 'B2');
+  const ghost = Object.assign({}, grad, { closedAt: at(55), pnlSol: -0.004, legs: [leg(55, 0.05, 0.0458, 'sl')] });   // lost close, never in the cash
+  const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'pnl-dup-'));
+  const file = path.join(TMP, 'trades.jsonl');
+  fs.writeFileSync(file, [ghost].concat(w.closed).map(t => JSON.stringify(t)).join('\n'));
+  const state = { balance: w.cash, trades: w.closed.filter(t => t.legacy), books: { trades: w.closed.filter(t => !t.legacy), open: [w.open] }, openPositions: [], scoreboard: w.win };
+  const o = P.report(state, { costRoundtripPct: 1.1 }, { tradesFile: file, listTrades: true });
+  assert.ok(Math.abs(o.residualSol) < 1e-6, 'residual ' + o.residualSol);
+  assert.strictEqual(o.audit.duplicateCloses.length, 1);
+  assert.strictEqual(o.audit.duplicateCloses[0].droppedClosedAt, at(55));
+  assert.strictEqual(o.trades.length, 4);
+  // a book close only in the jsonl (state reverted) is listed for audit
+  const lost = { id: 'B9', symbol: 'LOST', book: 'volume-explosion', bookVersion: 1, strategyId: 'volume-explosion', sizeSol: 0.05, closedAt: at(70), legs: [leg(70, 0.05, 0.049, 'time')], pnlSol: -0.00155 };
+  fs.appendFileSync(file, '\n' + JSON.stringify(lost));
+  const o2 = P.report(state, { costRoundtripPct: 1.1 }, { tradesFile: file });
+  assert.deepStrictEqual(o2.audit.bookTradesOnlyInJsonl.map(t => t.id), ['B9']);
+});
+
 (async () => {
   for (const [n, f] of tests) { try { await f(); passed++; console.log('ok  ' + n); } catch (e) { console.error('FAIL ' + n + '\n  ' + (e.stack || e)); process.exitCode = 1; } }
   console.log(passed + '/' + tests.length + ' pnl tests passed');

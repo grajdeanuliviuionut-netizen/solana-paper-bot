@@ -46,14 +46,25 @@ function readTradesFile(file) {
     return { ok: true, trades: out };
   } catch (e) { return { ok: false, trades: [], error: String(e.message || e).slice(0, 80) }; }
 }
-function mergeTrades(fileTrades, memTrades) {
-  const seen = new Set(), out = [];
-  for (const t of fileTrades.concat((memTrades || []).map(compact))) {
-    const k = (t.id || t.symbol + ':' + t.entryTime) + '@' + t.closedAt;
-    if (seen.has(k)) continue;
-    seen.add(k); out.push(t);
-  }
-  return out;
+// One closed trade per position id. A position can appear closed twice in trades.jsonl when the process
+// restarted after the jsonl append but before state.json was saved (the reloaded state still had it open
+// and closed it again): only one of those closes reached the cash. The in-memory copy wins (it is the one
+// the current cash carries); otherwise the latest close. Dropped duplicates are listed in audit.
+function mergeTrades(fileTrades, memTrades, audit) {
+  const byId = new Map(), order = [];
+  const put = (t, src) => {
+    const k = t.id || (t.symbol + ':' + t.entryTime);
+    const cur = byId.get(k);
+    if (!cur) { byId.set(k, Object.assign({}, t, { src })); order.push(k); return; }
+    if (cur.closedAt === t.closedAt) { if (src === 'mem') cur.src = 'both'; return; }
+    const keepNew = src === 'mem' || (cur.src === 'file' && Date.parse(t.closedAt) > Date.parse(cur.closedAt));
+    const drop = keepNew ? cur : t;
+    if (audit) audit.duplicateCloses.push({ id: k, symbol: drop.symbol, strategyId: drop.strategyId, droppedClosedAt: drop.closedAt, droppedPnlSol: drop.pnlSol, keptClosedAt: keepNew ? t.closedAt : cur.closedAt });
+    if (keepNew) byId.set(k, Object.assign({}, t, { src: src === 'mem' ? 'both' : src }));
+  };
+  for (const t of fileTrades) put(t, 'file');
+  for (const t of (memTrades || []).map(compact)) put(t, 'mem');
+  return order.map(k => byId.get(k));
 }
 
 // Unrealised P&L of one open position, net of the 1.1% round-trip cost on what is still held.
@@ -138,13 +149,20 @@ function report(state, config, opts) {
   const costPct = config.costRoundtripPct || 1.1;
   const file = readTradesFile(opts.tradesFile);
   const mem = (state.trades || []).concat((state.books && state.books.trades) || []);
-  const trades = mergeTrades(file.trades, mem);
+  const audit = { duplicateCloses: [], bookTradesOnlyInJsonl: [] };
+  const trades = mergeTrades(file.trades, mem, audit);
   const sb = state.scoreboard || {};
   const hist = state.scoreboardHistory || [];
   const pick = opts.epoch && opts.epoch !== sb.epoch ? hist.find(h => h.epoch === opts.epoch) : null;
   const win = pick || { epoch: sb.epoch, since: sb.since, startEquity: sb.startEquity, startBalance: sb.startBalance, startMarkedEquity: sb.startMarkedEquity };
   if (!win.since) return { error: 'no scoreboard start', epochs: hist.map(h => h.epoch).concat(sb.epoch ? [sb.epoch] : []) };
   const out = reconcile({ trades, openBook: (state.books && state.books.open) || [], openLegacy: state.openPositions || [], balance: state.balance, win, costPct, now: opts.now });
+  // Book trades are kept in memory (up to 3000): a book close found only in trades.jsonl never reached the cash.
+  const s0 = Date.parse(win.since), u0 = win.until ? Date.parse(win.until) : Infinity;
+  for (const t of trades) if (t.src === 'file' && !t.legacy && Date.parse(t.closedAt) >= s0 && Date.parse(t.closedAt) < u0) audit.bookTradesOnlyInJsonl.push({ id: t.id, symbol: t.symbol, strategyId: t.strategyId, closedAt: t.closedAt, pnlSol: t.pnlSol });
+  audit.duplicateCloses = audit.duplicateCloses.filter(d => Date.parse(d.droppedClosedAt) >= s0 && Date.parse(d.droppedClosedAt) < u0);
+  out.audit = audit;
+  if (opts.listTrades) out.trades = trades.filter(t => Date.parse(t.closedAt) >= s0 && Date.parse(t.closedAt) < u0).map(t => ({ id: t.id, symbol: t.symbol, strategyId: t.strategyId, version: t.legacy ? 'legacy' : 'v' + (t.bookVersion || 1), closedAt: t.closedAt, exitReason: t.exitReason, pnlSol: t.pnlSol, src: t.src }));
   out.source = { tradesJsonl: file.ok, tradesJsonlCount: file.trades.length, inMemory: mem.length, merged: trades.length, error: file.error || null };
   out.epochs = hist.map(h => ({ epoch: h.epoch, since: h.since, until: h.until, startEquity: h.startEquity, endEquity: h.endEquity })).concat(sb.epoch ? [{ epoch: sb.epoch, since: sb.since, until: null, startEquity: sb.startEquity }] : []);
   return out;
