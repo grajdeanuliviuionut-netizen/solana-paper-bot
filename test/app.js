@@ -192,11 +192,12 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
   }));
   const dip = (sym, pool, mint) => ({ pairAddress: pool, mint, symbol: sym, priceUsd: 0.01, liquidityUsd: 100000, volumeH1: 20000, priceChange: { m5: 1, h1: -6, h6: 0, h24: 0 }, txns: { buys: 200, sells: 100 }, ageDays: 5 });
   const scannerPath = require.resolve('../src/agents/scanner');
-  require.cache[scannerPath] = { id: scannerPath, filename: scannerPath, loaded: true, exports: { scan: async () => [dip('COOLD', 'POOL_NIO', 'MINT_NIO'), dip('COOLD', 'POOL_NIO2', 'MINT_NIO_CLONE'), dip('FRESH', 'POOL_F', 'MINT_F')] } };
+  require.cache[scannerPath] = { id: scannerPath, filename: scannerPath, loaded: true, exports: { scan: async () => scanRows } };
+  const scanRows = [dip('COOLD', 'POOL_NIO', 'MINT_NIO'), dip('COOLD', 'POOL_NIO2', 'MINT_NIO_CLONE'), dip('FRESH', 'POOL_F', 'MINT_F')];
   hb._reset(); hb._setDeps({ http: { get: async () => ({ data: { data: [] } }) }, sleep: async () => {}, now: () => Date.now(), opts: { minGapMs: 0 } });
   // Main-pool lookup (own limiter): DexScreener answers each mint with its scan pool as the main pool.
   const pp = require('../src/poolPrice');
-  const mainOf = { MINT_NIO: 'POOL_NIO', MINT_NIO_CLONE: 'POOL_NIO2', MINT_F: 'POOL_F' };
+  const mainOf = { MINT_NIO: 'POOL_NIO', MINT_NIO_CLONE: 'POOL_NIO2', MINT_F: 'POOL_F', MINT_G: 'POOL_G' };
   // PR9: the same limiter answers DexScreener pair prices (/latest/dex/pairs) for entry fills and off-scan marks.
   pp.mainLimiter._setDeps({ sleep: async () => {}, opts: { minGapMs: 0 }, http: { get: async url => {
     const ids = url.split('/').pop().split(',');
@@ -220,6 +221,19 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
   assert.ok(f.sizeSol >= 0.02 && f.sizeSol < 0.243, 'half size for the losing strategy: ' + f.sizeSol);
   assert.ok(st.decisions.some(d => /re-entry cooldown/.test(JSON.stringify(d))));
   assert.ok(!st.activity.some(a => /Tick error/.test(a.msg)), JSON.stringify(st.activity));
+  // Same-mint guard (FIONA, 22 Nov): a legacy strategy may not open a mint a BOOK already holds.
+  const fakeBook = { id: 'bk-test-G', book: 'trending-pullback', strategyId: 'trending-pullback', mint: 'MINT_G', pairAddress: 'POOL_G', symbol: 'GOOD', entryTime: new Date().toISOString(), sizeSol: 0.05, remainingFrac: 1, costBasisRemainingSol: 0.05 };
+  idx.books.ensure(st).open.push(fakeBook);
+  scanRows.push(dip('GOOD', 'POOL_G', 'MINT_G'));
+  await idx.tick();
+  assert.ok(!st.openPositions.some(p => p.mint === 'MINT_G'), 'legacy blocked by the book hold');
+  assert.ok(st.decisions.some(d => /sameMintHeld/.test(JSON.stringify(d)) && /GOOD/.test(JSON.stringify(d))), JSON.stringify(st.decisions.slice(0, 6)));
+  const rjs = idx.books.ensure(st).rejects;
+  assert.ok(rjs.byReason.sameMintHeld >= 1 && rjs.recent.some(r => r.reason === 'sameMintHeld' && /legacy$/.test(r.book) && r.heldBy[0].strategyId === 'trending-pullback'), JSON.stringify(rjs.recent.slice(0, 3)));
+  // ... and once the book holding is gone, the mint is free again (closed trades never block)
+  idx.books.ensure(st).open.splice(idx.books.ensure(st).open.indexOf(fakeBook), 1);
+  assert.strictEqual(idx.books.heldMint(st, { mint: 'MINT_G' }), null);
+  scanRows.pop();
   const server = idx.app.listen(0);
   const port = server.address().port;
   const get = p => new Promise(resolve => http.get({ host: '127.0.0.1', port, path: p }, res => { let b = ''; res.on('data', c => { b += c; }); res.on('end', () => resolve({ status: res.statusCode, body: b })); }));

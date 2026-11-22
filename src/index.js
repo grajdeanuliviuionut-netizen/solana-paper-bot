@@ -305,6 +305,14 @@ async function tick() {
       for (let sig of batch) {
         if (!canOpen()) break;
         if (state.openPositions.some(function (p) { return p.symbol === sig.symbol; })) continue;
+        // Cross-strategy same-mint guard: no legacy strategy opens a mint held by ANY book or legacy strategy
+        // (fail closed). Logged as sameMintHeld in decisions and in /api/books rejects (byReason / byBook / recent).
+        const heldM = books.heldMint(state, { mint: sig.mint || (sig.pair && sig.pair.mint) || null, pairAddress: sig.pairAddress });
+        if (heldM) {
+          books.rejectLegacy(state, sig.strategyId, sig, heldM.reason, { detail: heldM.detail, heldBy: heldM.heldBy });
+          state.decisions.unshift(logDecision('SKIP', sig.symbol, heldM.reason + ': ' + heldM.detail + ' (' + sig.strategyId + ')'));
+          continue;
+        }
         if ((state.pausedIds || []).includes(sig.strategyId)) continue;
         if (!slotFree(sig.strategyId)) continue;
         // Entry fill from the SAME stored-pool source as the marks (fresh scan row or /pools/multi).
@@ -344,6 +352,14 @@ async function tick() {
             const bq = await quotes.buyQuote(exec.position.mint, size);
             if (bq.ok) { exec.position.tokensRaw = bq.outAmount; exec.position.entryQuote = { inAmount: bq.inAmount, outAmount: bq.outAmount, priceImpactPct: bq.priceImpactPct, at: new Date(bq.at).toISOString(), route: bq.route || null }; }
             else exec.position.entryQuoteError = String(bq.error || '').slice(0, 80);
+          }
+          // Re-check after the buy-quote await: never push a second holding of the same mint.
+          const heldLate = books.heldMint(state, exec.position.mint ? exec.position : sig);
+          if (heldLate) {
+            books.rejectLegacy(state, sig.strategyId, sig, heldLate.reason, { detail: heldLate.detail, heldBy: heldLate.heldBy, late: true });
+            state.decisions.unshift(logDecision('SKIP', sig.symbol, heldLate.reason + ': ' + heldLate.detail + ' (' + sig.strategyId + ', late)'));
+            opened -= 1;
+            continue;
           }
           state.openPositions.push(exec.position);
           state.balance -= size;
@@ -477,7 +493,7 @@ function recordEquity() {
 
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, rejects: books.ensure(state).rejects, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
+  res.json({ build: BUILD, scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
 });
 
 app.get('/api/health', function (req, res) {
