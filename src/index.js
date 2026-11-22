@@ -80,6 +80,7 @@ const fees = execMod.makePriorityFee(booksLimiter, { cuLimit: 200000 });
 const sendPath = execMod.makeSendPath();
 const books = makeBooks({
   config, quotes, mintAuth, reentry, holderCheck, top10, m15, fees, sendPath,
+  equityNow: function () { return markedEquityNow(); },   // t90u v5 sizing: 5% of marked total equity
   log: function (type, symbol, reason) {
     state.decisions.unshift(logDecision(type, symbol, reason));
     if (type !== 'SKIP') addActivity(type + ' ' + symbol + ' ' + reason);
@@ -605,6 +606,47 @@ app.get('/api/pnl', function (req, res) {
   res.set('Cache-Control', 'no-store');
   try { res.json(Object.assign({ build: BUILD, liveTrading: false, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null }, pnlView(req.query.epoch, req.query.trades === '1'))); } catch (e) { console.error('pnl view', e); res.status(500).json({ error: String(e.message || e) }); }
 });
+// t90u Boss Rules (runner-hunter v5): loss pause, night hours, feed health, halt, TP tier + time limit, sizing,
+// breakout reject counters. Read-only view.
+function bossRulesView() {
+  const now = Date.now();
+  const E = (RH && RH.entry) || {}, X = (RH && RH.exit) || {};
+  const bk = books.ensure(state), g = books.guard(state);
+  const LP = E.lossStreakPause || null, NS = E.nightSkip || null;
+  const pu = books.lossPaused(state, 'runner-hunter', now);
+  let night = null;
+  if (NS) {
+    const d = new Date(now), h = d.getUTCHours();
+    const active = h >= NS.startHourUtc && h < NS.endHourUtc;
+    const next = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), NS.startHourUtc));
+    if (active || now >= next.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+    const end = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), NS.endHourUtc));
+    const lon = function (x) { return new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(x) + ' London'; };
+    night = { active: active, windowUtc: String(NS.startHourUtc).padStart(2, '0') + ':00-' + String(NS.endHourUtc).padStart(2, '0') + ':00 UTC', endsAt: active ? end.toISOString() : null,
+      nextStartUtc: next.toISOString(), nextStartLondon: lon(next), nextEndLondon: lon(new Date(next.getTime() + (NS.endHourUtc - NS.startHourUtc) * 3600000)), skips: (bk.night || {}).skips || 0, lastSkipAt: (bk.night || {}).lastAt || null };
+  }
+  const eq = markedEquityNow();
+  const open = (bk.open || []).filter(function (p) { return p.book === 'runner-hunter'; }).map(function (p) {
+    const F = p.feed || null, age = F && F.lastOkAt ? (now - Date.parse(F.lastOkAt)) / 1000 : (p.markAt ? (now - Date.parse(p.markAt)) / 1000 : null);
+    const tp = p.takeProfit || null;
+    return { symbol: p.symbol, id: p.id, version: p.strategyVersion, feed: { lastUpdateAt: F ? F.lastOkAt : p.markAt || null, ageSec: age == null ? null : +age.toFixed(1), stale: !!(F && F.stale), staleSince: F ? F.staleSince : null, protected: !!(p.exit && p.exit.feedStaleSec), events: F ? F.events.slice(0, 5) : [] },
+      takeProfit: tp ? { tier: tp.tier, pct: tp.pct, why: tp.why, deadlineAt: tp.deadlineAt, leftSec: tp.deadlineAt ? Math.max(0, Math.round((Date.parse(tp.deadlineAt) - now) / 1000)) : null } : null,
+      markPct: p.markPct, sizeSol: p.sizeSol, sizing: p.sizing || null };
+  });
+  const bf = ((bk.entryFilters || {})['runner-hunter'] || {}).byFilter || {};
+  const keys = ['volSpike', 'breakout', 'breakoutNoData', 'breakoutPending', 'nightHoursSkip', 'lossStreakPause', 'm5', 'm15', 'm15NoData', 'liquidityMin', 'liquidityMax', 'vol24Liq', 'h1Max', 'top10', 'top10Unavailable', 'slippageAbort', 'rugBlacklisted', 'sizingEquityUnknown'];
+  const rejects = {}; keys.forEach(function (k) { if (bf[k]) rejects[k] = bf[k]; });
+  Object.keys(bf).forEach(function (k) { if (/^rug:/.test(k)) rejects[k] = bf[k]; });
+  return {
+    lossPause: LP ? { consecutiveLosses: g.streak['runner-hunter'] || 0, losses: LP.losses, minutes: LP.minutes, paused: !!pu, pausedUntil: pu || null, leftSec: pu ? Math.max(0, Math.round((Date.parse(pu) - now) / 1000)) : 0 } : null,
+    nightHours: night,
+    feed: { staleAfterSec: X.feedStaleSec || null, staleEvents: (bk.feed || {}).staleEvents || 0, openStale: open.filter(function (p) { return p.feed.stale; }).length, recent: ((bk.feed || {}).recent || []).slice(0, 10), rule: 'no stop-loss (or any exit) is decided without a fresh (<= 10 s) Jupiter sell quote; >= 60 s without one = stale, logged; the position waits for the feed' },
+    halted: haltMod.isHalted(state),
+    sizing: E.sizing ? { pctOfEquity: E.sizing.pctOfEquity, markedEquitySol: +Number(eq).toFixed(6), nextSizeSol: +(Number(eq) * E.sizing.pctOfEquity / 100).toFixed(6) } : null,
+    takeProfit: X.takeProfit || null, timeLimitMinutes: X.takeProfit ? X.maxHoldMinutes : null,
+    positions: open, breakoutRejects: rejects, breakout: E.breakout || null
+  };
+}
 // t86u: the Manager's improvement loop for runner-hunter (log of every review, 30-trade reports, bounds, rules).
 function managerView(compact) {
   const m = state.manager || {};
@@ -622,11 +664,12 @@ function managerView(compact) {
     stopCooldowns: { hours: RH && RH.entry ? RH.entry.stopCooldownHours || null : null, active: activeSc.length, list: compact ? undefined : activeSc },
     entryFilters: bk.entryFilters['runner-hunter'] || null,
     halt: haltView(),
+    bossRules: bossRulesView(),
     executor: (function () { const ex = bk.executor || {}; const E = (RH && RH.entry) || {}; return { maxSlippageBps: E.maxSlippageBps == null ? null : E.maxSlippageBps, slippageAborts: ex.slippageAborts || 0, exitSlippageExceeded: ex.exitSlippageExceeded || 0, recentAborts: (ex.recentAborts || []).slice(0, compact ? 3 : 20), recentExceeded: (ex.recentExceeded || []).slice(0, compact ? 3 : 20), priorityFee: fees.stats.last ? fees.current(Date.now(), fees.stats.last.account === 'global' ? '' : fees.stats.last.account) : null, priorityFeeStats: compact ? undefined : fees.stats, sendPath: 'paper', jito: { enabled: false, note: sendPath.paths.jito.note }, exitPolicy: 'exits are never aborted on slippage: the leg is sold and flagged slippageExceeded' }; })(),
     rugCheck: RH && RH.entry && RH.entry.rugCheck ? (function () { const r = books.rugState(state); return { limits: RH.entry.rugCheck, epoch: r.epoch, checks: r.checks, passed: r.passed, failed: r.failed, unavailable: r.unavailable, byReason: r.byReason, blacklisted: Object.keys(r.blacklist).length, blacklist: compact ? undefined : r.blacklist, note: 'a definite fail blacklists the mint for this epoch; RPC/data errors reject (fail closed) without blacklisting' }; })() : null,
     costModel: RH && RH.exit && RH.exit.costModel ? { config: RH.exit.costModel, doc: execMod.COST_MODEL_DOC } : null,
     log: (m.log || []).slice(0, compact ? 5 : 200), reports: compact ? (m.reports || []).slice(-3) : (m.reports || []) };
-  if (!compact) Object.assign(v, { bounds: improver.isV4(RH) ? improver.BOUNDS_V4 : improver.BOUNDS, rules: improver.isV4(RH) ? improver.RULES_V4 : improver.RULES, hardCeilings: improver.isV4(RH) ? improver.HARD_V4 : null, top10: Object.assign({}, top10.stats), m15: Object.assign({}, m15.stats), previousVersions: RH ? RH.previousVersions || [] : [],
+  if (!compact) Object.assign(v, { bounds: improver.isV5(RH) ? improver.BOUNDS_V5 : improver.isV4(RH) ? improver.BOUNDS_V4 : improver.BOUNDS, rules: improver.isV5(RH) ? improver.RULES_V5 : improver.isV4(RH) ? improver.RULES_V4 : improver.RULES, hardCeilings: improver.isV5(RH) ? improver.HARD_V5 : improver.isV4(RH) ? improver.HARD_V4 : null, top10: Object.assign({}, top10.stats), m15: Object.assign({}, m15.stats), previousVersions: RH ? RH.previousVersions || [] : [],
     note: 'Paper only. The Manager changes only whitelisted runner-hunter knobs inside these bounds; never size, wallets, keys or LIVE_TRADING.' });
   return v;
 }
@@ -636,7 +679,7 @@ app.get('/api/manager', function (req, res) {
 });
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: BUILD, halt: haltView(), scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, pause: pauseView(), rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
+  res.json({ build: BUILD, halt: haltView(), bossRules: (function () { try { return bossRulesView(); } catch (e) { return { error: String(e.message || e) }; } })(), scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, pause: pauseView(), rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
 });
 
 app.get('/api/health', function (req, res) {
@@ -809,4 +852,4 @@ if (require.main === module) app.listen(config.port, function () {
   setInterval(recordEquity, 60000);
 });
 
-module.exports = { app, haltCheck, haltView, fees, managerView, top10, m15, improver, pnlView, startEpoch, closeLeftovers, leftovers, exitLoopOnce: function () { return exitLoop(); }, pauseView, newPoolsEnabled, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };
+module.exports = { app, bossRulesView, haltCheck, haltView, fees, managerView, top10, m15, improver, pnlView, startEpoch, closeLeftovers, leftovers, exitLoopOnce: function () { return exitLoop(); }, pauseView, newPoolsEnabled, botsView, botTracker, recordEquity, dashApi, tick, exitLoop, books, quotes, mintAuth, holderCheck, booksLimiter, resetScoreboard, getState: function () { return state; } };

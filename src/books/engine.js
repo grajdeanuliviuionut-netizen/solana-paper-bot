@@ -28,6 +28,16 @@ function isPumpOrigin(row) {
 }
 function poolAgeMin(row, now) { return row.pairCreatedAt ? (now - row.pairCreatedAt) / MIN : null; }
 // Hour-average 5-min volume = the PREVIOUS 55 minutes of the h1 window, per 5 min: (h1 - m5) / 11.
+// t90u: m5 volume vs the hour's average 5-min volume (volumeH1 / 12, the h1 window includes the last 5 min).
+function volSpikeOf(row) { const base = num(row.volumeH1) / 12; return base > 0 ? num(row.volumeM5) / base : null; }
+// t90u v5 dynamic take profit (deterministic, from the entry signal).
+function tpTier(tp, f) {
+  const vs = num(f.volSpike), m5 = num(f.m5);
+  const s = tp.strong, m = tp.moderate;
+  if (vs >= s.minVolSpike && m5 >= s.minM5) return { tier: 'strong', pct: s.pct, why: 'volume spike ' + vs.toFixed(1) + 'x >= ' + s.minVolSpike + 'x and m5 ' + m5 + '% >= ' + s.minM5 + '%' };
+  if (vs >= m.minVolSpike || m5 >= m.minM5) return { tier: 'moderate', pct: m.pct, why: 'volume spike ' + vs.toFixed(1) + 'x >= ' + m.minVolSpike + 'x or m5 ' + m5 + '% >= ' + m.minM5 + '%' };
+  return { tier: 'weak', pct: tp.weak.pct, why: 'volume spike ' + vs.toFixed(1) + 'x < ' + m.minVolSpike + 'x and m5 ' + m5 + '% < ' + m.minM5 + '%' };
+}
 function m5VolumeVsHourAvg(row) {
   const base = (num(row.volumeH1) - num(row.volumeM5)) / 11;
   return base > 0 ? num(row.volumeM5) / base : null;
@@ -76,6 +86,14 @@ function entryFails(book, row, ctx) {
     if (!(num(pc.m5) > e.minM5)) return 'm5: <= ' + e.minM5;
     const m = m15Mod.m15FromTicks(ctx.ticks && ctx.ticks[row.pairAddress], num(row.priceUsd), now);
     if (m && !(m.pct > e.minM15)) return 'm15: <= ' + e.minM15;
+    if (e.breakout) {
+      // t90u v5 busy breakout: m5 volume >= minVolSpike x the hour's average 5-min volume (volumeH1 / 12) and the
+      // price above the prior high (own history here; GeckoTerminal candles in runEntries when there is none).
+      const vs = volSpikeOf(row);
+      if (!(vs >= e.breakout.minVolSpike)) return 'volSpike: < ' + e.breakout.minVolSpike + 'x';
+      const ph = m15Mod.priorHighFromTicks(ctx.ticks && ctx.ticks[row.pairAddress], now, e.breakout);
+      if (ph && !(num(row.priceUsd) > ph.priorHigh * (1 + (e.breakout.minBreakPct || 0) / 100))) return 'breakout: not above the prior high';
+    }
     return null;
   }
   if (book.id === 'runner-hunter') {
@@ -111,6 +129,12 @@ function signalFields(book, row, ctx) {
   if (book.id === 'runner-hunter') f.volumeToLiquidityH1 = +(num(row.volumeH1) / (num(row.liquidityUsd) || 1)).toFixed(3);
   if (book.id === 'runner-hunter' && book.entry && book.entry.maxLiquidityUsd != null) {
     const m = m15Mod.m15FromTicks(ctx.ticks && ctx.ticks[row.pairAddress], num(row.priceUsd), ctx.now);
+    if (book.entry.breakout) {
+      const vs = volSpikeOf(row);
+      const ph = m15Mod.priorHighFromTicks(ctx.ticks && ctx.ticks[row.pairAddress], ctx.now, book.entry.breakout);
+      Object.assign(f, { volumeM5: row.volumeM5, volSpike: vs == null ? null : +vs.toFixed(2), priceUsd: row.priceUsd, priorHigh: ph ? ph.priorHigh : null, priorHighSource: ph ? ph.source : null,
+        priorHighWindowMin: ph ? [ph.fromMin, ph.toMin] : null, breakPct: ph ? +((num(row.priceUsd) / ph.priorHigh - 1) * 100).toFixed(3) : null });
+    }
     Object.assign(f, { volumeH24: row.volumeH24, volumeToLiquidityH24: +(num(row.volumeH24) / (num(row.liquidityUsd) || 1)).toFixed(3), m15: m ? +m.pct.toFixed(3) : null, m15Source: m ? m.source : null, m15FromAgeMin: m ? m.fromAgeMin : null });
   }
   if (book.id === 'volume-explosion') Object.assign(f, { volumeM5: row.volumeM5, m5VolumeVsHourAvg: +num(m5VolumeVsHourAvg(row)).toFixed(2) });
@@ -123,6 +147,13 @@ function signalFields(book, row, ctx) {
 // the 1.1% cost, which is charged inside pnlSol). Returns null | { action: 'close'|'partial', reason, sellPct }.
 function decideExit(pos, ex, pct, peakPct, minsOpen) {
   if (pct <= -ex.stopLossPct) return { action: 'close', reason: 'sl' };
+  if (ex.takeProfit) {
+    // t90u v5: full exit at the position's TP tier (+2/+3/+4%), else close at market at the time limit (25 min).
+    const tp = pos.takeProfit && pos.takeProfit.pct != null ? pos.takeProfit.pct : ex.takeProfit.weak.pct;
+    if (pct >= tp) return { action: 'close', reason: 'tp' };
+    if (minsOpen >= ex.maxHoldMinutes) return { action: 'close', reason: 'time' };
+    return null;
+  }
   if (ex.breakevenAtPct != null) {
     // t89u v4: once +4% was reached the stop moves to entry (0%) and a 3% trail below the peak is armed;
     // not +4% within 15 min -> exit at market; 30 min max hold.
@@ -163,7 +194,7 @@ function bookStats(trades, open, target) {
 }
 
 // ---------- runtime ----------
-function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15, fees, sendPath, random }) {
+function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15, fees, sendPath, random, equityNow }) {
   const send = sendPath || execMod.makeSendPath();
   const feeNow = (t, acct) => (fees ? fees.current(t, acct) : { microLamports: 0, sol: 0, fallback: true, lamports: 0 });
   const sleepFn = sleep || (ms => new Promise(r => setTimeout(r, ms)));
@@ -186,6 +217,8 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     if (!b.entries) b.entries = { attempts: 0, opened: 0 };
     if (!b.ticks) b.ticks = {};
     if (!b.entryFilters) b.entryFilters = {};
+    if (!b.feed) b.feed = { staleEvents: 0, openStale: 0, recent: [] };
+    if (!b.night) b.night = { skips: 0, lastAt: null, lastLoggedWindow: null };
     if (!b.executor) b.executor = { slippageAborts: 0, exitSlippageExceeded: 0, recentAborts: [], recentExceeded: [] };
     const gb = C.list.find(x => x.id === 'graduation-sniper');
     if (gb && (!b.gradSniper || b.gradSniper.version !== gb.version)) {
@@ -229,6 +262,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     if (!b.guardrail) b.guardrail = { streak: {}, pauses: [], pausedUntil: {} };
     return b.guardrail;
   }
+  function nightActive(NS, t) { const h = new Date(t).getUTCHours(); return NS.startHourUtc < NS.endHourUtc ? h >= NS.startHourUtc && h < NS.endHourUtc : h >= NS.startHourUtc || h < NS.endHourUtc; }
   function lossPaused(state, bookId, t) { const g = guard(state); const u = g.pausedUntil[bookId]; return u && Date.parse(u) > t ? u : null; }
   function stopCooldown(state, row, t) {
     const m = state.stopCooldowns || {};
@@ -320,6 +354,15 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     const ctx = { now: t, snaps: b.snaps, ticks: b.ticks };
     for (const book of C.list) {
       if (book.paused || !allowed(book.id)) continue;   // t83u/t85u: paused or not allowed -> no new entries (open positions still exit)
+      // t90u Boss Rules: Night Hours Skip (02:00-06:00 UTC): no scanning or new entries for this book.
+      const NS = book.entry && book.entry.nightSkip;
+      if (NS && nightActive(NS, t)) {
+        const w = new Date(t).toISOString().slice(0, 10);
+        b.night.skips++; b.night.lastAt = new Date(t).toISOString();
+        countFilter(state, book, 'nightHoursSkip');
+        if (b.night.lastLoggedWindow !== w) { b.night.lastLoggedWindow = w; if (log) log('NIGHT', book.id, 'Night Hours Skip: no new entries ' + NS.startHourUtc + ':00-' + NS.endHourUtc + ':00 UTC'); }
+        continue;
+      }
       // t89u: loss-streak pause stops scanning for this book too (exits keep running).
       if (book.entry && book.entry.lossStreakPause && book.entry.lossStreakPause.pauseScanning && lossPaused(state, book.id, t)) { countFilter(state, book, 'lossStreakPause'); continue; }
       const extra = (extraByBook && extraByBook[book.id]) || [];
@@ -388,7 +431,16 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         const cool = reentry.blocked(state, { mint: row.mint, pairAddress: row.pairAddress }, t);
         if (cool) { reject(state, book, row, 're-entry cooldown'); continue; }
         if (row.stale || !row.fetchedAt || t - row.fetchedAt > C.maxPriceAgeSec * 1000) { reject(state, book, row, 'stale scan row (> ' + C.maxPriceAgeSec + 's)'); continue; }
-        if (state.balance < C.sizeSol) { reject(state, book, row, 'insufficient balance'); continue; }
+        // t90u v5 sizing: exactly pctOfEquity (5%) of the current marked total equity per trade (no static 0.05).
+        const SZ = book.entry && book.entry.sizing;
+        let size = C.sizeSol, sizing = null;
+        if (SZ) {
+          const eq = equityNow ? Number(equityNow()) : NaN;
+          if (!(eq > 0)) { countFilter(state, book, 'sizingEquityUnknown'); reject(state, book, row, 'sizing: marked equity unknown'); continue; }
+          size = +(eq * SZ.pctOfEquity / 100).toFixed(6);
+          sizing = { pctOfEquity: SZ.pctOfEquity, equityUsedSol: +eq.toFixed(6), sizeSol: size, basis: 'marked equity (cash + Jupiter-marked open positions)' };
+        }
+        if (state.balance < size) { reject(state, book, row, 'insufficient balance'); continue; }
         tried++;
         b.entries.attempts++;
         const g = await gate({ symbol: row.symbol, mint: row.mint, pairAddress: row.pairAddress, strategyId: book.id }, row);
@@ -401,6 +453,16 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           if (!g15) { countFilter(state, book, 'm15NoData'); reject(state, book, row, 'm15: no 15-min data (own history + GeckoTerminal)'); continue; }
           Object.assign(fields, { m15: +g15.pct.toFixed(3), m15Source: g15.source, m15FromAgeMin: g15.fromAgeMin });
           if (!(g15.pct > book.entry.minM15)) { countFilter(state, book, 'm15'); reject(state, book, row, 'm15: <= ' + book.entry.minM15 + ' (GeckoTerminal)'); continue; }
+        }
+        // t90u v5: resistance break from GeckoTerminal 1m candles when the own price history is too short (fail closed).
+        const BO = book.entry && book.entry.breakout;
+        if (BO && fields.priorHigh == null) {
+          if (gtBudget <= 0) { countFilter(state, book, 'breakoutPending'); continue; }
+          gtBudget--;
+          const ph = m15 && m15.priorHighGt ? await m15.priorHighGt(row.pairAddress, nowFn(), BO) : null;
+          if (!ph) { countFilter(state, book, 'breakoutNoData'); reject(state, book, row, 'breakout: no prior-high data (own history + GeckoTerminal)'); continue; }
+          Object.assign(fields, { priorHigh: ph.priorHigh, priorHighSource: ph.source, priorHighWindowMin: [ph.fromMin, ph.toMin], breakPct: +((num(row.priceUsd) / ph.priorHigh - 1) * 100).toFixed(3) });
+          if (!(num(row.priceUsd) > ph.priorHigh * (1 + (BO.minBreakPct || 0) / 100))) { countFilter(state, book, 'breakout'); reject(state, book, row, 'breakout: not above the prior high (GeckoTerminal)'); continue; }
         }
         const rug = await mintAuth.check(row.mint);
         const rugCheck = { pass: rug.pass, reason: rug.reason, mintAuthority: rug.mintAuthority === undefined ? null : rug.mintAuthority, freezeAuthority: rug.freezeAuthority === undefined ? null : rug.freezeAuthority, program: rug.program || null, decimals: rug.decimals, checkedAt: rug.checkedAt, source: rug.source };
@@ -416,7 +478,10 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           const tt = top10 ? await top10.check(row.mint, row.pairAddress, nowFn()) : { ok: false, reason: 'top10: no checker configured' };
           if (!tt.ok && RC) rugState(state).unavailable++;
           if (!tt.ok) { countFilter(state, book, 'top10Unavailable'); reject(state, book, row, 'top10: unavailable (' + (tt.reason || 'error') + ')'); continue; }
-          Object.assign(fields, { top10Pct: tt.top10Pct, top10MaxHolderPct: tt.maxHolderPct, top10ExcludedPct: tt.excludedPct });
+          Object.assign(fields, { top10Pct: tt.top10Pct, top10MaxHolderPct: tt.maxHolderPct, top10ExcludedPct: tt.excludedPct, top10Source: tt.source || null });
+          if (RC && tt.mintAuthority && tt.mintAuthority !== 'unknown') { rugFail(state, book, row, 'mint-authority-not-revoked (RugCheck)'); continue; }
+          if (RC && tt.freezeAuthority && tt.freezeAuthority !== 'unknown') { rugFail(state, book, row, 'freeze-authority-not-revoked (RugCheck)'); continue; }
+          if (RC && tt.rugged) { rugFail(state, book, row, 'RugCheck marks token rugged'); continue; }
           if (RC && tt.top10Pct > RC.maxTop10Pct) { rugFail(state, book, row, 'top10 > ' + RC.maxTop10Pct + '%', +tt.top10Pct.toFixed(2)); continue; }
           if (RC) rugState(state).passed++;
           if (tt.top10Pct > E.maxTop10Pct) { countFilter(state, book, 'top10'); reject(state, book, row, 'top10: ' + tt.top10Pct.toFixed(1) + '% > ' + E.maxTop10Pct + '%'); continue; }
@@ -429,7 +494,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           if (curV2) Object.assign(curV2, { lpLockedPct: hc.lpLockedPct == null ? null : hc.lpLockedPct, top10Pct: hc.top10Pct == null ? null : hc.top10Pct, maxHolderPct: hc.maxHolderPct == null ? null : hc.maxHolderPct, creatorPct: hc.creatorPct == null ? null : hc.creatorPct, holderCheckSource: hc.source || null });
           if (!hc.pass) { reject(state, book, row, hc.reason, { holderCheck: holder }); continue; }
         }
-        const buy = await quotes.buyQuote(row.mint, C.sizeSol);
+        const buy = await quotes.buyQuote(row.mint, size);
         if (!buy.ok) { reject(state, book, row, buy.noRoute ? 'no buy route' : 'buy quote failed', { error: buy.error }); continue; }
         const sell = await quotes.sellQuote(row.mint, buy.outAmount);
         if (!sell.ok) { reject(state, book, row, sell.noRoute ? 'no sell route' : 'sell-route quote failed', { error: sell.error }); continue; }
@@ -442,7 +507,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (roundTripPct < -maxRt) { reject(state, book, row, (E.maxRoundTripLossPct != null ? 'impact: ' : '') + 'round trip ' + roundTripPct.toFixed(1) + '%'); continue; }
         if (E.maxSellImpactPct != null && !(Number(sell.priceImpactPct) <= E.maxSellImpactPct)) { reject(state, book, row, 'impact: sell quote impact > ' + E.maxSellImpactPct + '%', { sellImpactPct: sell.priceImpactPct }); continue; }
         const tokensUi = Number(buy.outAmount) / 10 ** rug.decimals;
-        const fillSolPerToken = C.sizeSol / tokensUi;
+        const fillSolPerToken = size / tokensUi;
         const quoteGapPct = row.priceNative > 0 ? (fillSolPerToken / row.priceNative - 1) * 100 : null;
         if (quoteGapPct != null && quoteGapPct > C.maxQuoteGapPct) { reject(state, book, row, 'Jupiter fill ' + quoteGapPct.toFixed(1) + '% over DexScreener price'); continue; }
         // t89u Executor: hard slippage limit on entries (Jupiter impact or fill vs DexScreener reference).
@@ -456,14 +521,14 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         }
         const CM = book.exit && book.exit.costModel;
         let sim = null;
-        if (CM) { const pf = fees && fees.forAccount ? await fees.forAccount(row.pairAddress, nowFn()) : feeNow(t2, row.pairAddress); sim = execMod.simBuy({ sizeSol: C.sizeSol, quoteOutRaw: buy.outAmount, cm: CM, fee: pf, random }); await send.submit({ side: 'buy', mint: row.mint, sizeSol: C.sizeSol, quote: buy }); }
+        if (CM) { const pf = fees && fees.forAccount ? await fees.forAccount(row.pairAddress, nowFn()) : feeNow(t2, row.pairAddress); sim = execMod.simBuy({ sizeSol: size, quoteOutRaw: buy.outAmount, cm: CM, fee: pf, random }); await send.submit({ side: 'buy', mint: row.mint, sizeSol: size, quote: buy }); }
         const at = new Date(t2).toISOString();
         const pos = {
           id: 'bk-' + t2 + '-' + Math.random().toString(36).slice(2, 7),
           book: book.id, bookName: book.name, bookVersion: book.version, strategyId: book.id, strategyName: book.name + ' v' + book.version, strategyVersion: label(book),
           legacy: false, symbol: row.symbol, name: row.name, mint: row.mint, pairAddress: row.pairAddress, dexId: row.dexId,
-          entryTime: at, sizeSol: C.sizeSol, decimals: rug.decimals,
-          tokensRaw: String(buy.outAmount), tokensRemainingRaw: String(buy.outAmount), remainingFrac: 1, costBasisRemainingSol: C.sizeSol,
+          entryTime: at, sizeSol: size, decimals: rug.decimals,
+          tokensRaw: String(buy.outAmount), tokensRemainingRaw: String(buy.outAmount), remainingFrac: 1, costBasisRemainingSol: size,
           entryPrice: fillSolPerToken, entryPriceUnit: 'SOL/token (Jupiter fill)', entryPriceUsdDexscreener: row.priceUsd, entryQuoteGapPct: quoteGapPct == null ? null : +quoteGapPct.toFixed(3),
           entryQuote: { side: 'buy', inMint: 'SOL', inAmount: buy.inAmount, outAmount: buy.outAmount, priceImpactPct: buy.priceImpactPct, route: buy.route, at: new Date(buy.at).toISOString() },
           entrySellCheck: { inAmount: sell.inAmount, outAmount: sell.outAmount, priceImpactPct: sell.priceImpactPct, roundTripPct: +roundTripPct.toFixed(3), at: new Date(sell.at).toISOString() },
@@ -476,18 +541,21 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           // t89u paper realism: the position holds the tokens left after the simulated adverse slippage.
           pos.tokensRaw = sim.tokensRaw; pos.tokensRemainingRaw = sim.tokensRaw;
           pos.entryQuoteFillPrice = fillSolPerToken;
-          pos.entryPrice = C.sizeSol / (Number(sim.tokensRaw) / 10 ** rug.decimals);
+          pos.entryPrice = size / (Number(sim.tokensRaw) / 10 ** rug.decimals);
           pos.entryPriceUnit = 'SOL/token (simulated fill: Jupiter quote - ' + sim.costs.simSlipPct + '%)';
           pos.entryCosts = sim.costs; pos.costModel = 'v4';
           const rt = ((Number(sell.outAmount) * (1 - sim.costs.simSlipPct / 100)) / lamportsIn - 1) * 100;
           pos.markPct = +rt.toFixed(3); pos.peakPct = pos.markPct;
           if (RC) pos.rugCheckV4 = { pass: true, liquidityUsd: row.liquidityUsd, mintRevoked: true, freezeRevoked: true, top10Pct: fields.top10Pct == null ? null : fields.top10Pct, limits: RC };
         }
+        if (sizing) pos.sizing = sizing;
+        if (book.exit && book.exit.takeProfit) pos.takeProfit = Object.assign(tpTier(book.exit.takeProfit, fields), { setAt: at, deadlineAt: new Date(t2 + book.exit.maxHoldMinutes * MIN).toISOString() });
+        if (book.exit && book.exit.feedStaleSec) pos.feed = { lastOkAt: at, stale: false, staleSince: null, events: [] };
         // Re-check after the awaits above (quotes): never push a second holding of the same mint.
         const heldLate = heldMint(state, row);
         if (heldLate) { sameMintCount(state, book.id); reject(state, book, row, REASON_SAME_MINT, { detail: heldLate.detail, heldBy: heldLate.heldBy, late: true }); continue; }
         b.open.push(pos);
-        state.balance -= C.sizeSol;
+        state.balance -= size;
         b.entries.opened++;
         if (book.entry && book.entry.maxLiquidityUsd != null) filterStats(state, book).entered++;
         if (book.id === 'graduation-sniper' && b.gradSniper && book.version === b.gradSniper.version) {
@@ -495,7 +563,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           pos.v2Checks = Object.assign({}, curV2);
           gradLog(state, Object.assign({ symbol: row.symbol, mint: row.mint, pairAddress: row.pairAddress }, curV2, { result: 'entered', positionId: pos.id }));
         }
-        if (log) log('ENTRY', row.symbol, label(book) + ' size ' + C.sizeSol + ' SOL, Jupiter fill, impact ' + buy.priceImpactPct + '%, round trip ' + roundTripPct.toFixed(2) + '%');
+        if (log) log('ENTRY', row.symbol, label(book) + ' size ' + size + ' SOL, Jupiter fill, impact ' + buy.priceImpactPct + '%, round trip ' + roundTripPct.toFixed(2) + '%');
       }
     });
   }
@@ -597,6 +665,27 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       let t = nowFn();
       const minsOpen = (t - Date.parse(pos.entryTime)) / MIN;
       pos.quoteChecks = (pos.quoteChecks || 0) + 1;
+      const FS = ex && ex.feedStaleSec;
+      const feedOk = q && q.ok && quoteFresh(q, t, maxAge);
+      if (FS) {
+        // t90u Data Feed Protection: last good Jupiter sell quote per position; >= 60 s without one = stale. While
+        // stale nothing is decided (no stop from an old price); the next fresh quote ends the event.
+        const F = pos.feed || (pos.feed = { lastOkAt: pos.markAt || pos.entryTime, stale: false, staleSince: null, events: [] });
+        const fb = ensure(state).feed;
+        if (feedOk) {
+          if (F.stale) {
+            const ev = { start: F.staleSince, end: new Date(t).toISOString(), durationSec: +((t - Date.parse(F.staleSince)) / 1000).toFixed(1), symbol: pos.symbol, positionId: pos.id };
+            F.events = [ev].concat(F.events).slice(0, 20); F.stale = false; F.staleSince = null;
+            fb.recent = [ev].concat(fb.recent).slice(0, 30); fb.openStale = Math.max(0, fb.openStale - 1);
+            if (log) log('FEED', pos.symbol, 'feed resumed after ' + ev.durationSec + ' s');
+          }
+          F.lastOkAt = new Date(q.at).toISOString();
+        } else if (!F.stale && t - Date.parse(F.lastOkAt) >= FS * 1000) {
+          F.stale = true; F.staleSince = F.lastOkAt; fb.staleEvents++; fb.openStale++;
+          fb.recent = [{ start: F.staleSince, detectedAt: new Date(t).toISOString(), symbol: pos.symbol, positionId: pos.id, open: true }].concat(fb.recent).slice(0, 30);
+          if (log) log('FEED', pos.symbol, 'feed stale >= ' + FS + ' s: stop-loss suspended until the feed resumes');
+        }
+      }
       if (!q.ok) {
         pos.quoteFailures = (pos.quoteFailures || 0) + 1;
         pos.lastQuoteError = String(q.error || '').slice(0, 80);
@@ -604,7 +693,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           pos.noRouteCount = (pos.noRouteCount || 0) + 1;
           if (!pos.noRouteSince) pos.noRouteSince = new Date(t).toISOString();
           if (pos.noRouteCount >= (C.noRouteConsecutive || 5) && t - Date.parse(pos.noRouteSince) >= C.noRouteTotalLossMin * MIN) { bookLeg(state, pos, 'no-route-total-loss', pos.tokensRemainingRaw, null, t); closeTrade(state, pos, 'no-route-total-loss', t); changed = true; }
-        } else if (minsOpen >= ex.maxHoldMinutes + C.noQuoteAfterMaxHoldMin) { bookLeg(state, pos, 'no-quote-total-loss', pos.tokensRemainingRaw, null, t); closeTrade(state, pos, 'no-quote-total-loss', t); changed = true; }
+        } else if (!FS && minsOpen >= ex.maxHoldMinutes + C.noQuoteAfterMaxHoldMin) { bookLeg(state, pos, 'no-quote-total-loss', pos.tokensRemainingRaw, null, t); closeTrade(state, pos, 'no-quote-total-loss', t); changed = true; }
         continue;
       }
       pos.noRouteSince = null; pos.noRouteCount = 0;
@@ -729,4 +818,4 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   return { ensure, heldMint, rejectLegacy, closeNowInner, allowed, guard, lossPaused, filterStats, rugState, send, runEntries, runExits, runExitsInner, report, lockedSol, stockBlock, recordSnaps, signals, locked, gradView: state => (ensure(state).gradSniper ? gradView(ensure(state).gradSniper) : null) };
 }
 
-module.exports = { makeBooks, entryFails, decideExit, quoteFresh, bookStats, high24Estimate, dropFromHighPct, m5VolumeVsHourAvg, isPumpOrigin, label };
+module.exports = { makeBooks, tpTier, volSpikeOf, entryFails, decideExit, quoteFresh, bookStats, high24Estimate, dropFromHighPct, m5VolumeVsHourAvg, isPumpOrigin, label };
