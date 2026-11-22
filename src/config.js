@@ -88,13 +88,21 @@ module.exports = {
         // Paper cost model: flat 2% adverse slippage on every fill (buy and sell) + priority fee; no extra fee or
         // stop penalty. Boss Rules risk: 2 losses -> 30 min pause, no entries 02:00-06:00 UTC, 5%/24 h equity halt.
         // Size 5% of marked equity.
-        id: 'runner-hunter', name: 'Trend Following', version: 6,
-        entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 0, maCacheSec: 120 },
+        // v6.01 (Liviu t98u, 22 Nov 16:00): trend confirmation: price >= 1% above the 50 MA AND the 50 MA rising =
+        // SMA50 of the last 50 one-minute closes > SMA50 of the 50 closes ending 5 candles earlier (needs 55 min of own
+        // history or 55 GeckoTerminal candles; otherwise no entry). Same board runner-v6. Max 2 open (unchanged).
+        id: 'runner-hunter', name: 'Trend Following', version: 6.01,
+        entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 1, requireMaRising: true, risingLookbackCandles: 5, maCacheSec: 120 },
           maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
           stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
         exit: { stopLossPct: 4, takeProfitPct: 8, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
           costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } },
         previousVersions: [
+          { version: 6, until: '2026-11-22T16:00', name: 'Trend Following', entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 0, maCacheSec: 120 },
+          maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
+          stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
+            exit: { stopLossPct: 4, takeProfitPct: 8, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
+          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } } },
           { version: 5, until: '2026-11-22T14:53', name: 'Runner hunter (Boss Rules breakout)', entry: { minLiquidityUsd: 100000, maxLiquidityUsd: 900000, minVolumeToLiquidityH24: 0.1, minM5: 0, minM15: 0, maxH1: 25, maxTop10Pct: 15,
           maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
           breakout: { minVolSpike: 3, lookbackMin: 45, excludeMin: 5, minCoverMin: 30, minBreakPct: 0 },
