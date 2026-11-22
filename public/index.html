@@ -128,7 +128,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
       <table class="pt"><thead><tr><th>Token</th><th>Entry</th><th class="r">Mark</th><th class="r">Net</th><th class="r">P&amp;L SOL</th><th class="r">Stop / TP</th><th class="r">Age</th></tr></thead><tbody id="openPos"></tbody></table>
     </div>
     <div class="card">
-      <h2>Equity <span class="seg" id="eqRange"><button data-r="scoreboard" class="on">board</button><button data-r="6">6h</button><button data-r="24">24h</button></span></h2>
+      <h2>Equity <span class="seg" id="eqRange"><button data-r="scoreboard" class="on">this board</button></span></h2>
       <canvas id="eq"></canvas>
       <div class="mu num" style="font-size:12px;margin-top:8px" id="eqLegend">–</div>
     </div>
@@ -193,7 +193,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
     var cmx = x.costModel || {};
     var exTxt = x.takeProfitPct != null && !tpx && x.priceBasis ? 'stop −' + x.stopLossPct + '% · take profit +' + x.takeProfitPct + '% (full) · on the price move since entry, every ~5 s, fresh quotes only · ' + x.maxHoldMinutes + ' min safety cap · paper fills: ' + cmx.flatSlipPct + '% slippage per side + priority fee' : tpx ? 'stop −' + x.stopLossPct + '% (fresh quote only) · full take profit +' + tpx.weak.pct + '/+' + tpx.moderate.pct + '/+' + tpx.strong.pct + '% by entry momentum · market exit at ' + x.maxHoldMinutes + ' min' : x.breakevenAtPct != null ? 'stop −' + x.stopLossPct + '% · at +' + x.breakevenAtPct + '% stop → entry + trail ' + x.trailPct + '% below peak · not +' + (x.momentum || {}).minPct + '% in ' + (x.momentum || {}).withinMinutes + ' min → exit · ' + x.maxHoldMinutes + ' min max' : 'stop −' + x.stopLossPct + '% · sell ' + (Math.abs(pa.sellPct - 33.3333) < 0.01 ? '⅓' : pa.sellPct + '%') + ' at +' + pa.atPct + '% · trail ' + x.trailPct + '% below peak · ' + Math.round((x.maxHoldMinutes || 0) / 60) + ' h max';
     var P = D.pnl || {}, rh = (P.byStrategy || []).filter(function (r) { return r.strategyId === 'runner-hunter'; })[0];
-    $('heroEx').innerHTML = esc(exTxt) + (P.epoch ? ' · board <b>' + esc(P.epoch) + '</b> since ' + tL(P.since) + (rh ? ' · all runner P&amp;L since start <b class="' + cl(rh.totalSol) + '">' + sol(rh.totalSol) + '</b>' : '') : '');
+    $('heroEx').innerHTML = esc(exTxt) + (P.epoch ? ' · board <b>' + esc(P.epoch) + '</b> since ' + tL(P.since) + '' : '');
     $('hOpen').textContent = sol(g.openPnlSol); $('hOpen').className = 'num ' + cl(g.openPnlSol);
     $('hCount').textContent = (g.openCount || 0) + ' / ' + (g.maxOpen || b.maxOpen || 2);
     var en = b.entry || {};
@@ -214,6 +214,9 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
     h += '<div class="row"><span>Losses in a row</span><b class="num ' + (lp.paused ? 'dn' : '') + '">' + lp.consecutiveLosses + ' / ' + lp.losses + (lp.paused ? ' · PAUSED ' + mmss(lp.leftSec) + ' left (until ' + tL(lp.pausedUntil) + ')' : ' · scanning') + '</b></div>';
     h += '<div class="row"><span>Night hours</span><b class="num ' + (n.active ? 'dn' : '') + '">' + (n.active ? 'SKIPPING until ' + tL(n.endsAt) : 'off') + ' · next ' + esc(n.windowUtc || '') + ' = ' + esc(n.nextStartLondon || '') + '–' + esc((n.nextEndLondon || '').replace(/^\w+ /, '')) + ' · skips ' + (n.skips || 0) + '</b></div>';
     h += '<div class="row"><span>Size</span><b class="num">' + (isNum(sz.nextSizeSol) ? sz.nextSizeSol.toFixed(4) + ' SOL = ' + sz.pctOfEquity + '% of ' + sz.markedEquitySol.toFixed(4) + ' SOL equity' : '–') + '</b></div>';
+    var er = B.entryReview, xl = B.exitLadder;
+    if (er) h += '<div class="row"><span>Entry pass rate</span><b class="num">' + er.uniqueTokensPassAllRules + ' tokens passed all rules (' + (isNum(er.perHourAllRules) ? er.perHourAllRules.toFixed(1) : '–') + '/h) · ' + er.uniqueTokensPassLiqMA + ' passed the pre-screen (liq + own-history MA) · slot full ' + er.capacitySkips + '×</b></div>';
+    if (xl && xl.config) h += '<div class="row"><span>Exit ladder</span><b class="num">' + xl.config.bps.map(function (x) { return (x / 100) + '%'; }).join(' → ') + ' if a quote fails or is > ' + (xl.config.maxQuoteAgeMs / 1000) + ' s old · escalations ' + xl.escalations + ' · exits ' + xl.exits + ' · no fresh quote ' + xl.noFreshQuote + '</b></div>';
     h += '<div class="row"><span>Feed</span><b class="num">stale ≥ ' + fd.staleAfterSec + ' s → stop on hold · stale events ' + (fd.staleEvents || 0) + ' · open stale ' + (fd.openStale || 0) + '</b></div>';
     (B.positions || []).forEach(function (p) {
       var tp = p.takeProfit, f = p.feed || {};
@@ -221,7 +224,7 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
       h += '<div class="row"><span>' + esc(p.symbol) + ' <small>' + esc(p.version || '') + '</small></span><b class="num">' + (tr && st ? 'move ' + (isNum(p.movePct) ? pct(p.movePct) : '–') + ' (SL −' + st.stopLossPct + ' / TP +' + st.takeProfitPct + ') · entry ' + pct(tr.maDistPct) + ' vs MA' + tr.maPeriod + ' · ' + Math.round(p.heldMin) + '/' + st.maxHoldMinutes + ' min' : tp ? 'TP +' + tp.pct + '% (' + esc(tp.tier) + ') · ' + mmss(tp.leftSec) + ' to time exit' : 'old rules') + ' · feed ' + (isNum(f.ageSec) ? Math.round(f.ageSec) + 's' : '–') + (f.stale ? ' <span class="dn">STALE</span>' : '') + (p.sizing ? ' · ' + p.sizeSol.toFixed(4) + ' SOL = 5% of ' + p.sizing.equityUsedSol.toFixed(3) : '') + '</b></div>';
     });
     var rj = B.breakoutRejects || {}, ks = Object.keys(rj).sort(function (a, b) { return rj[b] - rj[a]; }).slice(0, 10);
-    h += '<div class="rj">' + (ks.length ? ks.map(function (k) { return '<i>' + esc(k) + ' ' + rj[k] + '</i>'; }).join('') : '<i>no breakout rejects yet</i>') + '</div>';
+    h += '<div class="rj">' + (ks.length ? ks.map(function (k) { return '<i>' + esc(k) + ' ' + rj[k] + '</i>'; }).join('') : '<i>no rejects yet</i>') + '</div>';
     $('brBody').innerHTML = h;
   }
   function renderManager() {
@@ -272,7 +275,8 @@ footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
   function focusSince() { return D.scoreboard && D.scoreboard.since ? Date.parse(D.scoreboard.since) : Date.parse('2026-11-22T06:52:57Z'); }
   function renderFills() {
     var act = activeIds();
-    var rows = (D.recentTrades || []).filter(function (t) { return act.indexOf(t.strategyId) >= 0 || (Date.parse(t.closedAt) >= focusSince()); }).slice(0, 16);
+    // t96u: only the current board's (epoch) closes; older versions are archived, not shown.
+    var rows = (D.recentTrades || []).filter(function (t) { return Date.parse(t.closedAt) >= focusSince(); }).slice(0, 16);
     $('fills').innerHTML = rows.map(fillRow).join('') || '<tr><td class="mu">no closes yet</td></tr>';
   }
 

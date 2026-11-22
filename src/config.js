@@ -32,6 +32,9 @@ module.exports = {
   // PR11 (Liviu t64u, 21 Nov): four aggressive PAPER books, side by side, same size, own capacity.
   // Fills and marks come only from Jupiter quotes (read-only quote API, never a swap).
   books: {
+    // t96u (Liviu): escalating exit slippage ladder for ALL exits: sell quote at 2%, then 3%, 10%, 25% when a quote
+    // fails or is older than 2 s. The trigger uses that fresh quote; the paper fill = quote minus the slippage used.
+    exitLadder: { bps: [200, 300, 1000, 2500], maxQuoteAgeMs: 2000 },
     epoch: 'runner-v6',           // t93u: Trend Following board (runner-v5 archived).           // t90u: fresh runner-hunter v5 board (runner-v4 archived, kept in scoreboardHistory). t89u: fresh runner-hunter v4 board (runner-v3 archived, kept in scoreboardHistory). t86u: fresh runner-hunter v3 board (runner-v2 archived, kept in scoreboardHistory; t85u: runner-v2, books-v1 before)
     epochCloseout: true,          // t85u: close non-onlyStrategies leftovers (paper, Jupiter sell quote) before the board starts
     sizeSol: 0.05,                // SAME size per trade for every book (manager never cuts the books)

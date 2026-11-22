@@ -30,7 +30,7 @@ function harness(o) {
   let t = o.now || NOW; const h = { mult: 1.0, fail: false, trades: [], top: o.top10 || { ok: true, top10Pct: 12, mintAuthority: null, freezeAuthority: null, source: 'rugcheck' }, sma: o.sma === undefined ? { ma: 0.001, period: 50, candles: 50, source: 'geckoterminal-ohlcv-1m', newestAgeSec: 30, spanMin: 50 } : o.sma, gtCalls: 0, equity: o.equity || 4 };
   const quotes = {
     buyQuote: async (mint, sol) => ({ ok: true, at: t, inAmount: String(Math.round(sol * 1e9)), outAmount: String(Math.round(sol / 0.05 * 10000000000)), priceImpactPct: 0.5, route: 'Ray' }),
-    sellQuote: async (mint, raw) => h.fail ? { ok: false, error: 'timeout' } : ({ ok: true, at: t, inAmount: String(raw), outAmount: String(Math.floor(Number(raw) * 5e-3 * h.mult)), priceImpactPct: 0.4, route: 'Ray' })
+    sellQuote: async (mint, raw, bps) => (h.okFromBps && (bps || 300) < h.okFromBps) ? { ok: false, error: 'route timeout', at: t } : (h.staleBelow && (bps || 300) < h.staleBelow) ? { ok: true, at: t - 5000, inAmount: String(raw), outAmount: String(Math.floor(Number(raw) * 5e-3 * h.mult)), priceImpactPct: 0.4 } : h.fail ? { ok: false, error: 'timeout' } : ({ ok: true, at: t, inAmount: String(raw), outAmount: String(Math.floor(Number(raw) * 5e-3 * h.mult)), priceImpactPct: 0.4, route: 'Ray' })
   };
   const mintAuth = { check: async () => ({ pass: true, reason: 'mint+freeze revoked', mintAuthority: null, freezeAuthority: null, decimals: 6, program: 'spl-token', checkedAt: 'x', source: 'test' }) };
   const top10 = { check: async () => h.top };
@@ -162,6 +162,29 @@ test('Manager v6: cannot loosen the stop beyond -4, the liquidity floor below $5
   const e = improver.step(st, book, { baseVersion: 6, now: NOW });
   assert.strictEqual(e.rule, 'R1'); assert.strictEqual(e.change, 'entry.trend.minAbovePct'); assert.strictEqual(book.version, 6.01);
   assert.strictEqual(book.exit.stopLossPct, 4); assert.strictEqual(book.entry.minLiquidityUsd, 50000); assert.deepStrictEqual(book.entry.rugCheck, RH().entry.rugCheck);
+});
+
+
+test('exit ladder: failed/stale first quote -> 3%, 10%, 25%; stop fires only on a fresh quote; fill at the slippage used', async () => {
+  assert.deepStrictEqual(config.books.exitLadder, { bps: [200, 300, 1000, 2500], maxQuoteAgeMs: 2000 });
+  let h = harness(); await h.enter();
+  h.okFromBps = 1000; await h.pass(0.95);
+  const tr = h.trades[0]; assert.strictEqual(tr.exitReason, 'sl');
+  const leg = tr.legs[0]; assert.strictEqual(leg.fillSlippageBps, 1000);
+  assert.deepStrictEqual(leg.exitLadder.map(a => [a.slippageBps, a.result]), [[200, 'failed'], [300, 'failed'], [1000, 'ok']]);
+  assert.ok(leg.exitLadder.every(a => typeof a.ms === 'number'));
+  assert.strictEqual(leg.costs.simSlipPct, 10);
+  near(tr.pnlPct, (0.98 * 0.95 * 0.90 - 1) * 100, 'net at 10% fill slip', 0.05);
+  assert.strictEqual(h.state.books.exitLadder.byFillBps['1000'], 1);
+  // stale (> 2 s) first quotes escalate too; a fresh 3% quote fills at 3%
+  h = harness(); await h.enter(); h.staleBelow = 300; await h.pass(0.95);
+  assert.strictEqual(h.trades[0].legs[0].fillSlippageBps, 300); assert.deepStrictEqual(h.trades[0].legs[0].exitLadder.map(a => a.result), ['stale', 'ok']);
+  // no fresh quote at any rung: nothing fires from an old price
+  h = harness(); await h.enter(); h.okFromBps = 99999; await h.pass(0.5);
+  assert.strictEqual(h.trades.length, 0); assert.strictEqual(h.state.books.exitLadder.noFreshQuote, 1);
+  h.okFromBps = 0; await h.pass(0.99); assert.strictEqual(h.trades.length, 0, '-1% move: no stop'); assert.strictEqual(h.state.books.open[0].legs.length, 0);
+  // normal pass: one quote at 200 bps, fill at the flat 2%
+  await h.pass(1.09); assert.strictEqual(h.trades[0].exitReason, 'tp'); assert.strictEqual(h.trades[0].legs[0].fillSlippageBps, 200); assert.strictEqual(h.trades[0].legs[0].costs.simSlipPct, 2);
 });
 
 (async () => {
