@@ -145,6 +145,19 @@ function makeLegacyExits({ config, quotes, mintAuth, sellAgent, computePnl, clas
     close(state, pos, d.reason, price, extra);
   }
 
+  // t85u epoch switch: close one leftover position now at a fresh Jupiter sell quote (paper close).
+  // Returns the trade, or null when no fresh quote was available (retried on the next pass).
+  async function closeNow(state, pos, reason) {
+    if (!state.openPositions.includes(pos)) return null;
+    if (!(await ensureTokens(pos))) return null;
+    const q = await quotes.sellQuote(pos.mint, pos.tokensRaw);
+    const t = nowFn();
+    if (!q || !q.ok || !((t - q.at) / 1000 <= (C.maxExitQuoteAgeSec || 10))) { pos.closeNowFailures = (pos.closeNowFailures || 0) + 1; return null; }
+    const pct = (Number(q.outAmount) / 1e9 / pos.sizeSol - 1) * 100;
+    const price = pos.entryPrice * (1 + pct / 100);
+    return close(state, pos, reason, price, { exitQuote: { inAmount: q.inAmount, outAmount: q.outAmount, priceImpactPct: q.priceImpactPct, at: new Date(q.at).toISOString(), ageSec: +((t - q.at) / 1000).toFixed(2), route: q.route || null } });
+  }
+
   async function run(state, hooks) {
     let n = 0;
     for (const pos of (state.openPositions || []).slice()) {
@@ -154,7 +167,7 @@ function makeLegacyExits({ config, quotes, mintAuth, sellAgent, computePnl, clas
     }
     return n;
   }
-  return { run, runOne, ensureTokens, stats };
+  return { run, runOne, ensureTokens, closeNow, stats };
 }
 
 module.exports = { makeLegacyExits, nextDelayMs, makeStats };
