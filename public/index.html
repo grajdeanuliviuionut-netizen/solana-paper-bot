@@ -22,8 +22,14 @@ header{display:flex;align-items:center;justify-content:space-between;gap:24px;pa
 .hx{font-size:13px;color:var(--mute);margin:-4px 0 12px}.hx b{color:var(--ink,#e8edf4);font-weight:600}
 .health{font-size:12.5px;color:var(--sub);text-align:right;line-height:1.6}
 .health .d{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--up);margin-right:6px;vertical-align:1px}.health .d.bad{background:var(--dn)}
-.wrap{display:grid;grid-template-columns:minmax(380px,1fr) minmax(0,2.1fr) minmax(360px,1fr);gap:20px;padding:20px 28px 28px;max-width:3440px;margin:0 auto}
-@media (max-width:1400px){.wrap{grid-template-columns:1fr}.kpis{flex-wrap:wrap}}
+/* t102u/t103u (Liviu): ultrawide fix - main content sits in a centred 1400px container; CSS Grid auto-fit columns
+   (min 440px; stat boxes min 100px) give 2 columns at full width (stats/agents column next to the positions table), 1 column on narrow
+   screens; the fills column spans the full container width underneath. */
+.wrap{max-width:1400px;margin:0 auto;display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,440px),1fr));gap:20px;padding:20px 28px 28px;align-items:start}
+.wrap>.col:last-child{grid-column:1/-1}
+header{flex-wrap:wrap;padding-left:max(28px,calc((100% - 1400px) / 2 + 28px));padding-right:max(28px,calc((100% - 1400px) / 2 + 28px))}
+@media (max-width:1400px){.kpis{flex-wrap:wrap}}
+@media (max-width:720px){header{flex-wrap:wrap}.wrap{padding:14px 12px 20px;gap:14px}.card{padding:14px}.pt,.ft{display:block;overflow-x:auto}}
 .col{display:flex;flex-direction:column;gap:20px;min-width:0}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px 20px;min-width:0}
 .card h2{margin:0 0 14px;font-size:13px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--sub);display:flex;justify-content:space-between;align-items:baseline;gap:10px}
@@ -31,7 +37,7 @@ header{display:flex;align-items:center;justify-content:space-between;gap:24px;pa
 .sp{display:inline-block;font-size:10.5px;font-weight:700;letter-spacing:.7px;padding:2px 8px;border-radius:6px;text-transform:uppercase;white-space:nowrap}
 .sp.green{background:rgba(47,214,123,.15);color:var(--up)}.sp.grey{background:#232b39;color:#c3cad6}.sp.amber{background:rgba(245,178,61,.17);color:var(--warn)}.sp.red{background:rgba(255,92,116,.17);color:var(--dn)}
 /* nucleus */
-#nucleus{display:block;width:100%;height:auto;max-height:720px}
+#nucleus{display:block;width:100%;height:auto;max-height:520px}
 #nucleus .orbit{fill:none;stroke:#1d2737;stroke-width:1.5;stroke-dasharray:3 6}
 #nucleus .link{stroke:#2a3850;stroke-width:2}
 #nucleus .link.green{stroke:rgba(47,214,123,.45)}#nucleus .link.red{stroke:rgba(255,92,116,.55)}#nucleus .link.amber{stroke:rgba(245,178,61,.5)}
@@ -53,13 +59,13 @@ canvas{display:block;width:100%;height:240px}
 .hero{border-top:3px solid var(--up)}
 .hh{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
 .hh .t{font-size:24px;font-weight:700}.hh .t small{font-size:14px;color:var(--mute);font-weight:500;margin-left:10px}
-.hs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-bottom:18px}
+.hs{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:12px;margin-bottom:18px}
 .hs div{padding:12px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel2)}
 .hs label{display:block;font-size:11px;letter-spacing:.8px;text-transform:uppercase;color:var(--mute)}
 .hs b{display:block;font-size:30px;font-weight:600;margin-top:4px}
 .sect{font-size:12px;letter-spacing:1px;text-transform:uppercase;color:var(--mute);margin:18px 2px 6px;font-weight:600}
 table{width:100%;border-collapse:collapse}
-.pt td{padding:10px 6px;border-top:1px solid var(--line);font-size:15px;white-space:nowrap;vertical-align:top}
+.pt td{padding:8px 6px;border-top:1px solid var(--line);font-size:14px;white-space:nowrap;vertical-align:top}
 .pt td small{display:block;font-size:12px;color:var(--mute);margin-top:1px}
 .pt th{font-size:11px;color:var(--mute);text-transform:uppercase;letter-spacing:.7px;text-align:left;padding:6px 6px 6px;font-weight:600}
 .pt .r,.ft .r{text-align:right}
@@ -75,10 +81,7 @@ table{width:100%;border-collapse:collapse}
 .hx2{font-size:13px;color:var(--mute);margin:-8px 0 14px}
 footer{color:var(--mute);font-size:12px;text-align:center;padding:0 0 24px}
 @media (max-width:2100px){.brand>span:last-child{display:none}.kpis{gap:10px}.kpi label{white-space:nowrap}.hs b{font-size:24px}.kpi{min-width:118px;padding:8px 12px}.kpi b{font-size:21px}#nucleus .st{font-size:12px}#nucleus .ag,#nucleus .lb{font-size:12px}}
-@media (min-width:2560px){html,body{font-size:17px}.wrap{gap:26px;padding:26px 34px 34px}.col{gap:26px}.card{padding:24px 28px}.card h2{font-size:15px}.card h2 small{font-size:14px}
-  .kpi{min-width:230px;padding:12px 24px}.kpi b{font-size:36px}.kpi label{font-size:13px}.brand b{font-size:28px}.brand span{font-size:15px}.health{font-size:15px}
-  .hh .t{font-size:32px}.hh .t small{font-size:17px}.hs b{font-size:44px}.hs label{font-size:13px}.pt td{font-size:19px;padding:13px 8px}.pt th{font-size:13px}.pt td small{font-size:14.5px}.empty{font-size:17px}
-  .ft td{font-size:17px;padding:10px 4px}.ft td small{font-size:14px}.psh .n{font-size:18px}.psm{font-size:14.5px}.pp{font-size:16px}.sp{font-size:12.5px}.sect{font-size:14px}canvas{height:420px}footer{font-size:14px}}
+@media (min-width:2560px){.kpi{min-width:170px;padding:10px 18px}.kpi b{font-size:28px}.brand b{font-size:24px}canvas{height:280px}}
 </style>
 </head>
 <body>
