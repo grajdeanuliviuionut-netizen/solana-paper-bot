@@ -153,6 +153,117 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 
+
+/* GROK ALPHA POLISH / UI ONLY: typography, chip formatting, equity, log priority */
+:root{--acc:#efbb78;--warn:#efbb78}
+.brand-icon{border-color:rgba(239,187,120,.32);background:rgba(239,187,120,.075)}
+.brand-title b{color:#f7e6cd}
+.brand-sub{color:#aa9d8d}
+.health .d{background:var(--acc);box-shadow:0 0 0 4px rgba(239,187,120,.11)}
+.health .d.bad{background:var(--dn);box-shadow:0 0 0 4px rgba(255,113,137,.11)}
+.card h2{color:#f0d5b1;letter-spacing:.085em}
+.card h2::before{
+ content:"";display:inline-block;flex:none;align-self:center;
+ width:3px;height:13px;border-radius:3px;background:var(--acc);
+ box-shadow:0 0 10px rgba(239,187,120,.10);
+ margin-right:1px;
+}
+#metricsCard{border-color:rgba(239,187,120,.22);background:linear-gradient(150deg,rgba(239,187,120,.038),transparent 67%),rgba(20,22,27,.95)}
+.metrics-grid{gap:12px}
+.metrics-grid .kpi{
+ min-height:126px;
+ padding:19px 19px 16px;
+ border:1px solid rgba(239,187,120,.16);
+ border-radius:13px;
+ background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.008) 75%),rgba(20,23,28,.88);
+ box-shadow:inset 0 1px rgba(255,255,255,.035),0 10px 24px rgba(0,0,0,.11);
+}
+.metrics-grid .kpi label{color:#afb7c3;font-size:11px;letter-spacing:.1em}
+.metrics-grid .kpi b{
+ font-size:clamp(25px,1.8vw,33px);
+ font-weight:650;
+ line-height:1.25;
+ margin-top:16px;
+ color:#f4f5f7;
+ letter-spacing:-.05em;
+}
+.metrics-grid .kpi b.up{color:var(--up)}
+.metrics-grid .kpi b.dn{color:var(--dn)}
+.metrics-grid .kpi.epoch{
+ min-height:82px;
+ padding:16px 19px;
+ background:linear-gradient(100deg,rgba(239,187,120,.038),rgba(255,255,255,.018));
+}
+.metrics-grid .kpi.epoch b{font-size:22px;margin-top:0}
+#equityCard{
+ border-color:rgba(239,187,120,.20);
+ background:linear-gradient(150deg,rgba(239,187,120,.035),transparent 75%),rgba(20,22,27,.95);
+ box-shadow:0 18px 45px rgba(0,0,0,.20),0 0 56px rgba(239,187,120,.04);
+}
+#equityCard canvas{
+ display:block;
+ width:100%;
+ height:390px;
+ margin-top:8px;
+ background:linear-gradient(180deg,rgba(239,187,120,.02),transparent);
+ border-radius:10px;
+}
+#equityCard #eqLegend{padding:10px 2px 1px;color:#b4a99a;font-size:11px}
+#hero{border-color:rgba(239,187,120,.15)}
+#hero .hh{margin-bottom:19px}
+#hero .hh .t{color:#f0e9de}
+.rule-caption{
+ color:#a29a90;
+ font:700 10px/1.4 var(--sans);
+ letter-spacing:.13em;
+ margin:16px 0 9px;
+}
+.rule-tags{display:flex;flex-wrap:wrap;align-items:flex-start;gap:7px;margin:0 0 12px;min-width:0}
+.rule-chip{
+ display:inline-flex;
+ min-width:0;
+ max-width:100%;
+ align-items:center;
+ padding:7px 11px;
+ border:1px solid rgba(239,187,120,.20);
+ border-radius:999px;
+ background:rgba(239,187,120,.065);
+ color:#e8d9c7;
+ font:550 11px/1.5 var(--mono);
+ font-variant-numeric:tabular-nums;
+ letter-spacing:0;
+ white-space:normal;
+ overflow-wrap:anywhere;
+}
+.rule-chip.positive{color:#b2ead0;border-color:rgba(112,221,178,.23);background:rgba(112,221,178,.06)}
+.rule-chip.risk{color:#ffc0ae;border-color:rgba(255,113,137,.22);background:rgba(255,113,137,.06)}
+.rule-chip.neutral{color:#c4cbd6;border-color:var(--line);background:rgba(255,255,255,.028)}
+#brCard{border-color:rgba(239,187,120,.17)}
+#brCard .mg .row{align-items:start}
+#brBody .row{grid-template-columns:minmax(120px,.28fr) minmax(0,1fr);gap:18px;align-items:start}
+#brBody .row>span{padding-top:5px;font-weight:600;color:#b6b9c0}
+#brBody .row>b.rule-chipset{display:flex;flex-wrap:wrap;gap:7px;min-width:0;font:inherit}
+#brBody .rule-chip{font-size:10.5px;padding:6px 10px}
+.activity{border-color:rgba(239,187,120,.13)}
+.activity-kind.trade,.activity-kind.close{color:var(--up)}
+.activity-kind.warning,.activity-kind.warn,.activity-kind.paused{color:var(--warn)}
+.activity-kind.halted,.activity-kind.halt,.activity-kind.error{color:var(--dn)}
+.activity-row{background:transparent}
+.activity-row:hover{background:rgba(255,255,255,.016)}
+.activity-note{margin:0 0 12px;line-height:1.7}
+@media(max-width:1280px){
+ #equityCard canvas{height:330px}
+ .metrics-grid .kpi b{font-size:26px}
+}
+@media(max-width:650px){
+ .metrics-grid .kpi{min-height:110px;padding:13px}
+ .metrics-grid .kpi b{font-size:21px}
+ .metrics-grid .kpi.epoch b{font-size:19px}
+ #equityCard canvas{height:260px}
+ .rule-chip{padding:6px 9px;font-size:10px}
+ #brBody .row{grid-template-columns:1fr;gap:5px}
+ #brBody .row>span{padding-top:0}
+}
 </style>
 </head>
 <body>
@@ -183,14 +294,19 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset
        <div class="kpi epoch"><label id="kEpochL">Since start</label><b class="num" id="kEpoch">–</b><small class="num" id="kEpochS">–</small></div>
      </div>
    </div>
+   <div class="card" id="equityCard">
+     <h2>Equity <span class="seg" id="eqRange"><button data-r="scoreboard" class="on">This board</button></span></h2>
+     <canvas id="eq"></canvas>
+     <div class="mu num" style="font-size:12px;margin-top:8px" id="eqLegend">–</div>
+   </div>
    <div class="card mg" id="brCard">
      <h2>Boss Rules <small id="brNote">Risk management · paper only</small></h2>
      <div id="brBody"><div class="empty">–</div></div>
    </div>
    <div class="card hero" id="hero">
      <div class="hh"><div class="t"><span id="heroName">Trend Following</span><small id="heroSub">v6</small></div><span class="sp green" id="heroSt">ACTIVE</span></div>
-     <div class="hx num" id="heroEx">–</div>
-     <div class="hx2 num" id="heroEn"></div>
+     <div class="rule-caption">EXIT &amp; EXECUTION</div><div class="hx rule-tags" id="heroEx">–</div>
+     <div class="rule-caption">ENTRY FILTERS</div><div class="hx2 rule-tags" id="heroEn"></div>
      <div class="hs">
        <div><label>Open P&amp;L</label><b class="num" id="hOpen">–</b></div>
        <div><label>Open</label><b class="num" id="hCount">–</b></div>
@@ -202,11 +318,6 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset
    <div class="card" id="openCard">
      <h2>Open positions <small id="openNote">Mark = Jupiter sell quote · paper cost model · London</small></h2>
      <table class="pt"><thead><tr><th>Token</th><th>Entry</th><th class="r">Mark</th><th class="r">Net</th><th class="r">P&amp;L SOL</th><th class="r">Stop / TP</th><th class="r">Age</th></tr></thead><tbody id="openPos"></tbody></table>
-   </div>
-   <div class="card" id="equityCard">
-     <h2>Equity <span class="seg" id="eqRange"><button data-r="scoreboard" class="on">This board</button></span></h2>
-     <canvas id="eq"></canvas>
-     <div class="mu num" style="font-size:12px;margin-top:8px" id="eqLegend">–</div>
    </div>
    <div class="card mg" id="mgCard">
      <h2>Manager Loop <small id="mgNote">Review every 10 trades · report every 30</small></h2>
@@ -377,25 +488,96 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset
       '<tr><td colspan="4" class="empty">No closed trades on this scoreboard yet.</td></tr>';
   }
   function renderActivity() {
-    // The existing /api/dashboard response already includes the actual bot activity log.
-    // This is not a simulated or separately polled feed.
-    var logger=(D.agents&&D.agents.logger)||{}, rows=Array.isArray(logger.activity)?logger.activity:[];
+    // Existing /api/dashboard data only; suppress high-frequency scan ticks.
+    var logger=(D.agents&&D.agents.logger)||{};
+    var raw=Array.isArray(logger.activity)?logger.activity:[];
+    var significant=raw.filter(function (entry) {
+      var msg=String(entry&&entry.msg||'').trim();
+      if(!msg)return false;
+      // Routine polling messages are operational noise, not actionable alerts.
+      return !/^(?:SCAN\b|HOLD\b|TICK\b)/i.test(msg);
+    }).map(function (entry) {
+      return { time:entry.time||entry.at||'', msg:String(entry.msg||''), source:'log' };
+    });
+    // Preserve genuine closed-trade events even if the short activity window
+    // contains only scan heartbeats. Trades are from the existing ledger.
+    var completed=(D.recentTrades||[]).filter(function (t) {
+      return Date.parse(t.closedAt)>=focusSince();
+    }).slice(0,12).map(function (t) {
+      return {
+        time:t.closedAt,
+        msg:'Closed '+(t.symbol||'token')+' · '+sol(t.pnlSol,5)+' SOL · '+(t.exitReason||'exit'),
+        source:'trade'
+      };
+    });
+    var halt=(D.manager&&D.manager.halt)||{};
+    if(halt.halted){
+      var info=halt.halt||{};
+      significant.unshift({
+        time:info.at||D.now||'',
+        msg:'HALTED · '+String(info.reason||'trading entries blocked'),
+        source:'halt'
+      });
+    }
+    var byKey={},combined=significant.concat(completed).filter(function (entry) {
+      var key=entry.source+'|'+entry.time+'|'+entry.msg;
+      if(byKey[key])return false;
+      byKey[key]=true;
+      return true;
+    });
+    combined.sort(function(a,b){
+      return (Date.parse(b.time)||0)-(Date.parse(a.time)||0);
+    });
+    var rows=combined.slice(0,30);
+    var ignored=raw.length-significant.filter(function (e) {return e.source==='log';}).length;
     $('activityNote').textContent=rows.length
-      ? rows.length+' recent bot events · auto-refresh every 5 seconds'
-      : 'No recent activity in the existing bot feed · auto-refresh every 5 seconds';
-    $('activityLog').innerHTML=rows.length?rows.map(function (entry) {
-      var msg=String(entry.msg||''), at=entry.time||entry.at||'';
-      var tag=/^\s*(SCAN|ENTRY|EXIT|HOLD|SKIP|HALT|ERROR|PAUSED|RESUME|MANAGER|SCOREBOARD|TICK)\b/i.exec(msg);
-      var kind=tag?tag[1].toUpperCase():'INFO';
-      var tone=kind==='ENTRY'?'entry':kind==='EXIT'?'profit':kind==='HOLD'?'hold':
-        kind==='SKIP'?'skip':kind==='HALT'?'halt':kind==='ERROR'?'error':
-        kind==='SCAN'?'scan':'';
+      ? rows.length+' meaningful events · '+ignored+' routine scan/heartbeat messages hidden · refresh every 5 s'
+      : 'No significant events in the recent log window · routine scans hidden · refresh every 5 s';
+    $('activityLog').innerHTML=rows.length?rows.map(function(entry){
+      var msg=String(entry.msg||''),at=entry.time||'';
+      var match=/^\s*(SCAN|ENTRY|EXIT|HOLD|SKIP|HALT|HALTED|ERROR|WARN|WARNING|PAUSED|RESUME|MANAGER|SCOREBOARD|TICK)\b/i.exec(msg);
+      var kind=entry.source==='trade'?'TRADE':entry.source==='halt'?'HALTED':match?match[1].toUpperCase():'INFO';
+      var tone=kind==='TRADE'?'trade':kind==='ENTRY'?'entry':kind==='EXIT'?'profit':
+        kind==='SKIP'?'skip':kind==='HALT'||kind==='HALTED'?'halt':
+        kind==='ERROR'?'error':kind==='WARN'||kind==='WARNING'?'warn':
+        kind==='PAUSED'?'paused':'';
       return '<div class="activity-row"><span class="activity-time num">'+esc(tL(at))+'</span>'+
         '<span class="activity-kind '+tone+'">'+esc(kind)+'</span>'+
         '<span class="activity-msg">'+esc(msg)+'</span></div>';
-    }).join(''):'<div class="empty">Waiting for new scanner and strategy activity…</div>';
+    }).join(''):'<div class="empty">No actionable changes or closed trades to report. Routine scanner checks are hidden.</div>';
   }
-
+  function renderRuleTags(){
+    // Format the existing rule strings without changing their values or API source.
+    function addChips(target,raw){
+      if(!target)return;
+      var chunks=String(raw||'').split(/\s+·\s+|\s*;\s*/).map(function (v) {
+        return v.trim();
+      }).filter(Boolean);
+      var frag=document.createDocumentFragment();
+      chunks.forEach(function (value){
+        var chip=document.createElement('span');
+        chip.className='rule-chip';
+        if(/^(?:stop\b|SL\b|HALTED\b|halted\b|losses\b)/i.test(value) &&
+           !/^not halted/i.test(value))chip.classList.add('risk');
+        else if(/^(?:at \+|take\b|TP\b|partial\b|win\b|passed\b)/i.test(value))chip.classList.add('positive');
+        else if(/^(?:board\b|entry:|24 h no re-buy)/i.test(value))chip.classList.add('neutral');
+        chip.textContent=value;
+        frag.appendChild(chip);
+      });
+      target.replaceChildren(frag);
+    }
+    ['heroEx','heroEn'].forEach(function(id){
+      var el=$(id);
+      if(el)addChips(el,el.textContent);
+    });
+    var body=$('brBody');
+    if(!body)return;
+    Array.prototype.forEach.call(body.querySelectorAll('.row > b'),function(el){
+      var value=el.textContent;
+      el.classList.add('rule-chipset');
+      addChips(el,value);
+    });
+  }
   function renderEquity() {
     var c = $('eq'), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
     c.width = Math.round(w * dpr); c.height = Math.round(h * dpr);
@@ -425,6 +607,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset
     return get('/api/dashboard').then(function (d) {
       D = d; lastOk = Date.now();
       [renderTop, renderBoss, renderManager, renderHero, renderOpen, renderFills, renderActivity].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
+      try { renderRuleTags(); } catch (e) { console.error(e); }
       clock();
     }).catch(function (e) { console.error(e); $('hDot').className = 'd bad'; $('hTxt').textContent = 'API error, retrying'; });
   }
