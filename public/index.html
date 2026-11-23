@@ -246,7 +246,8 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
   }
   .seg button.on, .history-button:hover {border-color:rgba(233,187,122,.35) !important}
   .card, .topbar {text-shadow:0 1px 2px rgba(0,0,0,.45)}
-
+  /* t110u (Liviu): force every div/section/table clear - text floats on the parent's background. Keep last. */
+  div, section, table { background-color: transparent !important; backdrop-filter: none !important; box-shadow: none !important; }
 </style>
 </head>
 <body>
