@@ -323,10 +323,28 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
 
 
   function clock() { $('clock').textContent = fT.format(new Date()) + ' London'; if (lastOk && Date.now() - lastOk > 15000) { $('hDot').className = 'd bad'; $('hTxt').textContent = 'stale ' + Math.round((Date.now() - lastOk) / 1000) + 's (API unreachable)'; } }
+
+// ZENITH read-only account telemetry, delivered only to the authenticated owner's
+// master dashboard origin. No wallet address, authentication or trading controls sent.
+const ZENITH_PARENT_ORIGIN = "https://jarvis-trading-floor-production.up.railway.app";
+function sendZenithBalance(payload){
+  if(window.parent===window || !payload || !Number.isFinite(payload.amount) || payload.amount<0)return;
+  window.parent.postMessage({
+    type:"zenith-account-v1",
+    bot:payload.bot,
+    amount:payload.amount,
+    currency:payload.currency,
+    mode:payload.mode,
+    sampledAt:Date.now()
+  },ZENITH_PARENT_ORIGIN);
+}
+
   function refresh() {
     return get('/api/dashboard').then(function (d) {
       D = d; lastOk = Date.now();
       [renderTop, renderOpen, renderSummary, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
+      var marked = (d.pnl && isNum(d.pnl.markedEquity)) ? d.pnl.markedEquity : (d.account && d.account.markEquity);
+      sendZenithBalance({bot:"grok",amount:marked,currency:"SOL",mode:"PAPER"});
       clock();
     }).catch(function (e) { console.error(e); $('hDot').className = 'd bad'; $('hTxt').textContent = 'API error, retrying'; });
   }
