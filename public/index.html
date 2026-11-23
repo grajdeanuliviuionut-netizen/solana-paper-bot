@@ -29,28 +29,31 @@ a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .health{text-align:right;color:#a9b2bd;font:500 10.5px/1.75 var(--mono)}
 .health .d{width:7px;height:7px;display:inline-block;border-radius:50%;background:var(--amber);margin-right:8px;box-shadow:0 0 0 4px rgba(233,187,122,.075)}
 .health .d.bad{background:var(--down);box-shadow:0 0 0 4px rgba(255,116,138,.075)}
-.terminal{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);align-items:start;gap:16px;width:min(1900px,100%);margin:auto;padding:19px clamp(13px,1.8vw,30px) 28px}
-.column{display:flex;flex-direction:column;gap:15px;min-width:0}
+.terminal{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);align-items:stretch;gap:16px;width:min(1900px,100%);margin:auto;padding:19px clamp(13px,1.8vw,30px) 28px}
+.column{display:flex;flex-direction:column;gap:13px;min-width:0}
+.right-column .history{display:flex;flex-direction:column;flex:1 1 auto}
+.right-column .history-footer{margin-top:auto}
+.right-column .history:has(.history-empty){flex:0 0 auto}
 .card{background:linear-gradient(145deg,rgba(255,255,255,.025),rgba(255,255,255,.006) 76%),rgba(20,22,27,.92);border:1px solid var(--line);border-radius:13px;padding:17px 19px;box-shadow:0 12px 33px rgba(0,0,0,.14),inset 0 1px rgba(255,255,255,.024);min-width:0}
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:15px}
 .card-head h2{margin:0;font:700 12px/1.45 var(--sans);text-transform:uppercase;letter-spacing:.085em}
 .card-head h2::before{content:"";display:inline-block;vertical-align:1px;width:3px;height:11px;border-radius:2px;margin-right:9px;background:var(--amber)}
 .card-head small{color:var(--muted);font:500 10.5px/1.45 var(--mono)}
-.metrics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
-.metric{min-width:0;min-height:101px;background:rgba(255,255,255,.017);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.metrics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.metric{min-width:0;min-height:91px;background:rgba(255,255,255,.017);border:1px solid var(--line);border-radius:10px;padding:12px 13px}
 .metric label{display:block;color:var(--muted);font:650 10px/1.35 var(--sans);text-transform:uppercase;letter-spacing:.075em}
-.metric b{display:block;font:650 clamp(20px,1.42vw,26px)/1.25 var(--mono);letter-spacing:-.045em;margin-top:11px;overflow-wrap:anywhere}
+.metric b{display:block;font:650 clamp(17px,1.22vw,24px)/1.25 var(--mono);letter-spacing:-.045em;margin-top:10px;overflow-wrap:anywhere}
 .metric small{display:block;color:var(--muted);font:450 10px/1.4 var(--sans);margin-top:4px}
 .summary{border-color:rgba(233,187,122,.105)}
 .performance-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
-.performance-stat{min-width:0;min-height:77px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.014);padding:12px 10px}
+.performance-stat{min-width:0;min-height:70px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.014);padding:9px 10px}
 .performance-stat label{display:block;font:600 9px/1.4 var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
 .performance-stat b{display:block;font:650 clamp(13px,1.05vw,19px)/1.4 var(--mono);margin-top:8px;letter-spacing:-.04em;white-space:nowrap}
 .performance-stat small{display:block;margin-top:4px;color:var(--muted);font:450 9.5px/1.5 var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .strategy-scope{color:var(--muted);font:450 10px/1.4 var(--mono)}
-.chart-head{margin:18px 0 0;padding:13px 1px 2px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}
+.chart-head{margin:11px 0 0;padding:9px 1px 2px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}
 .chart-head h3{font:650 10px/1.4 var(--sans);text-transform:uppercase;letter-spacing:.085em;margin:0}
-#eq{width:100%;height:278px;max-width:100%;display:block;margin-top:5px}
+#eq{width:100%;height:220px;max-height:256px;max-width:100%;display:block;margin-top:4px}
 #eqLegend{font:500 10px/1.5 var(--mono);color:var(--muted);margin-top:3px}
 .seg button{font:600 10px/1.3 var(--sans);padding:5px 9px;color:var(--muted);border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.025);cursor:pointer}
 .seg button.on{border-color:rgba(233,187,122,.21);color:var(--amber)}
@@ -69,19 +72,20 @@ a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .position-table th:nth-child(5),.position-table th:nth-child(6){min-width:87px}
 #positionTable[hidden],#openEmpty[hidden]{display:none!important}
 .empty-positions{font:450 11px/1.5 var(--sans);color:var(--muted);padding:4px 0 1px}
+.position-table .empty-row td{padding:13px 0 8px;border-bottom:0;text-align:left;font:450 11px/1.5 var(--sans);white-space:normal;color:var(--muted)}
 .history{min-height:0;border-color:rgba(233,187,122,.10)}
 .history-table th:nth-child(1){width:18%}
 .history-table th:nth-child(2){width:17%}
 .history-table th:nth-child(3){width:22%}
 .history-table th:nth-child(4){width:43%}
-.history-table tbody td{height:74px;padding:14px 10px;white-space:normal;overflow-wrap:anywhere;vertical-align:middle}
+.history-table tbody td{height:auto;padding:8px 9px;white-space:normal;overflow-wrap:anywhere;vertical-align:middle;line-height:1.35}
 .history-table td.num{font-family:var(--mono)}
-.history-table td.result{font-weight:650;font-size:12px}
+.history-table td.result{font-weight:650;font-size:11px}
 .history-table td.token{font-weight:650}
-.history-table td.reason{font:480 11px/1.5 var(--sans);color:#ccd2dc}
-.history-table td small{color:var(--muted);font-size:9.5px}
+.history-table td.reason{font:480 10.5px/1.35 var(--sans);color:#ccd2dc}
+.history-table td small{color:var(--muted);font-size:9px;line-height:1.25}
 .history-empty{font:450 11px var(--sans)!important;color:var(--muted);padding:18px 0!important}
-.history-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--line);margin-top:12px;padding:14px 0 0}
+.history-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--line);margin-top:9px;padding:10px 0 0}
 .history-footer .muted{color:var(--muted);font:500 10px/1.45 var(--mono)}
 .history-button{display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(233,187,122,.18);border-radius:8px;padding:8px 12px;background:rgba(233,187,122,.055);color:#dfd4c5;font:650 11px/1.4 var(--sans);cursor:pointer}
 .history-button:hover{border-color:rgba(233,187,122,.36);background:rgba(233,187,122,.09)}
@@ -89,9 +93,10 @@ a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .history-button[hidden]{display:none}
 footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted);text-align:center;font:450 10px/1.4 var(--mono)}
 @media(max-width:1450px){
- .terminal{grid-template-columns:1fr}
+ .terminal{grid-template-columns:1fr;align-items:start}
+ .right-column .history{flex:0 0 auto}
  .metrics-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
- .history-table tbody td{height:auto;min-height:70px}
+ .history-table tbody td{height:auto}
 }
 @media(max-width:800px){
  .metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -104,10 +109,10 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
  .terminal{padding:11px 9px 24px;gap:10px}
  .column{gap:10px}
  .card{padding:13px 11px}
- .metric{padding:12px;min-height:94px}
+ .metric{padding:12px;min-height:90px}
  .metric b{font-size:19px}
  .performance-stat b{font-size:16px}
- #eq{height:215px}
+ #eq{height:194px;max-height:256px}
  .table td,.table th{font-size:9px;padding:9px 3px}
  .table td:first-child,.table th:first-child{padding-left:0}
  .table td:last-child,.table th:last-child{padding-right:0}
@@ -117,7 +122,7 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
  .history-table th:nth-child(2){width:16%}
  .history-table th:nth-child(3){width:25%}
  .history-table th:nth-child(4){width:39%}
- .history-table tbody td{padding:12px 4px;height:auto}
+ .history-table tbody td{padding:8px 4px;height:auto}
  .history-table td.reason{font-size:10px}
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
@@ -160,22 +165,22 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
     </div>
     <div class="card positions" id="openCard">
       <div class="card-head"><h2>Open Positions</h2><small id="openNote">Current portfolio</small></div>
-      <table class="table position-table" id="positionTable" hidden aria-label="Live paper positions">
-        <thead><tr><th>Token</th><th>Size</th><th>Entry</th><th>Mark</th><th>P&amp;L (SOL)</th><th>P&amp;L (%)</th></tr></thead>
+      <table class="table position-table" id="positionTable" aria-label="Live paper positions">
+        <thead><tr><th>Token</th><th>Entry</th><th>Mark</th><th>Size</th><th>P&amp;L (SOL)</th><th>P&amp;L (%)</th></tr></thead>
         <tbody id="openPos"></tbody>
       </table>
-      <div class="empty-positions" id="openEmpty">No open positions.</div>
+      
     </div>
   </section>
-  <section class="column" aria-label="Recent closed trades">
+  <section class="column right-column" aria-label="Recent closed trades">
     <div class="card history" id="historyCard">
-      <div class="card-head"><h2>Trade History</h2><small>Last 6 · London time</small></div>
+      <div class="card-head"><h2>Trade History</h2><small>Latest 10 · London time</small></div>
       <table class="table history-table" aria-label="Closed trades">
         <thead><tr><th>Time</th><th>Token</th><th>Result (SOL)</th><th>Reason</th></tr></thead>
         <tbody id="fills"><tr><td colspan="4" class="history-empty">Loading closed trades…</td></tr></tbody>
       </table>
       <div class="history-footer">
-        <span class="muted" id="historyCount">Latest 6 closes</span>
+        <span class="muted" id="historyCount">Latest 10 closes</span>
         <button id="viewAllHistory" class="history-button" type="button" hidden aria-expanded="false">View All History</button>
       </div>
     </div>
@@ -230,18 +235,18 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
         var at=p.entryTime?tL(p.entryTime):'–';
         rows.push({ timestamp:Date.parse(p.entryTime)||0,
           html:'<tr><td class="value">'+token+'</td>'+
-            '<td class="num">'+sz+'</td>'+
             '<td class="num">'+entry+'<small>'+esc(at)+' London</small></td>'+
             '<td class="num">'+mark+'</td>'+
+            '<td class="num">'+sz+'</td>'+
             '<td class="num value '+cl(p.unrealizedSol)+'">'+un+'</td>'+
             '<td class="num value '+cl(p.netPnlPct)+'">'+performance+'</td></tr>'
         });
       });
     });
     rows.sort(function(a,b){return b.timestamp-a.timestamp;});
-    $('openPos').innerHTML=rows.map(function(r){return r.html;}).join('');
-    $('positionTable').hidden=rows.length===0;
-    $('openEmpty').hidden=rows.length>0;
+    $('openPos').innerHTML=rows.length
+      ? rows.map(function(r){return r.html;}).join('')
+      : '<tr class="empty-row"><td colspan="6" class="empty-positions">No open positions.</td></tr>';
     $('openNote').textContent=rows.length?rows.length+' open · net of paper costs':'No active positions';
   }
   // Closes since the board start (runner-v2): runner-hunter plus any leftover closed after it.
@@ -276,7 +281,7 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
       : 'Recent sample · loading full ledger';
   }
   function renderFills(){
-    var all=currentTrades(),rows=historyExpanded?all:all.slice(0,6);
+    var all=currentTrades(),rows=historyExpanded?all:all.slice(0,10);
     $('fills').innerHTML=rows.map(function(t){
       return '<tr>'+
         '<td class="num">'+esc(tL(t.closedAt))+'<small>'+esc(t.closedAt?String(t.closedAt).slice(0,10):'')+'</small></td>'+
@@ -286,11 +291,11 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
     }).join('')||'<tr><td colspan="4" class="history-empty">No closed trades on this scoreboard yet.</td></tr>';
     var complete=!!(LEDGER&&Array.isArray(LEDGER.trades));
     $('historyCount').textContent=complete
-      ? (historyExpanded?'Showing all '+all.length+' closes': 'Showing '+Math.min(6,all.length)+' of '+all.length+' closes')
+      ? (historyExpanded?'Showing all '+all.length+' closes': 'Showing '+Math.min(10,all.length)+' of '+all.length+' closes')
       : 'Recent closes · loading full ledger';
     var btn=$('viewAllHistory');
-    btn.hidden=(!complete||all.length<=6);
-    btn.textContent=historyExpanded?'Show Recent 6':'View All History';
+    btn.hidden=(!complete||all.length<=10);
+    btn.textContent=historyExpanded?'Show Recent 10':'View All History';
     btn.setAttribute('aria-expanded',historyExpanded?'true':'false');
   }
   function renderEquity() {
