@@ -23,7 +23,7 @@ body{font:13px/1.5 var(--sans);-webkit-font-smoothing:antialiased;background:tra
 a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .up{color:var(--up)!important}.dn{color:var(--down)!important}
-.topbar{border-bottom:1px solid var(--line);background:rgba(15,16,20,.86);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.topbar{border-bottom:1px solid rgba(255,255,255,.08);background:transparent}
 .topbar-inner{width:min(1900px,100%);margin:auto;padding:13px clamp(13px,1.8vw,30px);display:flex;align-items:center;justify-content:space-between;gap:20px}
 .brand{display:flex;align-items:center;gap:12px;min-width:0}
 .brand-icon{display:grid;place-items:center;width:36px;height:36px;flex:none;border:1px solid rgba(233,187,122,.20);border-radius:10px;background:rgba(233,187,122,.035);color:var(--amber)}
@@ -39,7 +39,7 @@ a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .right-column .history{display:flex;flex-direction:column;flex:1 1 auto}
 .right-column .history-footer{margin-top:auto}
 .right-column .history:has(.history-empty){flex:0 0 auto}
-.card{background:rgba(7,13,24,.28);color:var(--ink);border:1px solid var(--line);border-radius:13px;padding:17px 19px;box-shadow:0 12px 33px rgba(0,0,0,.14),inset 0 1px rgba(255,255,255,.024);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px);min-width:0}
+.card{background:rgba(7,13,24,.28);color:var(--ink);border:1px solid var(--line);border-radius:13px;padding:17px 19px;box-shadow:0 12px 33px rgba(0,0,0,.14),inset 0 1px rgba(255,255,255,.024);min-width:0}
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:15px}
 .card-head h2{margin:0;font:700 12px/1.45 var(--sans);text-transform:uppercase;letter-spacing:.085em}
 .card-head h2::before{content:"";display:inline-block;vertical-align:1px;width:3px;height:11px;border-radius:2px;margin-right:9px;background:var(--amber)}
@@ -195,6 +195,39 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
     color: #a4b2c4;
   }
 
+
+
+  /* t109u (Liviu): glass everywhere - no inner card, panel, stat box, table, header/row, badge or button has a solid
+     fill. Each is rgba(0,0,0,.2) (bg-black/20) or transparent with a 1px rgba(255,255,255,.08) border; no gradients,
+     no backdrop-filter, no drop shadows. Kept on purpose: the 7px status dot, the 3px amber title bar on card
+     headings, the scrollbar thumb, and the chart's line and labels. */
+  .card, .card.metrics, .card.summary, .card.positions, .card.history,
+  .metric, .performance-stat {
+    background: rgba(0,0,0,.2) !important;
+    background-image: none !important;
+    border: 1px solid rgba(255,255,255,.08) !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  #metricsCard, #metricsCard.metrics { border: 1px solid rgba(255,255,255,.08) !important; }
+  .column, .metrics-grid, .performance-grid, .chart-head, #eq, .history-footer, .card-head, .seg,
+  .table, .table thead, .table tbody, .table tr, .table th, .table td, .table tbody tr:hover td,
+  .empty-positions, .history-empty, footer {
+    background: transparent !important;
+    background-image: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  .table tbody tr:hover td { background: rgba(0,0,0,.2) !important; }
+  .table td, .table th { border-bottom-color: rgba(255,255,255,.08) !important; }
+  .seg button, .seg button.on, .history-button, .history-button:hover, .paper-label, .brand-icon {
+    background: rgba(0,0,0,.2) !important;
+    background-image: none !important;
+    border: 1px solid rgba(255,255,255,.08) !important;
+  }
+  .seg button.on, .history-button:hover { border-color: rgba(233,187,122,.35) !important; }
+  .card, .topbar { text-shadow: 0 1px 2px rgba(0,0,0,.45); }
 
 </style>
 </head>
