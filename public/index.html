@@ -160,6 +160,24 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
   html::-webkit-scrollbar { width:6px;height:6px; }
   html::-webkit-scrollbar-thumb { background:rgba(123,185,223,.45);border-radius:6px; }
 
+  /* ZENITH: Paper Terminal's OUTER card inherited .card's ~92%-opaque
+     charcoal fill. Clear this wrapper only, while keeping the 4 individual
+     metric tiles and all other cards/tables as designed. */
+  #metricsCard,
+  #metricsCard.metrics {
+    background: transparent !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+  #metricsCard .metrics-grid {
+    background: transparent !important;
+    background-color: transparent !important;
+    background-image: none !important;
+  }
+
 </style>
 </head>
 <body>
