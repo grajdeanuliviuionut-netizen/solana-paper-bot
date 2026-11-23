@@ -128,12 +128,20 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 
 
-  /* ZENITH iframe integration: page canvas only, glass cards remain unchanged.
-     No backgrounds are removed from dashboard panels or metric tiles. */
-  html, body {
-    background: transparent !important;
-    background-color: transparent !important;
-    background-image: none !important;
+  /* ChromeOS iframe fallback: a fully transparent document can reveal the
+     browser's white iframe canvas instead of the parent's stars. Repaint ONLY
+     the page canvas with the same ZENITH starfield; never touch the cards. */
+  html { background:#060d1b !important; }
+  body {
+    background: radial-gradient(1.4px 1.4px at 27px 59px,rgba(204,232,255,.90) 95%,transparent) 0 0 / 233px 197px repeat,
+    radial-gradient(1.1px 1.1px at 153px 27px,rgba(185,221,255,.68) 95%,transparent) 0 0 / 317px 229px repeat,
+    radial-gradient(1.4px 1.4px at 93px 173px,rgba(179,224,255,.70) 95%,transparent) 0 0 / 383px 283px repeat,
+    radial-gradient(1px 1px at 201px 141px,rgba(210,220,255,.65) 95%,transparent) 0 0 / 263px 311px repeat,
+    radial-gradient(2px 2px at 319px 79px,rgba(151,218,255,.58) 95%,transparent) 0 0 / 467px 377px repeat,
+    radial-gradient(ellipse 53% 48% at 37% 22%,rgba(25,91,155,.26),transparent 78%) center / cover no-repeat,
+    radial-gradient(ellipse 45% 64% at 81% 75%,rgba(66,42,145,.20),transparent 83%) center / cover no-repeat,
+    linear-gradient(126deg,#060d1b 0%,#091a2c 43%,#060c1a 83%,#040814 100%) !important;
+    background-attachment:fixed !important;
   }
 
 </style>
