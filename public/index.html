@@ -13,45 +13,45 @@ if (window.self !== window.top) document.documentElement.classList.add("zenith-i
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700;750&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 :root{
- color-scheme:dark;--bg:#09090b;--panel:#15171d;--line:rgba(255,255,255,.085);--line-hover:rgba(255,255,255,.14);
+ color-scheme:dark;--bg:transparent;--panel:transparent;--line:rgba(255,255,255,.085);--line-hover:rgba(255,255,255,.14);
  --ink:#edf0f5;--muted:#929ba9;--amber:#e9bb7a;--up:#6ddcae;--down:#ff748a;
  --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;--sans:'Inter',system-ui,-apple-system,"Segoe UI",sans-serif;
 }
 *{box-sizing:border-box}
 html,body{margin:0;min-width:0;min-height:100%;background:transparent !important;color:var(--ink)}
-body{font:13px/1.5 var(--sans);-webkit-font-smoothing:antialiased;background:transparent !important}
+body{font:13px/1.5 var(--sans);-webkit-font-smoothing:antialiased;background:transparent !important;}
 a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .up{color:var(--up)!important}.dn{color:var(--down)!important}
-.topbar{border-bottom:1px solid rgba(255,255,255,.08);background:transparent}
+.topbar{border-bottom:1px solid rgba(255,255,255,.08);background:transparent !important;}
 .topbar-inner{width:min(1900px,100%);margin:auto;padding:13px clamp(13px,1.8vw,30px);display:flex;align-items:center;justify-content:space-between;gap:20px}
 .brand{display:flex;align-items:center;gap:12px;min-width:0}
-.brand-icon{display:grid;place-items:center;width:36px;height:36px;flex:none;border:1px solid rgba(233,187,122,.20);border-radius:10px;background:rgba(233,187,122,.035);color:var(--amber)}
+.brand-icon{display:grid;place-items:center;width:36px;height:36px;flex:none;border:1px solid rgba(233,187,122,.20);border-radius:10px;background:transparent !important;color:var(--amber)}
 .brand-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
 .brand-name{font-size:18px;line-height:1.25;letter-spacing:-.025em;font-weight:720}
 .brand-sub{color:var(--muted);font:550 10px/1.35 var(--mono);letter-spacing:.07em;margin-top:3px}
 .paper-label{color:var(--amber);border:1px solid rgba(233,187,122,.19);padding:3px 8px;border-radius:6px;font:650 9px/1.4 var(--mono);vertical-align:2px;letter-spacing:.06em;margin-left:5px}
 .health{text-align:right;color:#a9b2bd;font:500 10.5px/1.75 var(--mono)}
-.health .d{width:7px;height:7px;display:inline-block;border-radius:50%;background:var(--amber);margin-right:8px;box-shadow:0 0 0 4px rgba(233,187,122,.075)}
-.health .d.bad{background:var(--down);box-shadow:0 0 0 4px rgba(255,116,138,.075)}
+.health .d{width:7px;height:7px;display:inline-block;border-radius:50%;background:transparent !important;margin-right:8px;box-shadow:none !important;border:2px solid var(--amber);}
+.health .d.bad{background:transparent !important;box-shadow:none !important;border-color:var(--down);}
 .terminal{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);align-items:stretch;gap:16px;width:min(1900px,100%);margin:auto;padding:19px clamp(13px,1.8vw,30px) 28px}
 .column{display:flex;flex-direction:column;gap:13px;min-width:0}
 .right-column .history{display:flex;flex-direction:column;flex:1 1 auto}
 .right-column .history-footer{margin-top:auto}
 .right-column .history:has(.history-empty){flex:0 0 auto}
-.card{background:rgba(255,255,255,.015);color:var(--ink);border:1px solid var(--line);border-radius:13px;padding:17px 19px;box-shadow:0 12px 33px rgba(0,0,0,.14),inset 0 1px rgba(255,255,255,.024);min-width:0}
+.card{background:transparent !important;color:var(--ink);border:1px solid var(--line);border-radius:13px;padding:17px 19px;box-shadow:none !important;min-width:0}
 .card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:15px}
 .card-head h2{margin:0;font:700 12px/1.45 var(--sans);text-transform:uppercase;letter-spacing:.085em}
-.card-head h2::before{content:"";display:inline-block;vertical-align:1px;width:3px;height:11px;border-radius:2px;margin-right:9px;background:var(--amber)}
+.card-head h2::before{content:"";display:inline-block;vertical-align:1px;width:3px;height:11px;border-radius:2px;margin-right:9px;background:transparent !important;border-left:3px solid var(--amber);width:0;}
 .card-head small{color:var(--muted);font:500 10.5px/1.45 var(--mono)}
 .metrics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
-.metric{min-width:0;min-height:91px;background:rgba(255,255,255,.018);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:12px 13px}
+.metric{min-width:0;min-height:91px;background:transparent !important;color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:12px 13px}
 .metric label{display:block;color:var(--muted);font:650 10px/1.35 var(--sans);text-transform:uppercase;letter-spacing:.075em}
 .metric b{display:block;font:650 clamp(17px,1.22vw,24px)/1.25 var(--mono);letter-spacing:-.045em;margin-top:10px;overflow-wrap:anywhere}
 .metric small{display:block;color:var(--muted);font:450 10px/1.4 var(--sans);margin-top:4px}
 .summary{border-color:rgba(233,187,122,.105)}
 .performance-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
-.performance-stat{min-width:0;min-height:70px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.018);color:var(--ink);padding:9px 10px}
+.performance-stat{min-width:0;min-height:70px;border:1px solid var(--line);border-radius:10px;background:transparent !important;color:var(--ink);padding:9px 10px}
 .performance-stat label{display:block;font:600 9px/1.4 var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
 .performance-stat b{display:block;font:650 clamp(13px,1.05vw,19px)/1.4 var(--mono);margin-top:8px;letter-spacing:-.04em;white-space:nowrap}
 .performance-stat small{display:block;margin-top:4px;color:var(--muted);font:450 9.5px/1.5 var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -60,17 +60,17 @@ a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .chart-head h3{font:650 10px/1.4 var(--sans);text-transform:uppercase;letter-spacing:.085em;margin:0}
 #eq{width:100%;height:220px;max-height:256px;max-width:100%;display:block;margin-top:4px}
 #eqLegend{font:500 10px/1.5 var(--mono);color:var(--muted);margin-top:3px}
-.seg button{font:600 10px/1.3 var(--sans);padding:5px 9px;color:var(--muted);border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.025);cursor:pointer}
+.seg button{font:600 10px/1.3 var(--sans);padding:5px 9px;color:var(--muted);border:1px solid var(--line);border-radius:7px;background:transparent !important;cursor:pointer}
 .seg button.on{border-color:rgba(233,187,122,.21);color:var(--amber)}
 .positions .card-head{margin-bottom:7px}
 .table{width:100%;border-collapse:collapse;table-layout:auto}
-.table th{text-align:left;background:rgba(255,255,255,.01);font:650 9.5px/1.45 var(--sans);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.table th{text-align:left;background:transparent !important;font:650 9.5px/1.45 var(--sans);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
 .table td,.table th{padding:11px 7px;border-bottom:1px solid var(--line);vertical-align:middle}
 .table td{font:500 11px/1.5 var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
 .table td:first-child,.table th:first-child{padding-left:0}
 .table td:last-child,.table th:last-child{padding-right:0}
 .table tr:last-child td{border-bottom:0}
-.table tbody tr:hover td{background:rgba(255,255,255,.013)}
+.table tbody tr:hover td{background:transparent !important;}
 .table td small{display:block;color:var(--muted);font:450 9.5px/1.45 var(--mono);margin-top:3px}
 .table td.value{font-weight:650}
 .position-table th:nth-child(1){min-width:75px}
@@ -92,8 +92,8 @@ a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .history-empty{font:450 11px var(--sans)!important;color:var(--muted);padding:18px 0!important}
 .history-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--line);margin-top:9px;padding:10px 0 0}
 .history-footer .muted{color:var(--muted);font:500 10px/1.45 var(--mono)}
-.history-button{display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(233,187,122,.18);border-radius:8px;padding:8px 12px;background:rgba(233,187,122,.055);color:#dfd4c5;font:650 11px/1.4 var(--sans);cursor:pointer}
-.history-button:hover{border-color:rgba(233,187,122,.36);background:rgba(233,187,122,.09)}
+.history-button{display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(233,187,122,.18);border-radius:8px;padding:8px 12px;background:transparent !important;color:#dfd4c5;font:650 11px/1.4 var(--sans);cursor:pointer}
+.history-button:hover{border-color:rgba(233,187,122,.36);background:transparent !important;}
 .history-button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
 .history-button[hidden]{display:none}
 footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted);text-align:center;font:450 10px/1.4 var(--mono)}
@@ -138,18 +138,18 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
   html,
   body,
   #root {
-    background: transparent !important;
-    background-color: transparent !important;
-    background-image: none !important;
+    background:transparent !important;
+    background-color:transparent !important;
+    background-image:none !important;
   }
   /* t107u: the header bar and the main wrapper are see-through too (cards/panels/tables keep their own backgrounds). */
   .topbar,
   main.terminal {
-    background: transparent !important;
-    background-color: transparent !important;
-    background-image: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    background:transparent !important;
+    background-color:transparent !important;
+    background-image:none !important;
+    backdrop-filter:none !important;
+    -webkit-backdrop-filter:none !important;
   }
   /* Match the parent ZENITH document's dark color scheme. Chromium may otherwise
      paint an opaque LIGHT iframe canvas behind an otherwise transparent page. */
@@ -159,30 +159,30 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
     scrollbar-color: rgba(123,185,223,.46) transparent;
   }
   html::-webkit-scrollbar { width:6px;height:6px; }
-  html::-webkit-scrollbar-thumb { background:rgba(123,185,223,.45);border-radius:6px; }
+  html::-webkit-scrollbar-thumb { background:transparent !important;border-radius:6px; }
 
   /* ZENITH: Paper Terminal's OUTER card inherited .card's ~92%-opaque
      charcoal fill. Clear this wrapper only, while keeping the 4 individual
      metric tiles and all other cards/tables as designed. */
   #metricsCard,
   #metricsCard.metrics {
-    background: transparent !important;
-    background-color: transparent !important;
-    background-image: none !important;
-    box-shadow: none !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    background:transparent !important;
+    background-color:transparent !important;
+    background-image:none !important;
+    box-shadow:none !important;
+    backdrop-filter:none !important;
+    -webkit-backdrop-filter:none !important;
   }
   #metricsCard .metrics-grid {
-    background: transparent !important;
-    background-color: transparent !important;
-    background-image: none !important;
+    background:transparent !important;
+    background-color:transparent !important;
+    background-image:none !important;
   }
   /* High contrast against the ZENITH starfield without solid paper fills. */
   html, body, main.terminal, .topbar {
-    background: transparent !important;
-    background-color: transparent !important;
-    background-image: none !important;
+    background:transparent !important;
+    background-color:transparent !important;
+    background-image:none !important;
     color: #edf0f5 !important;
   }
   .card, .metric, .performance-stat, .table td, .table th {
@@ -219,7 +219,7 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
     color:#edf0f5;
   }
   .metric, .performance-stat {
-    background:rgba(255,255,255,.02) !important;
+    background:transparent !important;
     background-image:none !important;
     border:1px solid rgba(255,255,255,.08) !important;
     box-shadow:none !important;
@@ -236,11 +236,11 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
     color:inherit;
   }
   .table th {color:#a4b2c4}
-  .table tbody tr:hover td {background:rgba(255,255,255,.018) !important}
+  .table tbody tr:hover td {background:transparent !important;}
   .table td, .table th {border-bottom-color:rgba(255,255,255,.08) !important}
   .seg button, .seg button.on, .history-button, .history-button:hover,
   .paper-label, .brand-icon {
-    background:rgba(255,255,255,.018) !important;
+    background:transparent !important;
     background-image:none !important;
     border:1px solid rgba(255,255,255,.08) !important;
   }
