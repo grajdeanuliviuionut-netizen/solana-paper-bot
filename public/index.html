@@ -127,6 +127,15 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
 }
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 
+
+  /* ZENITH iframe integration: page canvas only, glass cards remain unchanged.
+     No backgrounds are removed from dashboard panels or metric tiles. */
+  html, body {
+    background: transparent !important;
+    background-color: transparent !important;
+    background-image: none !important;
+  }
+
 </style>
 </head>
 <body>
