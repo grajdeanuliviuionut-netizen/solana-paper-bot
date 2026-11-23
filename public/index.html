@@ -8,341 +8,172 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700;750&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 :root{
- color-scheme:dark;
- --bg:#09090b;--panel:#15171c;--panel2:#1d2028;
- --line:rgba(255,255,255,.095);--line2:rgba(255,255,255,.17);
- --txt:#f0f1f5;--sub:#a9aebb;--mute:#8b95a4;
- --up:#70ddb2;--dn:#ff7189;--warn:#e8c085;--acc:#e8bc82;--grey:#8792a6;
- --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
- --sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+  color-scheme:dark;--bg:#09090b;--panel:#15171c;--line:rgba(255,255,255,.095);
+  --line-strong:rgba(255,255,255,.16);--ink:#eef0f4;--muted:#98a2af;
+  --amber:#e7bc84;--green:#6bd7aa;--red:#ff7488;
+  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Consolas,monospace;
+  --sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
 }
 *{box-sizing:border-box}
-html,body{margin:0;min-width:0;min-height:100%;color:var(--txt);background:var(--bg);font:14px/1.55 var(--sans);-webkit-font-smoothing:antialiased}
-body{background:radial-gradient(ellipse 65% 450px at 50% -210px,rgba(184,135,71,.085),transparent 85%),#09090b}
-a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+html,body{min-width:0;margin:0;min-height:100%;background:var(--bg);color:var(--ink)}
+body{font:14px/1.55 var(--sans);-webkit-font-smoothing:antialiased;background:radial-gradient(ellipse 68% 480px at 53% -250px,rgba(184,141,84,.08),transparent 84%),#09090b}
+a{color:var(--amber);text-decoration:none}
+a:hover{text-decoration:underline}
+button,a{outline-offset:3px}
+button:focus-visible,a:focus-visible{outline:2px solid var(--amber)}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
-.up{color:var(--up)!important}.dn{color:var(--dn)!important}.mu{color:var(--mute)}
-.topbar{border-bottom:1px solid var(--line);background:rgba(17,18,22,.84);backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px)}
-.top-inner{width:min(2200px,100%);min-height:87px;margin:auto;padding:17px clamp(18px,2.2vw,40px);display:flex;align-items:center;justify-content:space-between;gap:24px}
-.brand{display:flex;align-items:center;gap:16px;min-width:0}
-.brand-icon{flex:none;display:grid;place-items:center;width:44px;height:44px;border:1px solid rgba(232,188,130,.25);border-radius:13px;background:rgba(232,188,130,.055);color:var(--acc)}
-.brand-icon svg{width:25px;height:25px;stroke:currentColor;stroke-width:1.65;fill:none;stroke-linecap:round;stroke-linejoin:round}
-.brand-title{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-.brand-title b{font-size:20px;letter-spacing:-.035em;font-weight:750}
-.brand-sub{color:var(--mute);font:550 11px/1.4 var(--mono);letter-spacing:.045em;margin-top:4px}
-.pill{font:700 10px/1.25 var(--mono);padding:5px 9px;border-radius:100px;color:var(--acc);background:rgba(232,188,130,.075);border:1px solid rgba(232,188,130,.19);letter-spacing:.075em}
-.health{color:var(--sub);font:550 11px/1.8 var(--mono);text-align:right}
-.health .d{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--up);box-shadow:0 0 0 4px rgba(112,221,178,.07);margin-right:8px}
-.health .d.bad{background:var(--dn);box-shadow:0 0 0 4px rgba(255,113,137,.07)}
-.wrap{display:grid;grid-template-columns:minmax(0,.91fr) minmax(0,1.18fr);gap:20px;align-items:start;width:min(2200px,100%);margin:auto;padding:25px clamp(18px,2.2vw,40px) 40px}
-.col{display:flex;flex-direction:column;gap:20px;min-width:0}
-.card{
- min-width:0;padding:22px 24px;border-radius:16px;
- border:1px solid var(--line);
- background:linear-gradient(145deg,rgba(255,255,255,.027),rgba(255,255,255,.005) 68%),rgba(20,22,27,.94);
- box-shadow:0 16px 44px rgba(0,0,0,.19),inset 0 1px rgba(255,255,255,.025);
-}
-.card h2{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 20px;font-size:13px;font-weight:750;letter-spacing:.11em;text-transform:uppercase;color:#d8dce4}
-.card h2 small{font-size:11px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--mute)}
-.metrics{border-color:rgba(232,188,130,.18);box-shadow:0 16px 44px rgba(0,0,0,.19),0 0 54px rgba(232,188,130,.038)}
-.metrics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px}
-.kpi{min-width:0;min-height:125px;padding:19px 20px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.018)}
-.kpi label{display:block;color:var(--mute);font:650 10.5px/1.4 var(--sans);letter-spacing:.12em;text-transform:uppercase}
-.kpi b{display:block;margin-top:14px;font:650 clamp(22px,1.7vw,29px)/1.3 var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.045em;overflow-wrap:anywhere}
-.kpi small{display:block;color:var(--mute);font:400 11px/1.5 var(--mono);margin-top:6px;white-space:normal}
-.kpi.epoch{grid-column:1/-1;min-height:79px;display:grid;grid-template-columns:minmax(110px,auto) minmax(100px,auto) minmax(0,1fr);align-items:center;gap:18px}
-.kpi.epoch b,.kpi.epoch small{margin-top:0}.kpi.epoch small{text-align:right}
-.sp{display:inline-block;font:700 10px/1.4 var(--mono);padding:5px 9px;letter-spacing:.06em;border-radius:7px;white-space:nowrap}
-.sp.green{color:var(--up);background:rgba(112,221,178,.11)}
-.sp.grey{color:var(--sub);background:rgba(255,255,255,.045)}
-.sp.amber{color:var(--warn);background:rgba(232,192,133,.11)}
-.sp.red{color:var(--dn);background:rgba(255,113,137,.10)}
-.mg{font-size:12.5px;line-height:1.6}
-.mg .row{display:grid;grid-template-columns:minmax(130px,.31fr) minmax(0,1fr);align-items:start;gap:18px;padding:12px 0;border-top:1px solid var(--line)}
-.mg .row>span{color:var(--mute);font-size:12px}
-.mg .row>b{font-weight:600;font-size:12px;overflow-wrap:anywhere}
-.mg .row>b.num{font-family:var(--mono);font-variant-numeric:tabular-nums}
-.mg .lg{padding:13px 0;border-top:1px solid var(--line);font-size:12px;line-height:1.7}
-.mg .lg small{display:block;color:var(--mute);font-size:11px;white-space:normal}
-.mg .rj{display:flex;flex-wrap:wrap;gap:7px;padding-top:14px;border-top:1px solid var(--line)}
-.mg .rj i{font:500 10.5px/1.5 var(--mono);font-style:normal;background:rgba(255,255,255,.026);border:1px solid var(--line);border-radius:7px;padding:5px 8px;color:var(--sub)}
-.hero{border-color:rgba(112,221,178,.16)}
-.hh{display:flex;justify-content:space-between;align-items:center;gap:15px;margin-bottom:13px}
-.hh .t{font-size:22px;font-weight:730;letter-spacing:-.035em}
-.hh .t small{font-size:12px;font-weight:500;color:var(--mute);margin-left:8px}
-.hx,.hx2{color:var(--mute);font-size:12px;line-height:1.7;overflow-wrap:anywhere}
-.hx{margin-bottom:9px}.hx2{margin-bottom:20px}
-.hs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-.hs div{padding:14px 15px;border:1px solid var(--line);border-radius:11px;background:rgba(255,255,255,.016)}
-.hs label{display:block;color:var(--mute);font:650 10px/1.4 var(--sans);letter-spacing:.08em;text-transform:uppercase}
-.hs b{display:block;font:650 17px/1.3 var(--mono);margin-top:9px;overflow-wrap:anywhere}
-#openCard{overflow:visible}
-.pt{width:100%;table-layout:auto;border-collapse:collapse}
-.pt th,.pt td{padding:11px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
-.pt th{font-size:10px;font-weight:650;color:var(--mute);letter-spacing:.07em;text-transform:uppercase}
-.pt td{font-size:12px;white-space:normal;overflow-wrap:anywhere}
-.pt td.num,.pt td.r{font-family:var(--mono);font-variant-numeric:tabular-nums}
-.pt td small{display:block;color:var(--mute);font-size:10px;margin-top:4px}
-.pt .r{text-align:right}
-.tg{display:inline-block;font:700 9px/1.4 var(--mono);padding:3px 6px;border-radius:5px;margin-left:4px}
-.tg.rh{background:rgba(112,221,178,.12);color:var(--up)}.tg.lo{background:rgba(232,192,133,.11);color:var(--warn)}
-.oc,.empty{color:var(--mute);font-size:12px}
-.empty{padding:18px 4px}
-canvas{display:block;width:100%;height:240px}
-.seg{display:flex;gap:6px}
-.seg button{background:var(--panel2);border:1px solid var(--line);color:var(--sub);border-radius:7px;padding:5px 10px;font:600 11px/1.4 var(--sans);cursor:pointer}
-.seg button.on{border-color:rgba(232,188,130,.37);color:var(--acc)}
-#equityCard .mu{font:500 11px/1.6 var(--mono)}
-.history{border-color:rgba(232,188,130,.17);box-shadow:0 16px 44px rgba(0,0,0,.2),0 0 58px rgba(232,188,130,.045)}
-.history .table-note{font:500 11px/1.5 var(--mono);color:var(--mute);margin:-9px 0 16px}
-.history-table{table-layout:fixed;border-collapse:collapse;width:100%;font:500 12.5px/1.65 var(--mono);font-variant-numeric:tabular-nums}
-.history-table thead th{padding:14px 14px;text-align:left;background:rgba(255,255,255,.022);font:650 10.5px/1.5 var(--sans);color:var(--mute);text-transform:uppercase;letter-spacing:.11em}
-.history-table tbody td{padding:17px 14px;text-align:left;border-top:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
-.history-table th:nth-child(1){width:21%}
-.history-table th:nth-child(2){width:20%}
-.history-table th:nth-child(3){width:23%}
-.history-table th:nth-child(4){width:36%}
-.history-table td small{display:block;color:var(--mute);font:400 10.5px/1.55 var(--mono);margin-top:5px}
-.history-table td .result{font-weight:700;font-size:13px}
-.history-table tr:hover td{background:rgba(255,255,255,.013)}
-.activity{border-color:rgba(112,221,178,.14)}
-.activity-list{display:flex;flex-direction:column;gap:0}
-.activity-row{display:grid;grid-template-columns:113px 92px minmax(0,1fr);gap:16px;align-items:start;padding:14px 9px;border-top:1px solid var(--line);font:500 12px/1.65 var(--mono)}
-.activity-time{color:var(--mute);white-space:nowrap}
-.activity-kind{color:var(--acc);font-weight:700;letter-spacing:.03em;overflow-wrap:anywhere}
-.activity-kind.scan{color:var(--acc)}
-.activity-kind.entry,.activity-kind.profit{color:var(--up)}
-.activity-kind.skip,.activity-kind.hold{color:var(--warn)}
-.activity-kind.error,.activity-kind.halt{color:var(--dn)}
-.activity-msg{color:#d7dce5;overflow-wrap:anywhere;white-space:pre-wrap}
-.activity-note{color:var(--mute);font:500 11px/1.5 var(--mono)}
-.foot{width:min(2200px,100%);margin:0 auto;text-align:center;color:var(--mute);font-size:11px;padding:0 18px 30px}
-footer{width:min(2200px,100%);margin:auto;text-align:center;padding:0 18px 28px;color:var(--mute);font-size:11px;line-height:1.8}
-button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
-@media(max-width:1280px){
- .wrap{grid-template-columns:minmax(0,1fr) minmax(0,1.13fr);gap:15px}
- .col{gap:15px}.card{padding:18px}
- .kpi{padding:14px}.history-table thead th,.history-table tbody td{padding-left:8px;padding-right:8px}
- .activity-row{grid-template-columns:94px 75px minmax(0,1fr);gap:8px}
-}
-@media(max-width:1040px){
- .wrap{grid-template-columns:minmax(0,1fr)}
+.up{color:var(--green)!important}.dn{color:var(--red)!important}.muted{color:var(--muted)}
+.topbar{background:rgba(16,17,21,.83);border-bottom:1px solid var(--line);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.topbar-inner{width:min(1980px,100%);margin:0 auto;padding:17px clamp(16px,2.2vw,40px);display:flex;align-items:center;justify-content:space-between;gap:22px}
+.brand{display:flex;align-items:center;gap:14px;min-width:0}
+.brand-icon{display:grid;place-items:center;flex:none;width:43px;height:43px;border:1px solid rgba(231,188,132,.22);border-radius:12px;background:rgba(231,188,132,.05);color:var(--amber)}
+.brand-icon svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linejoin:round;stroke-linecap:round}
+.brand-name{font-size:20px;font-weight:750;letter-spacing:-.035em;line-height:1.2}
+.brand-sub{color:var(--muted);margin-top:4px;font:550 10px/1.35 var(--mono);letter-spacing:.08em}
+.paper-label{color:var(--amber);background:rgba(231,188,132,.065);border:1px solid rgba(231,188,132,.18);border-radius:6px;padding:5px 8px;font:650 10px/1.2 var(--mono);letter-spacing:.06em;white-space:nowrap}
+.health{font:550 11px/1.75 var(--mono);color:#b9bec7;text-align:right}
+.health .d{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px rgba(231,188,132,.09);margin-right:9px;vertical-align:0}
+.health .d.bad{background:var(--red);box-shadow:0 0 0 4px rgba(255,116,136,.08)}
+.terminal{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.12fr);align-items:start;gap:20px;width:min(1980px,100%);margin:auto;padding:26px clamp(16px,2.2vw,40px) 44px}
+.column{display:flex;flex-direction:column;gap:18px;min-width:0}
+.card{min-width:0;padding:22px 23px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(145deg,rgba(255,255,255,.030),rgba(255,255,255,.006) 72%),rgba(20,22,27,.94);box-shadow:0 15px 42px rgba(0,0,0,.18),inset 0 1px rgba(255,255,255,.025)}
+.card-head{display:flex;justify-content:space-between;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+.card-head h2{margin:0;font:750 13px/1.5 var(--sans);letter-spacing:.10em;text-transform:uppercase;color:var(--ink)}
+.card-head small{color:var(--muted);font:500 11px/1.6 var(--sans)}
+.card-head h2::before{content:"";display:inline-block;width:3px;height:12px;margin-right:10px;border-radius:2px;background:var(--amber)}
+.metrics{border-color:rgba(231,188,132,.13)}
+.metrics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.metric{min-width:0;min-height:145px;padding:21px 20px;border-radius:13px;border:1px solid var(--line);background:linear-gradient(145deg,rgba(255,255,255,.038),rgba(255,255,255,.007)),rgba(22,25,30,.75);box-shadow:inset 0 1px rgba(255,255,255,.035)}
+.metric label{display:block;color:var(--muted);font:650 10.5px/1.35 var(--sans);letter-spacing:.10em;text-transform:uppercase}
+.metric b{display:block;margin-top:20px;font:650 clamp(26px,1.9vw,36px)/1.3 var(--mono);letter-spacing:-.045em;overflow-wrap:anywhere}
+.metric small{display:block;margin-top:8px;font-size:11px;color:var(--muted)}
+.positions{border-color:rgba(255,255,255,.11)}
+.table{width:100%;border-collapse:collapse;table-layout:auto}
+.table th{background:rgba(255,255,255,.015);font:650 10.5px/1.45 var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;text-align:left}
+.table td,.table th{padding:14px 9px;border-bottom:1px solid var(--line);vertical-align:middle}
+.table td{font:500 12.5px/1.5 var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.table td:first-child,.table th:first-child{padding-left:5px}
+.table td:last-child,.table th:last-child{padding-right:5px}
+.table tbody tr:last-child td{border-bottom:0}
+.table tbody tr:hover td{background:rgba(255,255,255,.018)}
+.table .value{font-weight:650}
+.table td small{display:block;color:var(--muted);font:450 10.5px/1.5 var(--mono);margin-top:4px}
+.position-table th:nth-child(1){min-width:99px}
+.position-table th:nth-child(5),.position-table th:nth-child(6){min-width:101px}
+.position-table td.pct{font-weight:650}
+.empty-positions{padding:7px 2px 2px;color:var(--muted);font:500 12px/1.6 var(--sans)}
+#positionTable[hidden],#openEmpty[hidden]{display:none!important}
+#equityCard{border-color:rgba(231,188,132,.135)}
+#eq{display:block;width:100%;height:335px;max-width:100%;margin:7px 0 0}
+#eqLegend{font:500 11px/1.55 var(--mono);color:var(--muted);margin-top:13px}
+.seg button{border:1px solid var(--line);color:var(--muted);background:rgba(255,255,255,.03);font:600 10.5px/1.35 var(--sans);padding:6px 10px;border-radius:7px;cursor:pointer}
+.seg button.on{color:var(--amber);border-color:rgba(231,188,132,.24)}
+.history{border-color:rgba(231,188,132,.145);min-height:670px}
+.history-table{width:100%}
+.history-table th:nth-child(1){width:19%}
+.history-table th:nth-child(2){width:19%}
+.history-table th:nth-child(3){width:20%}
+.history-table th:nth-child(4){width:42%}
+.history-table td{padding:17px 11px;white-space:normal;overflow-wrap:anywhere}
+.history-table td.num{font-family:var(--mono)}
+.history-table td.result{font-weight:650;font-size:13px}
+.history-table td.reason{font:450 12.5px/1.6 var(--sans);color:#cfd5df}
+.history-table td.token{font-weight:650}
+.history-table td small{font-size:10px;color:var(--muted)}
+.history-empty{color:var(--muted);padding:24px 10px!important;font:500 12px var(--sans)!important}
+.footer{width:min(1980px,100%);margin:0 auto;padding:0 18px 28px;text-align:center;color:var(--muted);font:500 10.5px/1.6 var(--mono)}
+@media(max-width:1480px){
+ .terminal{grid-template-columns:minmax(0,1fr);gap:16px}
+ .column{gap:16px}
  .metrics-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
- .kpi.epoch{grid-column:1/-1}
+ .metric{padding:18px 16px;min-height:135px}
+ .metric b{font-size:26px}
+ .history{min-height:340px}
+}
+@media(max-width:900px){
+ .metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .position-table td,.position-table th{font-size:11px;padding:10px 6px}
 }
 @media(max-width:650px){
- .top-inner{min-height:75px;padding:14px;flex-direction:column;align-items:flex-start;gap:8px}
- .brand-title b{font-size:18px}.health{text-align:left}
- .wrap{padding:14px 10px 26px;gap:12px}.col{gap:12px}
- .card{padding:15px 12px}.card h2{font-size:12px}
- .metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
- .kpi{min-height:105px;padding:12px}.kpi b{font-size:19px}
- .kpi.epoch{grid-template-columns:1fr 1fr;gap:6px}
- .kpi.epoch small{grid-column:1/-1;text-align:left}
- .hs{grid-template-columns:repeat(2,minmax(0,1fr))}
- .mg .row{grid-template-columns:1fr;gap:4px}
- .history-table{font-size:10.5px}
- .history-table th:nth-child(1){width:22%}
- .history-table th:nth-child(2){width:18%}
- .history-table th:nth-child(3){width:26%}
- .history-table th:nth-child(4){width:34%}
- .history-table thead th,.history-table tbody td{padding:10px 4px}
- .activity-row{grid-template-columns:70px 54px minmax(0,1fr);gap:6px;padding:11px 2px;font-size:10px}
- .pt{font-size:10px}.pt th,.pt td{padding:7px 3px}
- .pt th{font-size:9px}.pt td{font-size:10px}
+ .topbar-inner{padding:13px 14px;align-items:flex-start;gap:12px;flex-wrap:wrap}
+ .brand-name{font-size:18px}
+ .health{text-align:left}
+ .terminal{padding:14px 10px 25px;gap:12px}
+ .column{gap:12px}
+ .card{padding:16px 12px}
+ .metric{min-height:119px;padding:15px 13px}
+ .metric b{font-size:21px;margin-top:16px}
+ .card-head{margin-bottom:12px}
+ .table td,.table th{font-size:10px;padding:9px 3px}
+ .table td:first-child,.table th:first-child{padding-left:0}
+ .table td:last-child,.table th:last-child{padding-right:0}
+ .position-table th:nth-child(1),.position-table th:nth-child(5),.position-table th:nth-child(6){min-width:0}
+ .position-table td small{font-size:9px}
+ .position-table td{white-space:normal;overflow-wrap:anywhere}
+ .history-table th:nth-child(1){width:20%}
+ .history-table th:nth-child(2){width:17%}
+ .history-table th:nth-child(3){width:25%}
+ .history-table th:nth-child(4){width:38%}
+ .history-table td{font-size:10px;padding:11px 4px}
+ .history-table td.reason{font-size:10px}
+ #eq{height:265px}
 }
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
 
-
-/* GROK ALPHA POLISH / UI ONLY: typography, chip formatting, equity, log priority */
-:root{--acc:#efbb78;--warn:#efbb78}
-.brand-icon{border-color:rgba(239,187,120,.32);background:rgba(239,187,120,.075)}
-.brand-title b{color:#f7e6cd}
-.brand-sub{color:#aa9d8d}
-.health .d{background:var(--acc);box-shadow:0 0 0 4px rgba(239,187,120,.11)}
-.health .d.bad{background:var(--dn);box-shadow:0 0 0 4px rgba(255,113,137,.11)}
-.card h2{color:#f0d5b1;letter-spacing:.085em}
-.card h2::before{
- content:"";display:inline-block;flex:none;align-self:center;
- width:3px;height:13px;border-radius:3px;background:var(--acc);
- box-shadow:0 0 10px rgba(239,187,120,.10);
- margin-right:1px;
-}
-#metricsCard{border-color:rgba(239,187,120,.22);background:linear-gradient(150deg,rgba(239,187,120,.038),transparent 67%),rgba(20,22,27,.95)}
-.metrics-grid{gap:12px}
-.metrics-grid .kpi{
- min-height:126px;
- padding:19px 19px 16px;
- border:1px solid rgba(239,187,120,.16);
- border-radius:13px;
- background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.008) 75%),rgba(20,23,28,.88);
- box-shadow:inset 0 1px rgba(255,255,255,.035),0 10px 24px rgba(0,0,0,.11);
-}
-.metrics-grid .kpi label{color:#afb7c3;font-size:11px;letter-spacing:.1em}
-.metrics-grid .kpi b{
- font-size:clamp(25px,1.8vw,33px);
- font-weight:650;
- line-height:1.25;
- margin-top:16px;
- color:#f4f5f7;
- letter-spacing:-.05em;
-}
-.metrics-grid .kpi b.up{color:var(--up)}
-.metrics-grid .kpi b.dn{color:var(--dn)}
-.metrics-grid .kpi.epoch{
- min-height:82px;
- padding:16px 19px;
- background:linear-gradient(100deg,rgba(239,187,120,.038),rgba(255,255,255,.018));
-}
-.metrics-grid .kpi.epoch b{font-size:22px;margin-top:0}
-#equityCard{
- border-color:rgba(239,187,120,.20);
- background:linear-gradient(150deg,rgba(239,187,120,.035),transparent 75%),rgba(20,22,27,.95);
- box-shadow:0 18px 45px rgba(0,0,0,.20),0 0 56px rgba(239,187,120,.04);
-}
-#equityCard canvas{
- display:block;
- width:100%;
- height:390px;
- margin-top:8px;
- background:linear-gradient(180deg,rgba(239,187,120,.02),transparent);
- border-radius:10px;
-}
-#equityCard #eqLegend{padding:10px 2px 1px;color:#b4a99a;font-size:11px}
-#hero{border-color:rgba(239,187,120,.15)}
-#hero .hh{margin-bottom:19px}
-#hero .hh .t{color:#f0e9de}
-.rule-caption{
- color:#a29a90;
- font:700 10px/1.4 var(--sans);
- letter-spacing:.13em;
- margin:16px 0 9px;
-}
-.rule-tags{display:flex;flex-wrap:wrap;align-items:flex-start;gap:7px;margin:0 0 12px;min-width:0}
-.rule-chip{
- display:inline-flex;
- min-width:0;
- max-width:100%;
- align-items:center;
- padding:7px 11px;
- border:1px solid rgba(239,187,120,.20);
- border-radius:999px;
- background:rgba(239,187,120,.065);
- color:#e8d9c7;
- font:550 11px/1.5 var(--mono);
- font-variant-numeric:tabular-nums;
- letter-spacing:0;
- white-space:normal;
- overflow-wrap:anywhere;
-}
-.rule-chip.positive{color:#b2ead0;border-color:rgba(112,221,178,.23);background:rgba(112,221,178,.06)}
-.rule-chip.risk{color:#ffc0ae;border-color:rgba(255,113,137,.22);background:rgba(255,113,137,.06)}
-.rule-chip.neutral{color:#c4cbd6;border-color:var(--line);background:rgba(255,255,255,.028)}
-#brCard{border-color:rgba(239,187,120,.17)}
-#brCard .mg .row{align-items:start}
-#brBody .row{grid-template-columns:minmax(120px,.28fr) minmax(0,1fr);gap:18px;align-items:start}
-#brBody .row>span{padding-top:5px;font-weight:600;color:#b6b9c0}
-#brBody .row>b.rule-chipset{display:flex;flex-wrap:wrap;gap:7px;min-width:0;font:inherit}
-#brBody .rule-chip{font-size:10.5px;padding:6px 10px}
-.activity{border-color:rgba(239,187,120,.13)}
-.activity-kind.trade,.activity-kind.close{color:var(--up)}
-.activity-kind.warning,.activity-kind.warn,.activity-kind.paused{color:var(--warn)}
-.activity-kind.halted,.activity-kind.halt,.activity-kind.error{color:var(--dn)}
-.activity-row{background:transparent}
-.activity-row:hover{background:rgba(255,255,255,.016)}
-.activity-note{margin:0 0 12px;line-height:1.7}
-@media(max-width:1280px){
- #equityCard canvas{height:330px}
- .metrics-grid .kpi b{font-size:26px}
-}
-@media(max-width:650px){
- .metrics-grid .kpi{min-height:110px;padding:13px}
- .metrics-grid .kpi b{font-size:21px}
- .metrics-grid .kpi.epoch b{font-size:19px}
- #equityCard canvas{height:260px}
- .rule-chip{padding:6px 9px;font-size:10px}
- #brBody .row{grid-template-columns:1fr;gap:5px}
- #brBody .row>span{padding-top:0}
-}
 </style>
 </head>
 <body>
 <header class="topbar">
- <div class="top-inner">
-   <div class="brand">
-     <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="3"/><path d="M8 14l3-3 2 2 3-4"/><path d="M8 18h8"/></svg></span>
-     <div>
-       <div class="brand-title"><b>Grok Alpha</b><span class="pill">PAPER TERMINAL</span></div>
-       <div class="brand-sub">SOLANA / STRATEGY CONTROL &amp; RESEARCH</div>
-     </div>
-   </div>
-   <div class="health num">
-     <div><i class="d" id="hDot"></i><span id="hTxt">connecting</span></div>
-     <div><span id="build">–</span> · <span id="clock">–</span></div>
-   </div>
- </div>
+  <div class="topbar-inner">
+    <div class="brand">
+      <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="3"/><path d="m8 14 3-3 2 2 3-4"/></svg></span>
+      <div>
+        <div class="brand-name">Grok Alpha <span class="paper-label">PAPER</span></div>
+        <div class="brand-sub">SOLANA / MINIMAL TRADING TERMINAL</div>
+      </div>
+    </div>
+    <div class="health num">
+      <div><i class="d" id="hDot"></i><span id="hTxt">connecting</span></div>
+      <div><span id="build">–</span> · <span id="clock">–</span></div>
+    </div>
+  </div>
 </header>
-<main class="wrap">
- <section class="col left-col" aria-label="Account metrics, strategy and risk">
-   <div class="card metrics" id="metricsCard">
-     <h2>Paper Terminal <small>Account overview · SOL</small></h2>
-     <div class="metrics-grid">
-       <div class="kpi"><label>Cash</label><b class="num" id="kCash">–</b><small>Paper balance</small></div>
-       <div class="kpi"><label>Marked equity</label><b class="num" id="kEq">–</b><small>Balance + open value</small></div>
-       <div class="kpi"><label>Open P&amp;L</label><b class="num" id="kOpen">–</b><small>Unrealized · SOL</small></div>
-       <div class="kpi"><label>Realized today</label><b class="num" id="kToday">–</b><small>Closed trades · SOL</small></div>
-       <div class="kpi epoch"><label id="kEpochL">Since start</label><b class="num" id="kEpoch">–</b><small class="num" id="kEpochS">–</small></div>
-     </div>
-   </div>
-   <div class="card" id="equityCard">
-     <h2>Equity <span class="seg" id="eqRange"><button data-r="scoreboard" class="on">This board</button></span></h2>
-     <canvas id="eq"></canvas>
-     <div class="mu num" style="font-size:12px;margin-top:8px" id="eqLegend">–</div>
-   </div>
-   <div class="card mg" id="brCard">
-     <h2>Boss Rules <small id="brNote">Risk management · paper only</small></h2>
-     <div id="brBody"><div class="empty">–</div></div>
-   </div>
-   <div class="card hero" id="hero">
-     <div class="hh"><div class="t"><span id="heroName">Trend Following</span><small id="heroSub">v6</small></div><span class="sp green" id="heroSt">ACTIVE</span></div>
-     <div class="rule-caption">EXIT &amp; EXECUTION</div><div class="hx rule-tags" id="heroEx">–</div>
-     <div class="rule-caption">ENTRY FILTERS</div><div class="hx2 rule-tags" id="heroEn"></div>
-     <div class="hs">
-       <div><label>Open P&amp;L</label><b class="num" id="hOpen">–</b></div>
-       <div><label>Open</label><b class="num" id="hCount">–</b></div>
-       <div><label>Trades</label><b class="num" id="hTrades">–</b></div>
-       <div><label>Win rate</label><b class="num" id="hWin">–</b></div>
-       <div><label>Net SOL</label><b class="num" id="hNet">–</b></div>
-     </div>
-   </div>
-   <div class="card" id="openCard">
-     <h2>Open positions <small id="openNote">Mark = Jupiter sell quote · paper cost model · London</small></h2>
-     <table class="pt"><thead><tr><th>Token</th><th>Entry</th><th class="r">Mark</th><th class="r">Net</th><th class="r">P&amp;L SOL</th><th class="r">Stop / TP</th><th class="r">Age</th></tr></thead><tbody id="openPos"></tbody></table>
-   </div>
-   <div class="card mg" id="mgCard">
-     <h2>Manager Loop <small id="mgNote">Review every 10 trades · report every 30</small></h2>
-     <div id="mgBody"><div class="empty">–</div></div>
-   </div>
- </section>
- <section class="col right-col" aria-label="Trade history and activity logs">
-   <div class="card history" id="historyCard">
-     <h2>Trade History <small>Recent closed trades · current scoreboard</small></h2>
-     <p class="table-note">Real results from the existing paper execution ledger. Times shown in London.</p>
-     <table class="history-table" aria-label="Recent closed trades">
-       <thead><tr><th>Time</th><th>Token</th><th>Result</th><th>Reason</th></tr></thead>
-       <tbody id="fills"><tr><td colspan="4" class="empty">Loading trade history…</td></tr></tbody>
-     </table>
-   </div>
-   <div class="card activity" id="activityCard">
-     <h2>Activity / Logs <small>Live strategy events · 5 second refresh</small></h2>
-     <div id="activityNote" class="activity-note">Reading recent bot activity from the existing dashboard feed.</div>
-     <div class="activity-list" id="activityLog" aria-live="polite">
-       <div class="empty">Loading live activity…</div>
-     </div>
-   </div>
- </section>
+
+<main class="terminal">
+  <section class="column left-column" aria-label="Portfolio and open position P&L">
+    <div class="card metrics" id="metricsCard">
+      <div class="card-head"><h2>Paper Terminal</h2><small>Balances in SOL</small></div>
+      <div class="metrics-grid">
+        <div class="metric"><label>Cash</label><b id="kCash" class="num">–</b><small>Available</small></div>
+        <div class="metric"><label>Equity</label><b id="kEq" class="num">–</b><small>Marked to market</small></div>
+        <div class="metric"><label>Open P&amp;L</label><b id="kOpen" class="num">–</b><small>Unrealized · SOL</small></div>
+        <div class="metric"><label>Realized Today</label><b id="kToday" class="num">–</b><small>Closed P&amp;L · SOL</small></div>
+      </div>
+    </div>
+    <div class="card positions" id="openCard">
+      <div class="card-head"><h2>Open Positions</h2><small id="openNote">Current portfolio</small></div>
+      <table class="table position-table" id="positionTable" hidden aria-label="Live paper positions">
+        <thead><tr><th>Token</th><th>Entry</th><th>Mark Price</th><th>Size</th><th>Unrealized SOL</th><th>Unrealized %</th></tr></thead>
+        <tbody id="openPos"></tbody>
+      </table>
+      <div class="empty-positions" id="openEmpty">No open positions.</div>
+    </div>
+    <div class="card" id="equityCard">
+      <div class="card-head"><h2>Equity</h2><span class="seg" id="eqRange"><button data-r="scoreboard" class="on" type="button">This board</button></span></div>
+      <canvas id="eq"></canvas>
+      <div id="eqLegend" class="num">–</div>
+    </div>
+  </section>
+  <section class="column right-column" aria-label="Closed trade history">
+    <div class="card history" id="historyCard">
+      <div class="card-head"><h2>Trade History</h2><small>Current scoreboard · London time</small></div>
+      <table class="table history-table" aria-label="Closed trades">
+        <thead><tr><th>Time</th><th>Token</th><th>Result (SOL)</th><th>Reason</th></tr></thead>
+        <tbody id="fills"><tr><td colspan="4" class="history-empty">Loading closed trades…</td></tr></tbody>
+      </table>
+    </div>
+  </section>
 </main>
-<footer>Paper only · no wallet · live trading off · refresh 5 s · <a href="/api/books">/api/books</a> · <a href="/api/manager">/api/manager</a> · <a href="/api/bots">/api/bots</a> · <a href="/api/trades">/api/trades</a> · <a href="/classic">classic</a></footer>
+<footer class="footer">Grok Alpha · Paper simulation only · Updates every 5 seconds</footer>
 
 <script>
 (function () {
@@ -359,224 +190,68 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset
   function dur(ms) { if (!isNum(ms) || ms < 0) return '–'; var m = Math.floor(ms / 60000); return m >= 60 ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm' : m + 'm'; }
   function ago(sec) { if (!isNum(sec)) return 'never'; if (sec < 90) return Math.round(sec) + 's ago'; if (sec < 5400) return Math.round(sec / 60) + 'm ago'; return (sec / 3600).toFixed(1) + 'h ago'; }
   function get(u) { return fetch(u, { cache: 'no-store' }).then(function (r) { if (!r.ok) throw new Error(u + ' ' + r.status); return r.json(); }); }
-  function group(id) { return (D.positionsByStrategy || []).filter(function (g) { return g.id === id; })[0] || null; }
-
   function renderTop() {
-    var a = D.account || {};
-    $('kCash').textContent = isNum(a.balance) ? a.balance.toFixed(4) : '–';
-    var P = D.pnl || {};
-    var meq = isNum(P.markedEquity) ? P.markedEquity : a.markEquity;
-    $('kEq').textContent = isNum(meq) ? meq.toFixed(4) : '–';
-    $('kEpochL').textContent = 'Since start' + (P.epoch ? ' · ' + P.epoch : '');
-    $('kEpoch').textContent = sol(P.markedChangeSol); $('kEpoch').className = 'num ' + cl(P.markedChangeSol);
-    var sw = D.epochSwitch && D.epochSwitch.pending ? 'switching: closing leftovers' : null;
-    $('kEpochS').textContent = sw || ((isNum(P.startEquity) ? 'start ' + P.startEquity.toFixed(4) + ' · ' : '') + (P.since ? tL(P.since) + ' · ' : '') + 'residual ' + (isNum(P.residualSol) ? P.residualSol.toFixed(4) : '–'));
-    $('kOpen').textContent = sol(a.unrealizedSol); $('kOpen').className = 'num ' + cl(a.unrealizedSol);
-    $('kToday').textContent = sol(a.realizedTodaySol); $('kToday').className = 'num ' + cl(a.realizedTodaySol);
-    $('build').textContent = 'build ' + (D.build ? String(D.build).slice(0, 7) : 'local');
-    var ex = (D.agents && D.agents.executor && D.agents.executor.exitLoop) || {};
-    var upd = D.lastUpdate ? (Date.now() - Date.parse(D.lastUpdate)) / 1000 : null;
-    var halted = D.manager && D.manager.halt && D.manager.halt.halted;
-    var ok = !halted && D.liveTrading === false && !ex.errors && isNum(upd) && upd < 3 * (D.pollIntervalMs || 45000) / 1000;
-    $('hDot').className = 'd' + (ok ? '' : ' bad');
-    $('hTxt').textContent = (halted ? 'HALTED (manual restart) · ' : '') + (ok ? 'healthy' : 'check') + ' · exit loop ' + (ex.errors || 0) + ' errors · scan ' + ago(upd) + ' · live trading off';
+    var a=D.account||{};
+    $('kCash').textContent=isNum(a.balance)?a.balance.toFixed(4):'–';
+    var P=D.pnl||{}, marked=isNum(P.markedEquity)?P.markedEquity:a.markEquity;
+    $('kEq').textContent=isNum(marked)?marked.toFixed(4):'–';
+    $('kOpen').textContent=sol(a.unrealizedSol);
+    $('kOpen').className='num '+cl(a.unrealizedSol);
+    $('kToday').textContent=sol(a.realizedTodaySol);
+    $('kToday').className='num '+cl(a.realizedTodaySol);
+    $('build').textContent='build '+(D.build?String(D.build).slice(0,7):'local');
+    var ex=(D.agents&&D.agents.executor&&D.agents.executor.exitLoop)||{};
+    var upd=D.lastUpdate?(Date.now()-Date.parse(D.lastUpdate))/1000:null;
+    var halted=D.manager&&D.manager.halt&&D.manager.halt.halted;
+    var ok=!halted&&D.liveTrading===false&&!ex.errors&&isNum(upd)&&upd<3*(D.pollIntervalMs||45000)/1000;
+    $('hDot').className='d'+(ok?'':' bad');
+    $('hTxt').textContent=(halted?'HALTED · ':'')+(ok?'healthy':'check')+
+      ' · '+(ex.errors||0)+' exit errors · '+ago(upd)+' · paper only';
   }
-
-  function renderHero() {
-    var g = group('runner-hunter') || { positions: [] }, b = (D.books || []).filter(function (x) { return x.strategyId === 'runner-hunter'; })[0] || {};
-    var paused = g.status === 'paused', hlt = D.manager && D.manager.halt && D.manager.halt.halted, gp = D.manager && D.manager.guardrail && D.manager.guardrail.pausedUntil;
-    $('heroSt').textContent = hlt ? 'HALTED' : gp ? 'PAUSED ' + tL(gp) : paused ? 'PAUSED' : 'ACTIVE'; $('heroSt').className = 'sp ' + (hlt ? 'red' : (paused || gp) ? 'amber' : 'green');
-    var br = (D.manager && D.manager.bossRules) || {}, sz = br.sizing;
-    $('heroSub').textContent = 'v' + (b.version || 1) + ' · ' + (sz ? sz.pctOfEquity + '% of equity ≈ ' + sz.nextSizeSol.toFixed(3) + ' SOL per trade' : (b.sizeSol || 0.05) + ' SOL per trade');
-    var x = b.exit || {}, pa = x.partial || {};
-    var tpx = x.takeProfit;
-    $('heroName').textContent = b.name || 'Runner hunter';
-    var cmx = x.costModel || {};
-    var exTxt = x.partial && x.trailAfterPartial && x.priceBasis ? 'stop −' + x.stopLossPct + '% · at +' + x.partial.atPct + '% sell ½ · the rest trails ' + x.trailPct + '% from its peak' + (x.breakevenAfterPartial ? ', floor at entry' : '') + ' · on the price move since entry, every ~5 s, fresh quotes only · ' + x.maxHoldMinutes + ' min safety cap · paper fills: ' + cmx.flatSlipPct + '% slippage per side + priority fee' : x.takeProfitPct != null && !tpx && x.priceBasis ? 'stop −' + x.stopLossPct + '% · take profit +' + x.takeProfitPct + '% (full) · on the price move since entry, every ~5 s, fresh quotes only · ' + x.maxHoldMinutes + ' min safety cap · paper fills: ' + cmx.flatSlipPct + '% slippage per side + priority fee' : tpx ? 'stop −' + x.stopLossPct + '% (fresh quote only) · full take profit +' + tpx.weak.pct + '/+' + tpx.moderate.pct + '/+' + tpx.strong.pct + '% by entry momentum · market exit at ' + x.maxHoldMinutes + ' min' : x.breakevenAtPct != null ? 'stop −' + x.stopLossPct + '% · at +' + x.breakevenAtPct + '% stop → entry + trail ' + x.trailPct + '% below peak · not +' + (x.momentum || {}).minPct + '% in ' + (x.momentum || {}).withinMinutes + ' min → exit · ' + x.maxHoldMinutes + ' min max' : 'stop −' + x.stopLossPct + '% · sell ' + (Math.abs(pa.sellPct - 33.3333) < 0.01 ? '⅓' : pa.sellPct + '%') + ' at +' + pa.atPct + '% · trail ' + x.trailPct + '% below peak · ' + Math.round((x.maxHoldMinutes || 0) / 60) + ' h max';
-    var P = D.pnl || {}, rh = (P.byStrategy || []).filter(function (r) { return r.strategyId === 'runner-hunter'; })[0];
-    $('heroEx').innerHTML = esc(exTxt) + (P.epoch ? ' · board <b>' + esc(P.epoch) + '</b> since ' + tL(P.since) + '' : '');
-    $('hOpen').textContent = sol(g.openPnlSol); $('hOpen').className = 'num ' + cl(g.openPnlSol);
-    $('hCount').textContent = (g.openCount || 0) + ' / ' + (g.maxOpen || b.maxOpen || 2);
-    var en = b.entry || {};
-    $('heroEn').textContent = en.trend ? 'entry: liquidity > $' + Math.round(en.minLiquidityUsd / 1000) + 'k · price > ' + en.trend.maPeriod + '-period MA (1 min candles: own history, else GeckoTerminal; no data = no entry) · rug: mint+freeze revoked, top10 ≤ ' + en.maxTop10Pct + '% (RugCheck), blacklist · slippage ≤ ' + en.maxSlippageBps + ' bps · 24 h no re-buy after a stop' : en.breakout ? 'entry: busy breakout only: m5 vol ≥ ' + en.breakout.minVolSpike + '× hour avg & price above the ' + en.breakout.excludeMin + '–' + en.breakout.lookbackMin + ' min high & m5 > 0 · liq $' + Math.round(en.minLiquidityUsd / 1000) + 'k–$' + Math.round(en.maxLiquidityUsd / 1000) + 'k · 24h vol ≥ ' + en.minVolumeToLiquidityH24 + '× liq · h1 ≤ ' + en.maxH1 + '% · top10 ≤ ' + en.maxTop10Pct + '% (RugCheck) · mint+freeze revoked · slippage ≤ ' + en.maxSlippageBps + ' bps · 24 h no re-buy after a stop' : en.maxLiquidityUsd != null ? 'entry: liq $' + Math.round(en.minLiquidityUsd / 1000) + 'k–$' + Math.round(en.maxLiquidityUsd / 1000) + 'k · top10 ≤ ' + en.maxTop10Pct + '% · 24h vol ≥ ' + en.minVolumeToLiquidityH24 + '× liq · m5 > ' + en.minM5 + ' & m15 > ' + en.minM15 + ' · h1 ≤ ' + en.maxH1 + '% · 24 h no re-buy after a stop' + (en.rugCheck ? ' · rug: liq > $' + Math.round(en.rugCheck.minLiquidityUsd / 1000) + 'k, mint+freeze revoked, top10 ≤ ' + en.rugCheck.maxTop10Pct + '%, blacklist on fail · slippage ≤ ' + en.maxSlippageBps + ' bps' : '') + (x.costModel ? ' · paper fills: quote − ' + x.costModel.simSlipMinPct + '–' + x.costModel.simSlipMaxPct + '% per side, −' + x.costModel.stopPenaltyPct + '% on stops, ' + x.costModel.feePctPerSide + '% fee per side + priority fee' : '') : '';
-    if (b.epochStats) b = Object.assign({}, b, { trades: b.epochStats.trades, winRatePct: b.epochStats.winRatePct, netSol: b.epochStats.netSol, progress: b.epochStats.progress });
-    $('hTrades').textContent = b.trades == null ? '–' : b.trades + ' / ' + (b.progress ? String(b.progress).split('/')[1] : 30);
-    $('hWin').textContent = isNum(b.winRatePct) ? Math.round(b.winRatePct) + '%' : '–';
-    $('hNet').textContent = sol(b.netSol); $('hNet').className = 'num ' + cl(b.netSol);
-  }
-  // t90u Boss Rules panel (runner-hunter v5): from /api/manager bossRules.
-  function renderBoss() {
-    var B = D.manager && D.manager.bossRules; if (!B || !B.lossPause) { $('brCard').style.display = 'none'; return; }
-    $('brCard').style.display = '';
-    var h = '', S = B.strategy, lp = B.lossPause, n = B.nightHours || {}, sz = B.sizing || {}, fd = B.feed || {}, now = Date.now();
-    var mmss = function (s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
-    if (S) h += '<div class="row"><span>Strategy</span><b class="num">' + esc(S.name) + ' v' + S.version + ' · liq > $' + Math.round(S.minLiquidityUsd / 1000) + 'k · price > ' + S.maPeriod + ' MA (1m) · SL −' + S.stopLossPct + '% · ' + (S.partial ? '½ at +' + S.partial.atPct + '%, rest trails ' + S.trailPct + '%' + (S.breakevenAfterPartial ? ', floor at entry' : '') : 'TP +' + S.takeProfitPct + '%') + ' · ' + S.slipPctPerFill + '% slip' + (S.managerFrozen ? ' · Manager frozen (no new variants)' : '') + '</b></div>';
-    h += '<div class="row"><span>Halt</span><b class="num ' + (B.halted ? 'dn' : 'up') + '">' + (B.halted ? 'HALTED · entries blocked' : 'not halted') + '</b></div>';
-    h += '<div class="row"><span>Losses in a row</span><b class="num ' + (lp.paused ? 'dn' : '') + '">' + lp.consecutiveLosses + ' / ' + lp.losses + (lp.paused ? ' · PAUSED ' + mmss(lp.leftSec) + ' left (until ' + tL(lp.pausedUntil) + ')' : ' · scanning') + '</b></div>';
-    h += '<div class="row"><span>Night hours</span><b class="num ' + (n.active ? 'dn' : '') + '">' + (n.active ? 'SKIPPING until ' + tL(n.endsAt) : 'off') + ' · next ' + esc(n.windowUtc || '') + ' = ' + esc(n.nextStartLondon || '') + '–' + esc((n.nextEndLondon || '').replace(/^\w+ /, '')) + ' · skips ' + (n.skips || 0) + '</b></div>';
-    h += '<div class="row"><span>Size</span><b class="num">' + (isNum(sz.nextSizeSol) ? sz.nextSizeSol.toFixed(4) + ' SOL = ' + sz.pctOfEquity + '% of ' + sz.markedEquitySol.toFixed(4) + ' SOL equity' : '–') + '</b></div>';
-    var er = B.entryReview, xl = B.exitLadder;
-    if (er) h += '<div class="row"><span>Entry pass rate</span><b class="num">' + er.uniqueTokensPassAllRules + ' tokens passed all rules (' + (isNum(er.perHourAllRules) ? er.perHourAllRules.toFixed(1) : '–') + '/h) · ' + er.uniqueTokensPassLiqMA + ' passed the pre-screen (liq + own-history MA) · slot full ' + er.capacitySkips + '×</b></div>';
-    if (xl && xl.config) h += '<div class="row"><span>Exit ladder</span><b class="num">' + xl.config.bps.map(function (x) { return (x / 100) + '%'; }).join(' → ') + ' if a quote fails or is > ' + (xl.config.maxQuoteAgeMs / 1000) + ' s old · escalations ' + xl.escalations + ' · exits ' + xl.exits + ' · no fresh quote ' + xl.noFreshQuote + '</b></div>';
-    h += '<div class="row"><span>Feed</span><b class="num">stale ≥ ' + fd.staleAfterSec + ' s → stop on hold · stale events ' + (fd.staleEvents || 0) + ' · open stale ' + (fd.openStale || 0) + '</b></div>';
-    (B.positions || []).forEach(function (p) {
-      var tp = p.takeProfit, f = p.feed || {};
-      var tr = p.trend, st = B.strategy;
-      h += '<div class="row"><span>' + esc(p.symbol) + ' <small>' + esc(p.version || '') + '</small></span><b class="num">' + (tr && st ? 'move ' + (isNum(p.movePct) ? pct(p.movePct) : '–') + ' (SL −' + st.stopLossPct + ' / ' + (p.partialDone ? '½ sold, runner trails ' + st.trailPct + '% from peak ' + (isNum(p.peakMovePct) ? pct(p.peakMovePct) : '–') + ', floor entry, banked ' + (isNum(p.realizedSol) ? sol(p.realizedSol) : '–') : p.halfTrail ? '½ at +' + st.partial.atPct : 'TP +' + st.takeProfitPct) + ') · entry ' + pct(tr.maDistPct) + ' vs MA' + tr.maPeriod + ' · ' + Math.round(p.heldMin) + '/' + st.maxHoldMinutes + ' min' : tp ? 'TP +' + tp.pct + '% (' + esc(tp.tier) + ') · ' + mmss(tp.leftSec) + ' to time exit' : 'old rules') + ' · feed ' + (isNum(f.ageSec) ? Math.round(f.ageSec) + 's' : '–') + (f.stale ? ' <span class="dn">STALE</span>' : '') + (p.sizing ? ' · ' + p.sizeSol.toFixed(4) + ' SOL = 5% of ' + p.sizing.equityUsedSol.toFixed(3) : '') + '</b></div>';
-    });
-    var rj = B.breakoutRejects || {}, ks = Object.keys(rj).sort(function (a, b) { return rj[b] - rj[a]; }).slice(0, 10);
-    h += '<div class="rj">' + (ks.length ? ks.map(function (k) { return '<i>' + esc(k) + ' ' + rj[k] + '</i>'; }).join('') : '<i>no rejects yet</i>') + '</div>';
-    $('brBody').innerHTML = h;
-  }
-  function renderManager() {
-    var m = D.manager; if (!m) { $('mgBody').innerHTML = '<div class="empty">manager data unavailable</div>'; return; }
-    var g = m.guardrail || {}, f = m.entryFilters || {}, h = '', hv = m.halt || {}, ex = m.executor || {}, rc = m.rugCheck, pf = ex.priorityFee || {};
-    if (hv.halted) h += '<div class="row"><span>HALT</span><b class="num dn">HALTED ' + tL(hv.halt.at) + ' · ' + esc(hv.halt.reason) + ' · manual restart required</b></div>';
-    else if (hv.enabled) h += '<div class="row"><span>24 h drawdown</span><b class="num">' + (hv.lastCheck && isNum(hv.lastCheck.dropPct) ? '−' + hv.lastCheck.dropPct.toFixed(2) + '%' : '–') + ' / halt at −' + hv.limitPct + '%</b></div>';
-    if (ex.maxSlippageBps != null) h += '<div class="row"><span>Executor</span><b class="num">≤ ' + ex.maxSlippageBps + ' bps · aborts ' + ex.slippageAborts + ' · exit over-limit ' + ex.exitSlippageExceeded + ' · prio ' + (isNum(pf.microLamports) ? Math.round(pf.microLamports) + ' µL/CU' + (pf.fallback ? ' (fallback)' : '') : '–') + '</b></div>';
-    if (rc) h += '<div class="row"><span>Rug check</span><b class="num">checked ' + rc.checks + ' · failed ' + rc.failed + ' · blacklisted ' + rc.blacklisted + ' · unavailable ' + rc.unavailable + '</b></div>';
-    h += '<div class="row"><span>Closed trades (' + esc(m.epoch || '') + ')</span><b class="num">' + m.closedTrades + ' · next review @' + m.nextReviewAtTrade + ' · report @' + m.nextReportAtTrade + '</b></div>';
-    h += '<div class="row"><span>Version</span><b class="num">' + esc(m.current ? m.current.label : '–') + '</b></div>';
-    h += '<div class="row"><span>Guardrail</span><b class="num ' + (g.pausedUntil ? 'dn' : '') + '">' + (g.pausedUntil ? 'PAUSED until ' + tL(g.pausedUntil) : 'trading') + ' · loss streak ' + (g.lossStreak || 0) + '/' + (g.losses || 4) + '</b></div>';
-    h += '<div class="row"><span>24 h stop blocks</span><b class="num">' + ((m.stopCooldowns || {}).active || 0) + ' coins</b></div>';
-    var bf = f.byFilter || {}, ks = Object.keys(bf).sort(function (a, b) { return bf[b] - bf[a]; }).slice(0, 8);
-    h += '<div class="rj">' + (ks.length ? ks.map(function (k) { return '<i>' + esc(k) + ' ' + bf[k] + '</i>'; }).join('') : '<i>no rejects yet</i>') + '<i>passed ' + (f.passedRules || 0) + '/' + (f.evaluated || 0) + ' · entered ' + (f.entered || 0) + '</i></div>';
-    var rp = (m.reports || []).slice(-1)[0];
-    if (rp) h += '<div class="lg"><b>Report ' + rp.fromTrade + '–' + rp.toTrade + '</b> · win ' + rp.winRatePct + '% · avg win ' + sol(rp.avgWinSol) + ' · avg loss ' + sol(rp.avgLossSol) + ' · net <b class="' + cl(rp.netSol) + '">' + sol(rp.netSol) + '</b></div>';
-    var lg = (m.log || []).slice(0, 4);
-    h += lg.length ? lg.map(function (e) { return '<div class="lg"><b>@' + e.tradeIndex + ' ' + esc(e.rule) + '</b> ' + (e.change ? esc(e.change) + ' ' + e.from + ' → ' + e.to + ' (v' + e.toVersion + ')' : 'no change') + ' · ' + tL(e.at) + '<small>' + esc(e.why) + '</small></div>'; }).join('') : '<div class="lg"><small>no review yet: first review after 10 closed trades</small></div>';
-    $('mgBody').innerHTML = h;
-  }
-  function fillRow(t) {
-    var partial=(t.legs||[]).some(function (l) { return l.reason==='partial-tp'; });
-    var result=sol(t.pnlSol)+' SOL';
-    return '<tr>'+
-      '<td class="num">'+tL(t.closedAt)+'<small>'+esc(t.closedAt?String(t.closedAt).slice(0,10):'')+'</small></td>'+
-      '<td>'+esc(t.symbol||'—')+'<small>'+esc(t.strategyVersion||t.strategyId||'')+'</small></td>'+
-      '<td class="num '+cl(t.pnlSol)+'"><span class="result">'+result+'</span><small class="'+cl(t.pnlPct)+'">'+pct(t.pnlPct)+'</small></td>'+
-      '<td>'+esc(t.exitReason||'—')+(partial?'<small>Partial take-profit executed</small>':'')+'</td>'+
-      '</tr>';
-  }
-  // Every live open position (runner-hunter + leftovers of strategies that no longer enter, still exiting).
-  function activeIds() { return (D.positionsByStrategy || []).filter(function (g) { return g.status !== 'paused'; }).map(function (g) { return g.id; }); }
   function renderOpen() {
-    var act = activeIds(), now = Date.now(), rows = [], n = 0, pnl = 0;
-    (D.positionsByStrategy || []).forEach(function (g) {
-      (g.positions || []).forEach(function (p) {
-        n++; pnl += isNum(p.unrealizedSol) ? p.unrealizedSol : 0;
-        var live = act.indexOf(g.id) >= 0;
-        var tag = '<span class="tg ' + (live ? 'rh' : 'lo') + '">' + esc(live ? g.id : g.id + ' · exiting') + '</span>';
-        var tok = p.dexUrl ? '<a href="' + esc(p.dexUrl) + '" target="_blank" rel="noopener">' + esc(p.symbol) + '</a>' : esc(p.symbol);
-        var tp = isNum(p.targetPct) ? '+' + p.targetPct + '%' : isNum(p.trailPct) ? 'trail ' + p.trailPct + '%' : '–';
-        rows.push({ live: live, t: Date.parse(p.entryTime) || 0, html: '<tr><td>' + tok + tag + '<small class="num">' + (isNum(p.sizeSol) ? p.sizeSol.toFixed(3) : '–') + ' SOL</small></td>' +
-          '<td class="num">' + tL(p.entryTime) + '<small>' + px(p.entryPrice) + '</small></td>' +
-          '<td class="r num">' + px(p.markPrice) + '<small>' + (isNum(p.quoteAgeSec) ? Math.round(p.quoteAgeSec) + 's old' : '–') + '</small></td>' +
-          '<td class="r num ' + cl(p.netPnlPct) + '">' + pct(p.netPnlPct) + '</td><td class="r num ' + cl(p.unrealizedSol) + '">' + sol(p.unrealizedSol, 5) + '</td>' +
-          '<td class="r num mu">' + (isNum(p.stopPct) ? p.stopPct + '%' : '–') + ' / ' + tp + '</td><td class="r num">' + dur(now - Date.parse(p.entryTime)) + '</td></tr>' });
+    var rows=[], now=Date.now();
+    (D.positionsByStrategy||[]).forEach(function(g){
+      (g.positions||[]).forEach(function(p){
+        var token=p.dexUrl
+          ? '<a href="'+esc(p.dexUrl)+'" target="_blank" rel="noopener noreferrer">'+esc(p.symbol||'—')+'</a>'
+          : esc(p.symbol||'—');
+        var entry=isNum(p.entryPrice)?px(p.entryPrice):'–';
+        var mark=isNum(p.markPrice)?px(p.markPrice):'–';
+        var sz=isNum(p.sizeSol)?p.sizeSol.toFixed(4)+' SOL':'–';
+        var un=isNum(p.unrealizedSol)?sol(p.unrealizedSol,5)+' SOL':'–';
+        var performance=isNum(p.netPnlPct)?pct(p.netPnlPct):'–';
+        var entryTime=p.entryTime?tL(p.entryTime):'–';
+        rows.push({
+          timestamp:Date.parse(p.entryTime)||0,
+          html:'<tr><td class="value">'+token+'</td>'+
+            '<td class="num">'+entry+'<small>'+esc(entryTime)+' London</small></td>'+
+            '<td class="num">'+mark+'</td>'+
+            '<td class="num">'+sz+'</td>'+
+            '<td class="num value '+cl(p.unrealizedSol)+'">'+un+'</td>'+
+            '<td class="num pct '+cl(p.netPnlPct)+'">'+performance+'</td></tr>'
+        });
       });
     });
-    rows.sort(function (a, b) { return (b.live - a.live) || (b.t - a.t); });
-    $('openPos').innerHTML = rows.map(function (r) { return r.html; }).join('') || '<tr><td colspan="7" class="empty">Nothing open right now.</td></tr>';
-    $('openNote').innerHTML = n ? '<span class="num">' + n + ' open · <span class="' + cl(pnl) + '">' + sol(pnl, 5) + ' SOL</span></span> · mark = Jupiter sell quote · net after the paper cost model · London' : 'mark = Jupiter sell quote · net after the paper cost model · London';
+    rows.sort(function(a,b){return b.timestamp-a.timestamp;});
+    $('openPos').innerHTML=rows.map(function(r){return r.html;}).join('');
+    $('positionTable').hidden=rows.length===0;
+    $('openEmpty').hidden=rows.length>0;
+    $('openNote').textContent=rows.length?rows.length+' open · marked after paper costs':'No active positions';
   }
   // Closes since the board start (runner-v2): runner-hunter plus any leftover closed after it.
   function focusSince() { return D.scoreboard && D.scoreboard.since ? Date.parse(D.scoreboard.since) : Date.parse('2026-11-22T06:52:57Z'); }
   function renderFills() {
-    // Same source and board filter as before, extended to show more of the existing history.
-    var rows=(D.recentTrades||[]).filter(function (t) {return Date.parse(t.closedAt)>=focusSince();}).slice(0,60);
-    $('fills').innerHTML=rows.map(fillRow).join('')||
-      '<tr><td colspan="4" class="empty">No closed trades on this scoreboard yet.</td></tr>';
-  }
-  function renderActivity() {
-    // Existing /api/dashboard data only; suppress high-frequency scan ticks.
-    var logger=(D.agents&&D.agents.logger)||{};
-    var raw=Array.isArray(logger.activity)?logger.activity:[];
-    var significant=raw.filter(function (entry) {
-      var msg=String(entry&&entry.msg||'').trim();
-      if(!msg)return false;
-      // Routine polling messages are operational noise, not actionable alerts.
-      return !/^(?:SCAN\b|HOLD\b|TICK\b)/i.test(msg);
-    }).map(function (entry) {
-      return { time:entry.time||entry.at||'', msg:String(entry.msg||''), source:'log' };
-    });
-    // Preserve genuine closed-trade events even if the short activity window
-    // contains only scan heartbeats. Trades are from the existing ledger.
-    var completed=(D.recentTrades||[]).filter(function (t) {
+    var rows=(D.recentTrades||[]).filter(function(t){
       return Date.parse(t.closedAt)>=focusSince();
-    }).slice(0,12).map(function (t) {
-      return {
-        time:t.closedAt,
-        msg:'Closed '+(t.symbol||'token')+' · '+sol(t.pnlSol,5)+' SOL · '+(t.exitReason||'exit'),
-        source:'trade'
-      };
-    });
-    var halt=(D.manager&&D.manager.halt)||{};
-    if(halt.halted){
-      var info=halt.halt||{};
-      significant.unshift({
-        time:info.at||D.now||'',
-        msg:'HALTED · '+String(info.reason||'trading entries blocked'),
-        source:'halt'
-      });
-    }
-    var byKey={},combined=significant.concat(completed).filter(function (entry) {
-      var key=entry.source+'|'+entry.time+'|'+entry.msg;
-      if(byKey[key])return false;
-      byKey[key]=true;
-      return true;
-    });
-    combined.sort(function(a,b){
-      return (Date.parse(b.time)||0)-(Date.parse(a.time)||0);
-    });
-    var rows=combined.slice(0,30);
-    var ignored=raw.length-significant.filter(function (e) {return e.source==='log';}).length;
-    $('activityNote').textContent=rows.length
-      ? rows.length+' meaningful events · '+ignored+' routine scan/heartbeat messages hidden · refresh every 5 s'
-      : 'No significant events in the recent log window · routine scans hidden · refresh every 5 s';
-    $('activityLog').innerHTML=rows.length?rows.map(function(entry){
-      var msg=String(entry.msg||''),at=entry.time||'';
-      var match=/^\s*(SCAN|ENTRY|EXIT|HOLD|SKIP|HALT|HALTED|ERROR|WARN|WARNING|PAUSED|RESUME|MANAGER|SCOREBOARD|TICK)\b/i.exec(msg);
-      var kind=entry.source==='trade'?'TRADE':entry.source==='halt'?'HALTED':match?match[1].toUpperCase():'INFO';
-      var tone=kind==='TRADE'?'trade':kind==='ENTRY'?'entry':kind==='EXIT'?'profit':
-        kind==='SKIP'?'skip':kind==='HALT'||kind==='HALTED'?'halt':
-        kind==='ERROR'?'error':kind==='WARN'||kind==='WARNING'?'warn':
-        kind==='PAUSED'?'paused':'';
-      return '<div class="activity-row"><span class="activity-time num">'+esc(tL(at))+'</span>'+
-        '<span class="activity-kind '+tone+'">'+esc(kind)+'</span>'+
-        '<span class="activity-msg">'+esc(msg)+'</span></div>';
-    }).join(''):'<div class="empty">No actionable changes or closed trades to report. Routine scanner checks are hidden.</div>';
-  }
-  function renderRuleTags(){
-    // Format the existing rule strings without changing their values or API source.
-    function addChips(target,raw){
-      if(!target)return;
-      var chunks=String(raw||'').split(/\s+·\s+|\s*;\s*/).map(function (v) {
-        return v.trim();
-      }).filter(Boolean);
-      var frag=document.createDocumentFragment();
-      chunks.forEach(function (value){
-        var chip=document.createElement('span');
-        chip.className='rule-chip';
-        if(/^(?:stop\b|SL\b|HALTED\b|halted\b|losses\b)/i.test(value) &&
-           !/^not halted/i.test(value))chip.classList.add('risk');
-        else if(/^(?:at \+|take\b|TP\b|partial\b|win\b|passed\b)/i.test(value))chip.classList.add('positive');
-        else if(/^(?:board\b|entry:|24 h no re-buy)/i.test(value))chip.classList.add('neutral');
-        chip.textContent=value;
-        frag.appendChild(chip);
-      });
-      target.replaceChildren(frag);
-    }
-    ['heroEx','heroEn'].forEach(function(id){
-      var el=$(id);
-      if(el)addChips(el,el.textContent);
-    });
-    var body=$('brBody');
-    if(!body)return;
-    Array.prototype.forEach.call(body.querySelectorAll('.row > b'),function(el){
-      var value=el.textContent;
-      el.classList.add('rule-chipset');
-      addChips(el,value);
-    });
+    }).slice(0,60);
+    $('fills').innerHTML=rows.map(function(t){
+      return '<tr>'+
+        '<td class="num">'+esc(tL(t.closedAt))+'<small>'+esc(t.closedAt?String(t.closedAt).slice(0,10):'')+'</small></td>'+
+        '<td class="token">'+esc(t.symbol||'—')+'</td>'+
+        '<td class="num result '+cl(t.pnlSol)+'">'+(isNum(t.pnlSol)?sol(t.pnlSol,5):'–')+'</td>'+
+        '<td class="reason">'+esc(t.exitReason||'—')+'</td>'+
+        '</tr>';
+    }).join('') || '<tr><td colspan="4" class="history-empty">No closed trades on this scoreboard yet.</td></tr>';
   }
   function renderEquity() {
     var c = $('eq'), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
@@ -606,8 +281,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--acc);outline-offset
   function refresh() {
     return get('/api/dashboard').then(function (d) {
       D = d; lastOk = Date.now();
-      [renderTop, renderBoss, renderManager, renderHero, renderOpen, renderFills, renderActivity].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
-      try { renderRuleTags(); } catch (e) { console.error(e); }
+      [renderTop, renderOpen, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
       clock();
     }).catch(function (e) { console.error(e); $('hDot').className = 'd bad'; $('hTxt').textContent = 'API error, retrying'; });
   }
