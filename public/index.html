@@ -8,116 +8,119 @@
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700;750&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 :root{
-  color-scheme:dark;--bg:#09090b;--panel:#15171c;--line:rgba(255,255,255,.095);
-  --line-strong:rgba(255,255,255,.16);--ink:#eef0f4;--muted:#98a2af;
-  --amber:#e7bc84;--green:#6bd7aa;--red:#ff7488;
-  --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Consolas,monospace;
-  --sans:'Inter',system-ui,-apple-system,'Segoe UI',sans-serif;
+ color-scheme:dark;--bg:#09090b;--panel:#15171d;--line:rgba(255,255,255,.085);--line-hover:rgba(255,255,255,.14);
+ --ink:#edf0f5;--muted:#929ba9;--amber:#e9bb7a;--up:#6ddcae;--down:#ff748a;
+ --mono:'JetBrains Mono',ui-monospace,Consolas,monospace;--sans:'Inter',system-ui,-apple-system,"Segoe UI",sans-serif;
 }
 *{box-sizing:border-box}
-html,body{min-width:0;margin:0;min-height:100%;background:var(--bg);color:var(--ink)}
-body{font:14px/1.55 var(--sans);-webkit-font-smoothing:antialiased;background:radial-gradient(ellipse 68% 480px at 53% -250px,rgba(184,141,84,.08),transparent 84%),#09090b}
-a{color:var(--amber);text-decoration:none}
-a:hover{text-decoration:underline}
-button,a{outline-offset:3px}
-button:focus-visible,a:focus-visible{outline:2px solid var(--amber)}
+html,body{margin:0;min-width:0;min-height:100%;background:var(--bg);color:var(--ink)}
+body{font:13px/1.5 var(--sans);-webkit-font-smoothing:antialiased;background:radial-gradient(ellipse 65% 480px at 48% -310px,rgba(182,131,65,.07),transparent 85%),var(--bg)}
+a{color:var(--amber);text-decoration:none}a:hover{text-decoration:underline}
 .num{font-family:var(--mono);font-variant-numeric:tabular-nums}
-.up{color:var(--green)!important}.dn{color:var(--red)!important}.muted{color:var(--muted)}
-.topbar{background:rgba(16,17,21,.83);border-bottom:1px solid var(--line);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
-.topbar-inner{width:min(1980px,100%);margin:0 auto;padding:17px clamp(16px,2.2vw,40px);display:flex;align-items:center;justify-content:space-between;gap:22px}
-.brand{display:flex;align-items:center;gap:14px;min-width:0}
-.brand-icon{display:grid;place-items:center;flex:none;width:43px;height:43px;border:1px solid rgba(231,188,132,.22);border-radius:12px;background:rgba(231,188,132,.05);color:var(--amber)}
-.brand-icon svg{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linejoin:round;stroke-linecap:round}
-.brand-name{font-size:20px;font-weight:750;letter-spacing:-.035em;line-height:1.2}
-.brand-sub{color:var(--muted);margin-top:4px;font:550 10px/1.35 var(--mono);letter-spacing:.08em}
-.paper-label{color:var(--amber);background:rgba(231,188,132,.065);border:1px solid rgba(231,188,132,.18);border-radius:6px;padding:5px 8px;font:650 10px/1.2 var(--mono);letter-spacing:.06em;white-space:nowrap}
-.health{font:550 11px/1.75 var(--mono);color:#b9bec7;text-align:right}
-.health .d{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px rgba(231,188,132,.09);margin-right:9px;vertical-align:0}
-.health .d.bad{background:var(--red);box-shadow:0 0 0 4px rgba(255,116,136,.08)}
-.terminal{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.12fr);align-items:start;gap:20px;width:min(1980px,100%);margin:auto;padding:26px clamp(16px,2.2vw,40px) 44px}
-.column{display:flex;flex-direction:column;gap:18px;min-width:0}
-.card{min-width:0;padding:22px 23px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(145deg,rgba(255,255,255,.030),rgba(255,255,255,.006) 72%),rgba(20,22,27,.94);box-shadow:0 15px 42px rgba(0,0,0,.18),inset 0 1px rgba(255,255,255,.025)}
-.card-head{display:flex;justify-content:space-between;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:18px}
-.card-head h2{margin:0;font:750 13px/1.5 var(--sans);letter-spacing:.10em;text-transform:uppercase;color:var(--ink)}
-.card-head small{color:var(--muted);font:500 11px/1.6 var(--sans)}
-.card-head h2::before{content:"";display:inline-block;width:3px;height:12px;margin-right:10px;border-radius:2px;background:var(--amber)}
-.metrics{border-color:rgba(231,188,132,.13)}
-.metrics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
-.metric{min-width:0;min-height:145px;padding:21px 20px;border-radius:13px;border:1px solid var(--line);background:linear-gradient(145deg,rgba(255,255,255,.038),rgba(255,255,255,.007)),rgba(22,25,30,.75);box-shadow:inset 0 1px rgba(255,255,255,.035)}
-.metric label{display:block;color:var(--muted);font:650 10.5px/1.35 var(--sans);letter-spacing:.10em;text-transform:uppercase}
-.metric b{display:block;margin-top:20px;font:650 clamp(26px,1.9vw,36px)/1.3 var(--mono);letter-spacing:-.045em;overflow-wrap:anywhere}
-.metric small{display:block;margin-top:8px;font-size:11px;color:var(--muted)}
-.positions{border-color:rgba(255,255,255,.11)}
+.up{color:var(--up)!important}.dn{color:var(--down)!important}
+.topbar{border-bottom:1px solid var(--line);background:rgba(15,16,20,.86);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.topbar-inner{width:min(1900px,100%);margin:auto;padding:13px clamp(13px,1.8vw,30px);display:flex;align-items:center;justify-content:space-between;gap:20px}
+.brand{display:flex;align-items:center;gap:12px;min-width:0}
+.brand-icon{display:grid;place-items:center;width:36px;height:36px;flex:none;border:1px solid rgba(233,187,122,.20);border-radius:10px;background:rgba(233,187,122,.035);color:var(--amber)}
+.brand-icon svg{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+.brand-name{font-size:18px;line-height:1.25;letter-spacing:-.025em;font-weight:720}
+.brand-sub{color:var(--muted);font:550 10px/1.35 var(--mono);letter-spacing:.07em;margin-top:3px}
+.paper-label{color:var(--amber);border:1px solid rgba(233,187,122,.19);padding:3px 8px;border-radius:6px;font:650 9px/1.4 var(--mono);vertical-align:2px;letter-spacing:.06em;margin-left:5px}
+.health{text-align:right;color:#a9b2bd;font:500 10.5px/1.75 var(--mono)}
+.health .d{width:7px;height:7px;display:inline-block;border-radius:50%;background:var(--amber);margin-right:8px;box-shadow:0 0 0 4px rgba(233,187,122,.075)}
+.health .d.bad{background:var(--down);box-shadow:0 0 0 4px rgba(255,116,138,.075)}
+.terminal{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);align-items:start;gap:16px;width:min(1900px,100%);margin:auto;padding:19px clamp(13px,1.8vw,30px) 28px}
+.column{display:flex;flex-direction:column;gap:15px;min-width:0}
+.card{background:linear-gradient(145deg,rgba(255,255,255,.025),rgba(255,255,255,.006) 76%),rgba(20,22,27,.92);border:1px solid var(--line);border-radius:13px;padding:17px 19px;box-shadow:0 12px 33px rgba(0,0,0,.14),inset 0 1px rgba(255,255,255,.024);min-width:0}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:15px}
+.card-head h2{margin:0;font:700 12px/1.45 var(--sans);text-transform:uppercase;letter-spacing:.085em}
+.card-head h2::before{content:"";display:inline-block;vertical-align:1px;width:3px;height:11px;border-radius:2px;margin-right:9px;background:var(--amber)}
+.card-head small{color:var(--muted);font:500 10.5px/1.45 var(--mono)}
+.metrics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.metric{min-width:0;min-height:101px;background:rgba(255,255,255,.017);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.metric label{display:block;color:var(--muted);font:650 10px/1.35 var(--sans);text-transform:uppercase;letter-spacing:.075em}
+.metric b{display:block;font:650 clamp(20px,1.42vw,26px)/1.25 var(--mono);letter-spacing:-.045em;margin-top:11px;overflow-wrap:anywhere}
+.metric small{display:block;color:var(--muted);font:450 10px/1.4 var(--sans);margin-top:4px}
+.summary{border-color:rgba(233,187,122,.105)}
+.performance-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.performance-stat{min-width:0;min-height:77px;border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.014);padding:12px 10px}
+.performance-stat label{display:block;font:600 9px/1.4 var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.07em}
+.performance-stat b{display:block;font:650 clamp(13px,1.05vw,19px)/1.4 var(--mono);margin-top:8px;letter-spacing:-.04em;white-space:nowrap}
+.performance-stat small{display:block;margin-top:4px;color:var(--muted);font:450 9.5px/1.5 var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.strategy-scope{color:var(--muted);font:450 10px/1.4 var(--mono)}
+.chart-head{margin:18px 0 0;padding:13px 1px 2px;border-top:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}
+.chart-head h3{font:650 10px/1.4 var(--sans);text-transform:uppercase;letter-spacing:.085em;margin:0}
+#eq{width:100%;height:278px;max-width:100%;display:block;margin-top:5px}
+#eqLegend{font:500 10px/1.5 var(--mono);color:var(--muted);margin-top:3px}
+.seg button{font:600 10px/1.3 var(--sans);padding:5px 9px;color:var(--muted);border:1px solid var(--line);border-radius:7px;background:rgba(255,255,255,.025);cursor:pointer}
+.seg button.on{border-color:rgba(233,187,122,.21);color:var(--amber)}
+.positions .card-head{margin-bottom:7px}
 .table{width:100%;border-collapse:collapse;table-layout:auto}
-.table th{background:rgba(255,255,255,.015);font:650 10.5px/1.45 var(--sans);color:var(--muted);text-transform:uppercase;letter-spacing:.06em;text-align:left}
-.table td,.table th{padding:14px 9px;border-bottom:1px solid var(--line);vertical-align:middle}
-.table td{font:500 12.5px/1.5 var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
-.table td:first-child,.table th:first-child{padding-left:5px}
-.table td:last-child,.table th:last-child{padding-right:5px}
-.table tbody tr:last-child td{border-bottom:0}
-.table tbody tr:hover td{background:rgba(255,255,255,.018)}
-.table .value{font-weight:650}
-.table td small{display:block;color:var(--muted);font:450 10.5px/1.5 var(--mono);margin-top:4px}
-.position-table th:nth-child(1){min-width:99px}
-.position-table th:nth-child(5),.position-table th:nth-child(6){min-width:101px}
-.position-table td.pct{font-weight:650}
-.empty-positions{padding:7px 2px 2px;color:var(--muted);font:500 12px/1.6 var(--sans)}
+.table th{text-align:left;background:rgba(255,255,255,.01);font:650 9.5px/1.45 var(--sans);text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.table td,.table th{padding:11px 7px;border-bottom:1px solid var(--line);vertical-align:middle}
+.table td{font:500 11px/1.5 var(--mono);font-variant-numeric:tabular-nums;white-space:nowrap}
+.table td:first-child,.table th:first-child{padding-left:0}
+.table td:last-child,.table th:last-child{padding-right:0}
+.table tr:last-child td{border-bottom:0}
+.table tbody tr:hover td{background:rgba(255,255,255,.013)}
+.table td small{display:block;color:var(--muted);font:450 9.5px/1.45 var(--mono);margin-top:3px}
+.table td.value{font-weight:650}
+.position-table th:nth-child(1){min-width:75px}
+.position-table th:nth-child(5),.position-table th:nth-child(6){min-width:87px}
 #positionTable[hidden],#openEmpty[hidden]{display:none!important}
-#equityCard{border-color:rgba(231,188,132,.135)}
-#eq{display:block;width:100%;height:335px;max-width:100%;margin:7px 0 0}
-#eqLegend{font:500 11px/1.55 var(--mono);color:var(--muted);margin-top:13px}
-.seg button{border:1px solid var(--line);color:var(--muted);background:rgba(255,255,255,.03);font:600 10.5px/1.35 var(--sans);padding:6px 10px;border-radius:7px;cursor:pointer}
-.seg button.on{color:var(--amber);border-color:rgba(231,188,132,.24)}
-.history{border-color:rgba(231,188,132,.145);min-height:670px}
-.history-table{width:100%}
-.history-table th:nth-child(1){width:19%}
-.history-table th:nth-child(2){width:19%}
-.history-table th:nth-child(3){width:20%}
-.history-table th:nth-child(4){width:42%}
-.history-table td{padding:17px 11px;white-space:normal;overflow-wrap:anywhere}
+.empty-positions{font:450 11px/1.5 var(--sans);color:var(--muted);padding:4px 0 1px}
+.history{min-height:0;border-color:rgba(233,187,122,.10)}
+.history-table th:nth-child(1){width:18%}
+.history-table th:nth-child(2){width:17%}
+.history-table th:nth-child(3){width:22%}
+.history-table th:nth-child(4){width:43%}
+.history-table tbody td{height:74px;padding:14px 10px;white-space:normal;overflow-wrap:anywhere;vertical-align:middle}
 .history-table td.num{font-family:var(--mono)}
-.history-table td.result{font-weight:650;font-size:13px}
-.history-table td.reason{font:450 12.5px/1.6 var(--sans);color:#cfd5df}
+.history-table td.result{font-weight:650;font-size:12px}
 .history-table td.token{font-weight:650}
-.history-table td small{font-size:10px;color:var(--muted)}
-.history-empty{color:var(--muted);padding:24px 10px!important;font:500 12px var(--sans)!important}
-.footer{width:min(1980px,100%);margin:0 auto;padding:0 18px 28px;text-align:center;color:var(--muted);font:500 10.5px/1.6 var(--mono)}
-@media(max-width:1480px){
- .terminal{grid-template-columns:minmax(0,1fr);gap:16px}
- .column{gap:16px}
+.history-table td.reason{font:480 11px/1.5 var(--sans);color:#ccd2dc}
+.history-table td small{color:var(--muted);font-size:9.5px}
+.history-empty{font:450 11px var(--sans)!important;color:var(--muted);padding:18px 0!important}
+.history-footer{display:flex;justify-content:space-between;align-items:center;gap:12px;border-top:1px solid var(--line);margin-top:12px;padding:14px 0 0}
+.history-footer .muted{color:var(--muted);font:500 10px/1.45 var(--mono)}
+.history-button{display:inline-flex;align-items:center;justify-content:center;border:1px solid rgba(233,187,122,.18);border-radius:8px;padding:8px 12px;background:rgba(233,187,122,.055);color:#dfd4c5;font:650 11px/1.4 var(--sans);cursor:pointer}
+.history-button:hover{border-color:rgba(233,187,122,.36);background:rgba(233,187,122,.09)}
+.history-button:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+.history-button[hidden]{display:none}
+footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted);text-align:center;font:450 10px/1.4 var(--mono)}
+@media(max-width:1450px){
+ .terminal{grid-template-columns:1fr}
  .metrics-grid{grid-template-columns:repeat(4,minmax(0,1fr))}
- .metric{padding:18px 16px;min-height:135px}
- .metric b{font-size:26px}
- .history{min-height:340px}
+ .history-table tbody td{height:auto;min-height:70px}
 }
-@media(max-width:900px){
+@media(max-width:800px){
  .metrics-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
- .position-table td,.position-table th{font-size:11px;padding:10px 6px}
+ .performance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:650px){
- .topbar-inner{padding:13px 14px;align-items:flex-start;gap:12px;flex-wrap:wrap}
- .brand-name{font-size:18px}
+ .topbar-inner{padding:12px 13px;align-items:flex-start;flex-wrap:wrap;gap:10px}
+ .brand-name{font-size:16px}
  .health{text-align:left}
- .terminal{padding:14px 10px 25px;gap:12px}
- .column{gap:12px}
- .card{padding:16px 12px}
- .metric{min-height:119px;padding:15px 13px}
- .metric b{font-size:21px;margin-top:16px}
- .card-head{margin-bottom:12px}
- .table td,.table th{font-size:10px;padding:9px 3px}
+ .terminal{padding:11px 9px 24px;gap:10px}
+ .column{gap:10px}
+ .card{padding:13px 11px}
+ .metric{padding:12px;min-height:94px}
+ .metric b{font-size:19px}
+ .performance-stat b{font-size:16px}
+ #eq{height:215px}
+ .table td,.table th{font-size:9px;padding:9px 3px}
  .table td:first-child,.table th:first-child{padding-left:0}
  .table td:last-child,.table th:last-child{padding-right:0}
- .position-table th:nth-child(1),.position-table th:nth-child(5),.position-table th:nth-child(6){min-width:0}
- .position-table td small{font-size:9px}
  .position-table td{white-space:normal;overflow-wrap:anywhere}
+ .position-table th:nth-child(1),.position-table th:nth-child(5),.position-table th:nth-child(6){min-width:0}
  .history-table th:nth-child(1){width:20%}
- .history-table th:nth-child(2){width:17%}
+ .history-table th:nth-child(2){width:16%}
  .history-table th:nth-child(3){width:25%}
- .history-table th:nth-child(4){width:38%}
- .history-table td{font-size:10px;padding:11px 4px}
+ .history-table th:nth-child(4){width:39%}
+ .history-table tbody td{padding:12px 4px;height:auto}
  .history-table td.reason{font-size:10px}
- #eq{height:265px}
 }
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important}}
 
 </style>
 </head>
@@ -126,58 +129,62 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--amber)}
   <div class="topbar-inner">
     <div class="brand">
       <span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="3"/><path d="m8 14 3-3 2 2 3-4"/></svg></span>
-      <div>
-        <div class="brand-name">Grok Alpha <span class="paper-label">PAPER</span></div>
-        <div class="brand-sub">SOLANA / MINIMAL TRADING TERMINAL</div>
-      </div>
+      <div><div class="brand-name">Grok Alpha <span class="paper-label">PAPER</span></div>
+      <div class="brand-sub">SOLANA / PERFORMANCE TERMINAL</div></div>
     </div>
-    <div class="health num">
-      <div><i class="d" id="hDot"></i><span id="hTxt">connecting</span></div>
-      <div><span id="build">–</span> · <span id="clock">–</span></div>
-    </div>
+    <div class="health num"><div><i class="d" id="hDot"></i><span id="hTxt">connecting</span></div><div><span id="build">–</span> · <span id="clock">–</span></div></div>
   </div>
 </header>
-
 <main class="terminal">
-  <section class="column left-column" aria-label="Portfolio and open position P&L">
+  <section class="column" aria-label="Performance and positions">
     <div class="card metrics" id="metricsCard">
-      <div class="card-head"><h2>Paper Terminal</h2><small>Balances in SOL</small></div>
+      <div class="card-head"><h2>Paper Terminal</h2><small>SOL</small></div>
       <div class="metrics-grid">
         <div class="metric"><label>Cash</label><b id="kCash" class="num">–</b><small>Available</small></div>
-        <div class="metric"><label>Equity</label><b id="kEq" class="num">–</b><small>Marked to market</small></div>
+        <div class="metric"><label>Equity</label><b id="kEq" class="num">–</b><small>Marked</small></div>
         <div class="metric"><label>Open P&amp;L</label><b id="kOpen" class="num">–</b><small>Unrealized · SOL</small></div>
         <div class="metric"><label>Realized Today</label><b id="kToday" class="num">–</b><small>Closed P&amp;L · SOL</small></div>
       </div>
     </div>
+    <div class="card summary" id="summaryCard">
+      <div class="card-head"><h2>Live Strategy Summary</h2><span class="strategy-scope" id="summaryScope">Loading P&amp;L ledger…</span></div>
+      <div class="performance-grid">
+        <div class="performance-stat"><label>Win Rate</label><b id="sumWin" class="num">–</b><small id="sumWins">–</small></div>
+        <div class="performance-stat"><label>Total Trades</label><b id="sumTrades" class="num">–</b><small>Closed on this board</small></div>
+        <div class="performance-stat"><label>Best Trade</label><b id="sumBest" class="num">–</b><small id="sumBestToken">–</small></div>
+        <div class="performance-stat"><label>Worst Trade</label><b id="sumWorst" class="num">–</b><small id="sumWorstToken">–</small></div>
+      </div>
+      <div class="chart-head"><h3>Equity</h3><span class="seg" id="eqRange"><button type="button" data-r="scoreboard" class="on">This board</button></span></div>
+      <canvas id="eq"></canvas>
+      <div class="num" id="eqLegend">–</div>
+    </div>
     <div class="card positions" id="openCard">
       <div class="card-head"><h2>Open Positions</h2><small id="openNote">Current portfolio</small></div>
       <table class="table position-table" id="positionTable" hidden aria-label="Live paper positions">
-        <thead><tr><th>Token</th><th>Entry</th><th>Mark Price</th><th>Size</th><th>Unrealized SOL</th><th>Unrealized %</th></tr></thead>
+        <thead><tr><th>Token</th><th>Size</th><th>Entry</th><th>Mark</th><th>P&amp;L (SOL)</th><th>P&amp;L (%)</th></tr></thead>
         <tbody id="openPos"></tbody>
       </table>
       <div class="empty-positions" id="openEmpty">No open positions.</div>
     </div>
-    <div class="card" id="equityCard">
-      <div class="card-head"><h2>Equity</h2><span class="seg" id="eqRange"><button data-r="scoreboard" class="on" type="button">This board</button></span></div>
-      <canvas id="eq"></canvas>
-      <div id="eqLegend" class="num">–</div>
-    </div>
   </section>
-  <section class="column right-column" aria-label="Closed trade history">
+  <section class="column" aria-label="Recent closed trades">
     <div class="card history" id="historyCard">
-      <div class="card-head"><h2>Trade History</h2><small>Current scoreboard · London time</small></div>
+      <div class="card-head"><h2>Trade History</h2><small>Last 6 · London time</small></div>
       <table class="table history-table" aria-label="Closed trades">
         <thead><tr><th>Time</th><th>Token</th><th>Result (SOL)</th><th>Reason</th></tr></thead>
         <tbody id="fills"><tr><td colspan="4" class="history-empty">Loading closed trades…</td></tr></tbody>
       </table>
+      <div class="history-footer">
+        <span class="muted" id="historyCount">Latest 6 closes</span>
+        <button id="viewAllHistory" class="history-button" type="button" hidden aria-expanded="false">View All History</button>
+      </div>
     </div>
   </section>
 </main>
-<footer class="footer">Grok Alpha · Paper simulation only · Updates every 5 seconds</footer>
-
+<footer>Grok Alpha · Paper simulation only · Dashboard updates every 5 seconds</footer>
 <script>
 (function () {
-  var D = null, EQ = null, eqRange = 'scoreboard', lastOk = 0;
+  var D = null, EQ = null, LEDGER = null, eqRange = 'scoreboard', lastOk = 0, historyExpanded = false;
   function $(id) { return document.getElementById(id); }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function isNum(v) { return typeof v === 'number' && isFinite(v); }
@@ -209,26 +216,25 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--amber)}
       ' · '+(ex.errors||0)+' exit errors · '+ago(upd)+' · paper only';
   }
   function renderOpen() {
-    var rows=[], now=Date.now();
+    var rows=[];
     (D.positionsByStrategy||[]).forEach(function(g){
       (g.positions||[]).forEach(function(p){
         var token=p.dexUrl
           ? '<a href="'+esc(p.dexUrl)+'" target="_blank" rel="noopener noreferrer">'+esc(p.symbol||'—')+'</a>'
           : esc(p.symbol||'—');
+        var sz=isNum(p.sizeSol)?p.sizeSol.toFixed(4)+' SOL':'–';
         var entry=isNum(p.entryPrice)?px(p.entryPrice):'–';
         var mark=isNum(p.markPrice)?px(p.markPrice):'–';
-        var sz=isNum(p.sizeSol)?p.sizeSol.toFixed(4)+' SOL':'–';
-        var un=isNum(p.unrealizedSol)?sol(p.unrealizedSol,5)+' SOL':'–';
+        var un=isNum(p.unrealizedSol)?sol(p.unrealizedSol,5):'–';
         var performance=isNum(p.netPnlPct)?pct(p.netPnlPct):'–';
-        var entryTime=p.entryTime?tL(p.entryTime):'–';
-        rows.push({
-          timestamp:Date.parse(p.entryTime)||0,
+        var at=p.entryTime?tL(p.entryTime):'–';
+        rows.push({ timestamp:Date.parse(p.entryTime)||0,
           html:'<tr><td class="value">'+token+'</td>'+
-            '<td class="num">'+entry+'<small>'+esc(entryTime)+' London</small></td>'+
-            '<td class="num">'+mark+'</td>'+
             '<td class="num">'+sz+'</td>'+
+            '<td class="num">'+entry+'<small>'+esc(at)+' London</small></td>'+
+            '<td class="num">'+mark+'</td>'+
             '<td class="num value '+cl(p.unrealizedSol)+'">'+un+'</td>'+
-            '<td class="num pct '+cl(p.netPnlPct)+'">'+performance+'</td></tr>'
+            '<td class="num value '+cl(p.netPnlPct)+'">'+performance+'</td></tr>'
         });
       });
     });
@@ -236,22 +242,56 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--amber)}
     $('openPos').innerHTML=rows.map(function(r){return r.html;}).join('');
     $('positionTable').hidden=rows.length===0;
     $('openEmpty').hidden=rows.length>0;
-    $('openNote').textContent=rows.length?rows.length+' open · marked after paper costs':'No active positions';
+    $('openNote').textContent=rows.length?rows.length+' open · net of paper costs':'No active positions';
   }
   // Closes since the board start (runner-v2): runner-hunter plus any leftover closed after it.
   function focusSince() { return D.scoreboard && D.scoreboard.since ? Date.parse(D.scoreboard.since) : Date.parse('2026-11-22T06:52:57Z'); }
-  function renderFills() {
-    var rows=(D.recentTrades||[]).filter(function(t){
-      return Date.parse(t.closedAt)>=focusSince();
-    }).slice(0,60);
+  function currentTrades(){
+    // Existing read-only reconciliation endpoint returns the complete scoreboard ledger.
+    // Fall back to the dashboard's most recent 60 while the ledger loads.
+    var list=LEDGER&&Array.isArray(LEDGER.trades)?LEDGER.trades:(D?.recentTrades||[]);
+    return list.filter(function(t){
+      return t.closedAt&&Date.parse(t.closedAt)>=focusSince();
+    }).sort(function(a,b){
+      return Date.parse(b.closedAt)-Date.parse(a.closedAt);
+    });
+  }
+  function renderSummary(){
+    var trades=currentTrades(), total=trades.length;
+    var wins=trades.filter(function(t){return isNum(t.pnlSol)&&t.pnlSol>0;}).length;
+    var valid=trades.filter(function(t){return isNum(t.pnlSol);});
+    var best=valid.length?valid.reduce(function(a,b){return b.pnlSol>a.pnlSol?b:a;}):null;
+    var worst=valid.length?valid.reduce(function(a,b){return b.pnlSol<a.pnlSol?b:a;}):null;
+    $('sumWin').textContent=total?(100*wins/total).toFixed(1)+'%':'–';
+    $('sumWins').textContent=total?wins+' wins / '+total:'No closes yet';
+    $('sumTrades').textContent=String(total);
+    $('sumBest').textContent=best?sol(best.pnlSol,5):'–';
+    $('sumBest').className='num '+(best?cl(best.pnlSol):'');
+    $('sumWorst').textContent=worst?sol(worst.pnlSol,5):'–';
+    $('sumWorst').className='num '+(worst?cl(worst.pnlSol):'');
+    $('sumBestToken').textContent=best?(best.symbol||'Token'):'No closes';
+    $('sumWorstToken').textContent=worst?(worst.symbol||'Token'):'No closes';
+    $('summaryScope').textContent=LEDGER&&Array.isArray(LEDGER.trades)
+      ? 'Current scoreboard · reconciled'
+      : 'Recent sample · loading full ledger';
+  }
+  function renderFills(){
+    var all=currentTrades(),rows=historyExpanded?all:all.slice(0,6);
     $('fills').innerHTML=rows.map(function(t){
       return '<tr>'+
         '<td class="num">'+esc(tL(t.closedAt))+'<small>'+esc(t.closedAt?String(t.closedAt).slice(0,10):'')+'</small></td>'+
         '<td class="token">'+esc(t.symbol||'—')+'</td>'+
         '<td class="num result '+cl(t.pnlSol)+'">'+(isNum(t.pnlSol)?sol(t.pnlSol,5):'–')+'</td>'+
-        '<td class="reason">'+esc(t.exitReason||'—')+'</td>'+
-        '</tr>';
-    }).join('') || '<tr><td colspan="4" class="history-empty">No closed trades on this scoreboard yet.</td></tr>';
+        '<td class="reason">'+esc(t.exitReason||'—')+'</td></tr>';
+    }).join('')||'<tr><td colspan="4" class="history-empty">No closed trades on this scoreboard yet.</td></tr>';
+    var complete=!!(LEDGER&&Array.isArray(LEDGER.trades));
+    $('historyCount').textContent=complete
+      ? (historyExpanded?'Showing all '+all.length+' closes': 'Showing '+Math.min(6,all.length)+' of '+all.length+' closes')
+      : 'Recent closes · loading full ledger';
+    var btn=$('viewAllHistory');
+    btn.hidden=(!complete||all.length<=6);
+    btn.textContent=historyExpanded?'Show Recent 6':'View All History';
+    btn.setAttribute('aria-expanded',historyExpanded?'true':'false');
   }
   function renderEquity() {
     var c = $('eq'), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
@@ -281,9 +321,19 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--amber)}
   function refresh() {
     return get('/api/dashboard').then(function (d) {
       D = d; lastOk = Date.now();
-      [renderTop, renderOpen, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
+      [renderTop, renderOpen, renderSummary, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
       clock();
     }).catch(function (e) { console.error(e); $('hDot').className = 'd bad'; $('hTxt').textContent = 'API error, retrying'; });
+  }
+  function refreshLedger(){
+    return get('/api/pnl?trades=1').then(function(data){
+      if(!data||!Array.isArray(data.trades))throw new Error('Missing trade ledger');
+      LEDGER=data;
+      if(D){renderSummary();renderFills();}
+    }).catch(function(e){
+      console.warn('Full trade ledger unavailable; retaining recent dashboard trades',e);
+      if(D){renderSummary();renderFills();}
+    });
   }
   function refreshEq() {
     var q = eqRange === 'scoreboard' ? 'since=scoreboard' : 'hours=' + eqRange;
@@ -293,9 +343,14 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--amber)}
     b.onclick = function () { eqRange = b.getAttribute('data-r'); Array.prototype.forEach.call(document.querySelectorAll('#eqRange button'), function (o) { o.classList.toggle('on', o === b); }); refreshEq(); };
   });
   window.addEventListener('resize', renderEquity);
-  refresh(); refreshEq();
+  $('viewAllHistory').onclick=function(){
+    historyExpanded=!historyExpanded;
+    renderFills();
+  };
+  refresh(); refreshEq(); refreshLedger();
   setInterval(refresh, 5000);
   setInterval(refreshEq, 30000);
+  setInterval(refreshLedger, 30000);
   setInterval(clock, 1000);
 })();
 </script>
