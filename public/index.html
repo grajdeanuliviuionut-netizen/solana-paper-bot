@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<script>
+/* Presentation-only: iframe detection. This neither fetches data nor changes bot execution. */
+if (window.self !== window.top) document.documentElement.classList.add("zenith-iframe");
+</script>
 <title>Paper Terminal · Solana Paper Bot</title>
 <style>
 
@@ -144,6 +148,22 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
     background-attachment:fixed !important;
   }
 
+  /* Only embedded terminals expose the ZENITH parent's continuous starfield.
+     The standalone dashboard retains its original space backdrop. */
+  html.zenith-iframe,
+  html.zenith-iframe body {
+    background:transparent !important;
+    background-color:transparent !important;
+    background-image:none !important;
+    background-attachment:initial !important;
+  }
+  html.zenith-iframe {
+    color-scheme:dark;
+    scrollbar-width:thin;
+    scrollbar-color:rgba(123,185,223,.46) transparent;
+  }
+  html.zenith-iframe::-webkit-scrollbar {width:6px;height:6px}
+  html.zenith-iframe::-webkit-scrollbar-thumb {background:rgba(123,185,223,.45);border-radius:6px}
 </style>
 </head>
 <body>
