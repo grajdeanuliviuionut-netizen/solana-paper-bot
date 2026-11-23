@@ -248,6 +248,24 @@ footer{width:min(1900px,100%);margin:auto;padding:0 14px 20px;color:var(--muted)
   .card, .topbar {text-shadow:0 1px 2px rgba(0,0,0,.45)}
   /* t110u (Liviu): force every div/section/table clear - text floats on the parent's background. Keep last. */
   div, section, table { background-color: transparent !important; backdrop-filter: none !important; box-shadow: none !important; }
+  /* t111u (Liviu): pure HUD look - keep last. */
+* {
+  background-color: transparent !important;
+  background-image: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+
+/* Keep the text and numbers visible */
+body, div, span, p, h1, h2, h3, h4, h5, h6, td, th {
+  color: inherit;
+}
+
+/* Bring back only the faintest structural lines if needed, otherwise leave them dead */
+.border, [class*="border-"] {
+  border-color: rgba(255,255,255,0.05) !important;
+}
 </style>
 </head>
 <body>
