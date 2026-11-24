@@ -46,7 +46,8 @@ const booksLimiter = new Limiter({
     top10rpc: { minGapMs: 1200, maxRetries: 0, cooldownMs: 60000 }, // t86u runner v3 top-10 holders (getTokenSupply/LargestAccounts/MultipleAccounts)
     feerpc: { minGapMs: 2000, maxRetries: 0, cooldownMs: 60000 },    // t89u getRecentPrioritizationFees (read-only), cached 45 s
     gecko: { minGapMs: 2500, maxRetries: 0, cooldownMs: 600000 },     // t86u runner v3 m15 fallback: GeckoTerminal 1m OHLCV, no retries, 10 min pause on 429
-    rugcheck: { minGapMs: 3000, maxRetries: 0, cooldownMs: 600000 }   // grad sniper v2: free RugCheck report, no retries, 10 min pause on 429
+    rugcheck: { minGapMs: 3000, maxRetries: 0, cooldownMs: 600000 },  // grad sniper v2: free RugCheck report, no retries, 10 min pause on 429
+    geckosocial: { minGapMs: 2500, maxRetries: 0, cooldownMs: 600000 } // t117u social-spike: GeckoTerminal trending (1 call / 5 min), own bucket so a 429 never pauses the runner's MA lookups
   },
   baseBackoffMs: 1000, maxBackoffMs: 10000
 });
@@ -78,8 +79,25 @@ const execMod = require('./books/executor');
 const haltMod = require('./halt');
 const fees = execMod.makePriorityFee(booksLimiter, { cuLimit: 200000 });
 const sendPath = execMod.makeSendPath();
+// t117u Social Scanner (social-spike paper book): real X counts only with env SOCIAL_X_BEARER_TOKEN, else a labelled proxy.
+const SOCIAL_BOOK = (config.books.list || []).find(function (b) { return b.id === 'social-spike'; });
+const social = require('./books/social').makeSocial({
+  cfg: SOCIAL_BOOK ? Object.assign({ minLiquidityUsd: SOCIAL_BOOK.entry.minLiquidityUsd, refreshMs: SOCIAL_BOOK.entry.social.refreshMin * 60000 }, SOCIAL_BOOK.entry.social) : {},
+  gtGet: function (url) { return booksLimiter.get('geckosocial', url, { headers: { accept: 'application/json' } }); }
+});
+function socialEnabled() { return !!(SOCIAL_BOOK && !SOCIAL_BOOK.paused && (!Array.isArray(config.onlyStrategies) || config.onlyStrategies.indexOf('social-spike') >= 0)); }
+function socialView() { return Object.assign({ enabled: socialEnabled() }, social.snapshot()); }
+function socialHealth() {
+  try {
+    const v = socialView(); const b = SOCIAL_BOOK || {}; const e = b.entry || {}, x = b.exit || {};
+    return { enabled: v.enabled, name: b.name, version: b.version, mode: v.mode, realXData: v.realXData, xTokenConfigured: v.xTokenConfigured, envVar: v.envVar, dataSource: v.sourceLabel,
+      minLiquidityUsd: e.minLiquidityUsd, minSpikePct: e.social && e.social.minSpikePct, sellGate: e.sellGate || null,
+      stopLossPct: x.stopLossPct, takeProfitPct: x.takeProfitPct, partial: x.partial || null, trailPct: x.trailPct || null, maxHoldMinutes: x.maxHoldMinutes,
+      lastRefreshAt: v.stats.lastRefreshAt, spikes: v.top.map(function (c) { return { symbol: c.symbol, spikePct: c.spikePct, last1h: c.last1h, unit: c.unit, source: c.source, liquidityUsd: c.liquidityUsd }; }), recentSignals: v.signals.slice(0, 5) };
+  } catch (err) { return { error: String(err.message || err) }; }
+}
 const books = makeBooks({
-  config, quotes, mintAuth, reentry, holderCheck, top10, m15, fees, sendPath,
+  config, quotes, mintAuth, reentry, holderCheck, top10, m15, fees, sendPath, social,
   equityNow: function () { return markedEquityNow(); },   // t90u v5 sizing: 5% of marked total equity
   log: function (type, symbol, reason) {
     state.decisions.unshift(logDecision(type, symbol, reason));
@@ -468,10 +486,15 @@ async function tick() {
       if (newPoolsEnabled()) {
         try { await newPools.maybeFetch(); gradRows = await newPools.candidateRows(pairs); } catch (e) { addActivity('New-pools feed error: ' + e.message); }
       }
+      // t117u: Social Scanner refresh (every 5 min) + fresh DexScreener rows for top-3 spikes missing from this scan.
+      let socialRows = [];
+      if (socialEnabled() && !haltMod.isHalted(state)) {
+        try { await social.refresh(); socialRows = await social.rows(pairs); } catch (e) { addActivity('Social scanner error: ' + e.message); }
+      }
       await books.runEntries(state, pairs, async function (sig, row) {
         await poolPrice.prefetchMain([sig.mint]);
-        return poolGate(sig, row.priceUsd, pairs.concat(gradRows));
-      }, { 'graduation-sniper': gradRows }, function () { newPools.stats.candidatesPassed += 1; });
+        return poolGate(sig, row.priceUsd, pairs.concat(gradRows, socialRows));
+      }, { 'graduation-sniper': gradRows, 'social-spike': socialRows }, function (book) { if (book && book.id === 'graduation-sniper') newPools.stats.candidatesPassed += 1; });
     } catch (e) { addActivity('Books entry error: ' + e.message); console.error(e); }
     if (state.decisions.length > 100) state.decisions = state.decisions.slice(0, 100);
     // t79u: strategist evaluated legacy signals + book candidates this tick.
@@ -718,13 +741,13 @@ app.get('/api/manager', function (req, res) {
 });
 app.get('/api/books', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ build: BUILD, halt: haltView(), bossRules: (function () { try { return bossRulesView(); } catch (e) { return { error: String(e.message || e) }; } })(), scoreboard: state.scoreboard || null, books: booksPayload(), openPositions: books.ensure(state).open, pause: pauseView(), rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
+  res.json({ build: BUILD, halt: haltView(), bossRules: (function () { try { return bossRulesView(); } catch (e) { return { error: String(e.message || e) }; } })(), scoreboard: state.scoreboard || null, books: booksPayload(), social: socialView(), openPositions: books.ensure(state).open, pause: pauseView(), rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
 });
 
 app.get('/api/health', function (req, res) {
   res.set('Cache-Control', 'no-store');
   let hv = null; try { const v = haltView(); hv = { mode: v.mode, halted: v.halted, sizeCutActive: v.sizeCutActive, sizeMultiplier: v.sizeMultiplier, drawdownPct: v.drawdownPct, limitPct: v.limitPct, windowHours: v.windowHours, since: v.sizeCut.since, rule: v.rule }; } catch (e) { hv = { error: String(e.message || e) }; }
-  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, halt: hv, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null, exitLoop: exitLoopView(), stopFills: stopFillsView().summary, fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
+  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, halt: hv, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null, social: socialHealth(), exitLoop: exitLoopView(), stopFills: stopFillsView().summary, fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
 });
 
 function booksPayload() {

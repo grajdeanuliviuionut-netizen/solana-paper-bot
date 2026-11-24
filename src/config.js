@@ -20,7 +20,7 @@ module.exports = {
   // t85u (Liviu 22 Nov 09:30, explicit): truly one strategy. Only these ids may open (books AND legacy), on top
   // of the paused flags. Leftover positions of every other strategy are closed at a Jupiter sell quote before
   // the runner-v2 board starts (books.epochCloseout).
-  onlyStrategies: ['runner-hunter'],
+  onlyStrategies: ['runner-hunter', 'social-spike'],   // t117u (Liviu 24 Nov): + the social-spike paper book, runner-hunter unchanged
   // t86u (Liviu 22 Nov 12:12): the Manager reviews every 10 closed runner-hunter trades, applies ONE bounded
   // change (src/improver.js BOUNDS/RULES) as a new version, logs what and why, and reports every 30 trades.
   // Paper only: it never touches size, wallets, keys or LIVE_TRADING.
@@ -138,6 +138,25 @@ module.exports = {
           { version: 1, until: '2026-11-22', entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },
             exit: { stopLossPct: 12, partial: { atPct: 10, sellPct: 20 }, trailAfterPartial: true, trailPct: 15, maxHoldMinutes: 240 } }
         ]
+      },
+      {
+        // t117u + t121u (Liviu 24 Nov): Social Sentiment Engine. Buy a top-3 Solana memecoin whose activity jumped >= +50%
+        // (DexScreener primary: max(txns, USD volume) last 60 min vs the mean hour of the 5 h before, within DexScreener boosts
+        // + GeckoTerminal trending; X counts confirmation only with env SOCIAL_X_BEARER_TOKEN; src/books/social.js) when the
+        // pool liquidity is >= $100k AND a simulated ~$500 sell (Jupiter quotes: $500 -> SOL at the SOL/USD price, buy-quote
+        // that SOL, sell-quote the tokens back) loses < 1.5% (max of Jupiter sell price impact and the sell vs the DexScreener
+        // mid value). Pass -> BUY signal to the paper engine. Exits on the price move since entry (Jupiter sell quotes ~5 s):
+        // hard stop -10%; at +25% sell half, the other half trails 10% below its peak, +50% takes the rest; 240 min cap.
+        // Kept from runner-hunter: rug gates + top-10 <= 15%, 150 bps entry slippage abort, 24 h no re-buy after a stop,
+        // 2 losses -> 30 min pause, no entries 02:00-06:00 UTC, the 24 h drawdown auto size cut (src/halt.js), 5% sizing,
+        // max 2 open (books.maxOpenPerBook), 2% paper slip per fill. Off with env SOCIAL_SPIKE_ENABLED=0.
+        id: 'social-spike', name: 'Social Sentiment', version: 1, paused: /^(0|false|off|no)$/i.test(String(process.env.SOCIAL_SPIKE_ENABLED || '').trim()),
+        entry: { minLiquidityUsd: 100000, social: { minSpikePct: 50, topN: 3, baselineHours: 5, windowMin: 60, minMentions1h: 20, minTxns1h: 300, refreshMin: 5, maxAgeMin: 12 },
+          sellGate: { usd: 500, maxSlipPct: 1.5 },
+          maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
+          stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
+        exit: { stopLossPct: 10, partial: { atPct: 25, sellPct: 50 }, trailAfterPartial: true, trailPct: 10, takeProfitPct: 50, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
+          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } }
       },
       {
         id: 'volume-explosion', name: 'Volume explosion', version: 1, paused: true,   // t83u

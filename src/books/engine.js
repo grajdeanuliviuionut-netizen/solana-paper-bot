@@ -22,7 +22,7 @@ const MIN = 60000;
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const label = b => b.id + ' v' + b.version;
 // v3+ runner books (filter counters, top-10 gate): the v3-v5 liquidity band or the v6 trend rule.
-const v3plus = e => !!(e && (e.maxLiquidityUsd != null || e.trend));
+const v3plus = e => !!(e && (e.maxLiquidityUsd != null || e.trend || e.social));   // t117u: + social-spike (rug/top-10 gates, filter counters)
 
 // ---------- entry rules (pure) ----------
 function isPumpOrigin(row) {
@@ -76,6 +76,14 @@ function trendFail(tr, price, s) {
 // Returns null (passes) or the first failed rule as a short reason.
 function entryFails(book, row, ctx) {
   const e = book.entry, now = ctx.now, pc = row.priceChange || {};
+  if (book.id === 'social-spike') {
+    // t117u/t121u: a fresh top-3 activity spike (>= +50%, src/books/social.js) and pool liquidity >= $100k (DexScreener).
+    if (!(num(row.liquidityUsd) >= e.minLiquidityUsd)) return 'liquidity: < ' + e.minLiquidityUsd;
+    const s = row.social || (ctx.socialOf ? ctx.socialOf(row.mint) : null);
+    if (!s) return 'noSocialSpike: not in the fresh top ' + ((e.social && e.social.topN) || 3);
+    if (!(s.spikePct >= e.social.minSpikePct)) return 'socialSpike: < +' + e.social.minSpikePct + '%';
+    return null;
+  }
   if (book.id === 'runner-hunter' && e.trend) {
     // t93u v6 Trend Following: liquidity > $50k and price above its 50-period (1 min) SMA. The SMA comes from the
     // bot's own history here when it covers >= 50 min; otherwise from GeckoTerminal candles in runEntries (fail closed).
@@ -162,6 +170,12 @@ function signalFields(book, row, ctx) {
     const s = m15Mod.smaFromTicks(ctx.ticks && ctx.ticks[row.pairAddress], ctx.now, book.entry.trend);
     Object.assign(f, { priceUsd: row.priceUsd, ma: s ? s.ma : null, maPrev: s ? s.maPrev : null, maSlopePct: s ? s.maSlopePct : null, maPeriod: book.entry.trend.maPeriod, maSource: s ? s.source : null, maDistPct: s ? +((num(row.priceUsd) / s.ma - 1) * 100).toFixed(3) : null });
   }
+  if (book.id === 'social-spike') {
+    const s = row.social || (ctx.socialOf ? ctx.socialOf(row.mint) : null);
+    if (s) Object.assign(f, { priceUsd: row.priceUsd, socialSource: s.source, socialSourceLabel: s.sourceLabel, socialRealX: s.source === 'dexscreener+x', socialLast1h: s.last1h, socialBaselinePerHour: s.baselinePerHour, socialSpikePct: s.spikePct, socialUnit: s.unit,
+      txnSpikePct: s.txnSpikePct == null ? null : s.txnSpikePct, volumeSpikePct: s.volumeSpikePct == null ? null : s.volumeSpikePct, xSpikePct: s.xSpikePct == null ? null : s.xSpikePct, xLast1h: s.xLast1h == null ? null : s.xLast1h,
+      socialRank: s.rank, socialAt: new Date(s.at).toISOString(), gtTrendingRank: s.gtRank || null, dsBoost: s.boost || null });
+  }
   if (book.id === 'volume-explosion') Object.assign(f, { volumeM5: row.volumeM5, m5VolumeVsHourAvg: +num(m5VolumeVsHourAvg(row)).toFixed(2) });
   if (book.id === 'trending-pullback') Object.assign(f, { volumeH6: row.volumeH6, high24Est: high24Estimate(row, ctx.snaps && ctx.snaps[row.mint], ctx.now), dropFromHighPct: +num(dropFromHighPct(row, ctx.snaps && ctx.snaps[row.mint], ctx.now)).toFixed(2) });
   return f;
@@ -221,7 +235,7 @@ function bookStats(trades, open, target) {
 }
 
 // ---------- runtime ----------
-function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15, fees, sendPath, random, equityNow }) {
+function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15, fees, sendPath, random, equityNow, social }) {
   const send = sendPath || execMod.makeSendPath();
   const feeNow = (t, acct) => (fees ? fees.current(t, acct) : { microLamports: 0, sol: 0, fallback: true, lamports: 0 });
   const sleepFn = sleep || (ms => new Promise(r => setTimeout(r, ms)));
@@ -379,7 +393,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   // go to the graduation sniper only). onExtraPass(book, row) is called for each extra row that passes.
   function signals(state, pairs, extraByBook, onExtraPass) {
     const b = ensure(state), t = nowFn(), out = [];
-    const ctx = { now: t, snaps: b.snaps, ticks: b.ticks };
+    const ctx = { now: t, snaps: b.snaps, ticks: b.ticks, socialOf: social && social.spikeFor ? social.spikeFor : null };   // t117u
     for (const book of C.list) {
       if (book.paused || !allowed(book.id)) continue;   // t83u/t85u: paused or not allowed -> no new entries (open positions still exit)
       // t90u Boss Rules: Night Hours Skip (02:00-06:00 UTC): no scanning or new entries for this book.
@@ -397,7 +411,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const seen = new Set((pairs || []).map(r => r && r.mint));
       const extraOnly = extra.filter(r => r && !seen.has(r.mint));
       for (const r of extra) if (r && !entryFails(book, r, ctx) && onExtraPass) onExtraPass(book, r);
-      const v3 = book.entry && (book.entry.maxLiquidityUsd != null || !!book.entry.trend);
+      const v3 = v3plus(book.entry);
       if (v3) filterStats(state, book).lastScan = { at: new Date(t).toISOString(), rows: (pairs || []).length, passedRules: 0, byFilter: {} };
       for (const row of (pairs || []).concat(extraOnly)) {
         if (!row || !row.mint) continue;
@@ -543,6 +557,19 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           if (curV2) Object.assign(curV2, { lpLockedPct: hc.lpLockedPct == null ? null : hc.lpLockedPct, top10Pct: hc.top10Pct == null ? null : hc.top10Pct, maxHolderPct: hc.maxHolderPct == null ? null : hc.maxHolderPct, creatorPct: hc.creatorPct == null ? null : hc.creatorPct, holderCheckSource: hc.source || null });
           if (!hc.pass) { reject(state, book, row, hc.reason, { holderCheck: holder }); continue; }
         }
+        // t121u Social Sentiment: simulated ~$500 sell on Jupiter quotes before any entry (fail closed). $500 -> SOL at the
+        // SOL/USD price (Jupiter price API, else DexScreener priceUsd / priceNative), buy-quote that SOL, sell-quote the
+        // tokens back. slipPct = max(Jupiter sell price impact, sell proceeds vs the DexScreener mid value of those tokens).
+        if (E.sellGate) {
+          const sg = await sellGateCheck(row, E.sellGate, rug.decimals);
+          fields.sellGate = sg;
+          if (!sg.pass) { countFilter(state, book, 'sellGate'); reject(state, book, row, 'sellGate: ' + sg.reason, { sellGate: sg }); continue; }
+          const signal = { at: new Date(nowFn()).toISOString(), action: 'BUY', strategyId: book.id, symbol: row.symbol, mint: row.mint, pairAddress: row.pairAddress, liquidityUsd: row.liquidityUsd,
+            spikePct: fields.socialSpikePct, source: fields.socialSource, sellGate: { usd: sg.usd, slipPct: sg.slipPct, maxSlipPct: sg.maxSlipPct } };
+          fields.signal = signal;
+          if (social && social.recordSignal) social.recordSignal(signal);
+          if (log) log('SIGNAL', row.symbol, 'BUY ' + label(book) + ': spike +' + fields.socialSpikePct + '% (' + fields.socialSource + '), liquidity $' + Math.round(num(row.liquidityUsd)) + ', $' + sg.usd + ' sell sim ' + sg.slipPct + '% < ' + sg.maxSlipPct + '%');
+        }
         const buy = await quotes.buyQuote(row.mint, size);
         if (!buy.ok) { reject(state, book, row, buy.noRoute ? 'no buy route' : 'buy quote failed', { error: buy.error }); continue; }
         const sell = await quotes.sellQuote(row.mint, buy.outAmount);
@@ -598,6 +625,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           if (RC) pos.rugCheckV4 = { pass: true, liquidityUsd: row.liquidityUsd, mintRevoked: true, freezeRevoked: true, top10Pct: fields.top10Pct == null ? null : fields.top10Pct, limits: RC };
         }
         if (sizing) pos.sizing = sizing;
+        if (fields.sellGate) { pos.sellGate = fields.sellGate; pos.signal = fields.signal || null; }   // t121u Social Sentiment: $500 sell sim + BUY signal on the trade
         if (TR) pos.trend = { ma: fields.ma, maPrev: fields.maPrev == null ? null : fields.maPrev, maSlope: fields.maSlopePct == null ? null : fields.maSlopePct, maSlopeUnit: '% change of SMA' + TR.maPeriod + ' vs ' + (TR.risingLookbackCandles || 5) + ' candles earlier', minAbovePct: TR.minAbovePct || 0, requireMaRising: !!TR.requireMaRising, maPeriod: TR.maPeriod, maSource: fields.maSource, priceUsd: num(row.priceUsd), maDistPct: fields.maDistPct, candleSec: 60 };
         // t93u v6: SL/TP measured on the price move since entry: the Jupiter sell-quote value of the held tokens
         // vs their value at the entry sell check (after the simulated buy slip); slippage is a cost on top.
@@ -619,6 +647,34 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (log) log('ENTRY', row.symbol, label(book) + ' size ' + size + ' SOL, Jupiter fill, impact ' + buy.priceImpactPct + '%, round trip ' + roundTripPct.toFixed(2) + '%');
       }
     });
+  }
+
+  // t121u: ~$500 sell simulation (Jupiter quote API only, never a swap). Returns { pass, reason, ... } (fail closed).
+  async function sellGateCheck(row, G, decimals) {
+    const out = { usd: G.usd, maxSlipPct: G.maxSlipPct, pass: false };
+    let solUsd = null, solUsdSource = null;
+    try { const p = quotes.getSolUsd ? await quotes.getSolUsd() : null; if (p && p.v > 0) { solUsd = p.v; solUsdSource = 'jupiter-price'; } } catch (e) { /* fallback below */ }
+    if (!(solUsd > 0) && num(row.priceUsd) > 0 && num(row.priceNative) > 0) { solUsd = num(row.priceUsd) / num(row.priceNative); solUsdSource = 'dexscreener priceUsd/priceNative'; }
+    if (!(solUsd > 0)) return Object.assign(out, { reason: 'no SOL/USD price' });
+    if (!(num(row.priceNative) > 0)) return Object.assign(out, { reason: 'no DexScreener SOL price for the token' });
+    if (!Number.isInteger(decimals)) return Object.assign(out, { reason: 'token decimals unknown' });
+    const sol = +(G.usd / solUsd).toFixed(6);
+    Object.assign(out, { solUsd: +solUsd.toFixed(4), solUsdSource, solAmount: sol });
+    const bq = await quotes.buyQuote(row.mint, sol);
+    if (!bq || !bq.ok) return Object.assign(out, { reason: 'buy quote for the $' + G.usd + ' probe failed (' + ((bq && bq.error) || 'no route') + ')' });
+    const sq = await quotes.sellQuote(row.mint, bq.outAmount);
+    if (!sq || !sq.ok) return Object.assign(out, { reason: 'sell quote for the $' + G.usd + ' probe failed (' + ((sq && sq.error) || 'no route') + ')' });
+    const tokensUi = Number(bq.outAmount) / 10 ** decimals;
+    const midSol = tokensUi * num(row.priceNative);
+    const solBack = Number(sq.outAmount) / 1e9;
+    const vsMidPct = midSol > 0 ? (1 - solBack / midSol) * 100 : null;
+    const impact = Number(sq.priceImpactPct);
+    const slip = Math.max(Number.isFinite(impact) ? impact : 0, vsMidPct == null ? Infinity : vsMidPct);
+    Object.assign(out, { tokensRaw: String(bq.outAmount), sellOutSol: +solBack.toFixed(6), midValueSol: +midSol.toFixed(6), sellPriceImpactPct: Number.isFinite(impact) ? impact : null,
+      sellVsMidPct: vsMidPct == null ? null : +vsMidPct.toFixed(3), roundTripPct: +((solBack / sol - 1) * 100).toFixed(3), slipPct: Number.isFinite(slip) ? +slip.toFixed(3) : null, at: new Date(sq.at || nowFn()).toISOString() });
+    if (!(slip < G.maxSlipPct)) return Object.assign(out, { reason: '$' + G.usd + ' sell slippage ' + (Number.isFinite(slip) ? slip.toFixed(2) : '?') + '% >= ' + G.maxSlipPct + '%' });
+    out.pass = true; out.reason = 'ok';
+    return out;
   }
 
   function closeTrade(state, pos, reason, t) {
