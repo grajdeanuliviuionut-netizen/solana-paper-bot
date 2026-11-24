@@ -202,6 +202,8 @@ try { startEpoch(); } catch (e) { console.error('Scoreboard reset failed', e.mes
 if (state.scoreboard) state.scoreboard.build = BUILD || state.scoreboard.build;
 
 const app = express();
+const hydra = require('./hydra');
+app.use('/api', hydra.cors);   // t124u: CORS for HYDRA (any origin, GET/POST/OPTIONS, preflight 204)
 
 function addActivity(msg) {
   state.activity.unshift({ time: new Date().toISOString(), msg });
@@ -239,6 +241,7 @@ function skipSummary(rejections) {
 }
 
 function canOpen() {
+  if (hydra.isPaused(state)) { state.blockReason = 'PAUSED by API (POST /api/resume to resume)'; return false; }
   if (haltMod.isHalted(state)) { state.blockReason = 'HALTED: ' + (state.halt.reason || 'equity drawdown'); return false; }
   if (equity() < config.fullStopBalance) { state.blockReason = 'equity under 2.5'; return false; }
   if ((state.openPositions || []).length >= config.maxOpen) { state.blockReason = 'slots full'; return false; }
@@ -483,12 +486,13 @@ async function tick() {
       // DexScreener rows for graduated pump.fun pools < 15 min old -> graduation sniper candidates only.
       let gradRows = [];
       // t83u: the new_pools feed (+ its DexScreener enrichment) only serves the graduation sniper -> off while it is paused.
-      if (newPoolsEnabled()) {
+      const apiPaused = hydra.isPaused(state);   // t124u: operator pause -> no entry feeds are fetched
+      if (newPoolsEnabled() && !apiPaused) {
         try { await newPools.maybeFetch(); gradRows = await newPools.candidateRows(pairs); } catch (e) { addActivity('New-pools feed error: ' + e.message); }
       }
       // t117u: Social Scanner refresh (every 5 min) + fresh DexScreener rows for top-3 spikes missing from this scan.
       let socialRows = [];
-      if (socialEnabled() && !haltMod.isHalted(state)) {
+      if (socialEnabled() && !haltMod.isHalted(state) && !apiPaused) {
         try { await social.refresh(); socialRows = await social.rows(pairs); } catch (e) { addActivity('Social scanner error: ' + e.message); }
       }
       await books.runEntries(state, pairs, async function (sig, row) {
@@ -744,10 +748,41 @@ app.get('/api/books', function (req, res) {
   res.json({ build: BUILD, halt: haltView(), bossRules: (function () { try { return bossRulesView(); } catch (e) { return { error: String(e.message || e) }; } })(), scoreboard: state.scoreboard || null, books: booksPayload(), social: socialView(), openPositions: books.ensure(state).open, pause: pauseView(), rejects: books.ensure(state).rejects, sameMint: books.ensure(state).sameMint || { blocked: 0, byStrategy: {} }, stockBlocks: books.ensure(state).stockBlocks, stockClosures: state.stockClosures || [], jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats), exitLoop: exitLoopView(), stopFills: stopFillsView(), gradSniperV2: books.gradView(state), rugcheck: Object.assign({}, holderCheck.stats), trades: books.ensure(state).trades });
 });
 
+// t124u HYDRA orchestration: operator pause/resume (persisted, optional x-hydra-token) and a compact status.
+function hydraPause(paused, req, res) {
+  res.set('Cache-Control', 'no-store');
+  const ok = hydra.tokenOk(req.get('x-hydra-token'), process.env);
+  if (ok === false) return res.status(401).json({ ok: false, error: 'bad or missing x-hydra-token' });
+  const p = hydra.setPaused(state, paused, 'api', Date.now(), { ip: req.ip });
+  if (p.changed) {
+    const msg = paused ? 'PAUSED by API (HYDRA): no new entries in any book; open positions keep exiting' : 'RESUMED by API (HYDRA): new entries allowed again';
+    addActivity(msg); state.decisions.unshift(logDecision(paused ? 'API-PAUSE' : 'API-RESUME', '-', msg));
+  }
+  saveState(state);
+  res.json({ ok: true, paused: p.paused, at: p.at, by: p.by });
+}
+const hydraJson = express.json({ limit: '10kb', strict: false });
+app.post('/api/halt', hydraJson, function (req, res) {
+  const b = req.body || {};
+  const q = req.query && req.query.paused;
+  const off = b.paused === false || b.paused === 'false' || q === 'false' || q === '0';
+  hydraPause(!off, req, res);
+});
+app.post('/api/resume', hydraJson, function (req, res) { hydraPause(false, req, res); });
+app.get('/api/status', function (req, res) {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const c = config.costRoundtripPct || 1.1;
+    const open = (state.openPositions || []).concat(books.ensure(state).open);
+    let un = 0; for (const p of open) { const u = pnlMod.unrealisedOf(p, c); if (u != null) un += u; }
+    res.json({ status: 'online', equity: +Number(markedEquityNow()).toFixed(6), open_pnl: +un.toFixed(6), open_positions: hydra.statusPositions(open), paused: hydra.isPaused(state), build: BUILD, liveTrading: false });
+  } catch (e) { console.error('status view', e); res.status(500).json({ status: 'error', error: String(e.message || e) }); }
+});
+
 app.get('/api/health', function (req, res) {
   res.set('Cache-Control', 'no-store');
   let hv = null; try { const v = haltView(); hv = { mode: v.mode, halted: v.halted, sizeCutActive: v.sizeCutActive, sizeMultiplier: v.sizeMultiplier, drawdownPct: v.drawdownPct, limitPct: v.limitPct, windowHours: v.windowHours, since: v.sizeCut.since, rule: v.rule }; } catch (e) { hv = { error: String(e.message || e) }; }
-  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, halt: hv, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null, social: socialHealth(), exitLoop: exitLoopView(), stopFills: stopFillsView().summary, fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
+  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, halt: hv, paused: hydra.isPaused(state), apiPause: hydra.view(state), scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null, social: socialHealth(), exitLoop: exitLoopView(), stopFills: stopFillsView().summary, fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
 });
 
 function booksPayload() {

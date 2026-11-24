@@ -437,6 +437,8 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     return locked(async () => {
       const b = ensure(state);
       recordSnaps(state, pairs);
+      // t124u: HYDRA operator pause (POST /api/halt): no new entries in any book; exits run separately (runExits).
+      if (state.apiPause && state.apiPause.paused) { b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: {}, note: 'PAUSED by API (' + (state.apiPause.by || 'api') + ' at ' + state.apiPause.at + '): no new entries; open positions keep exiting. POST /api/resume to resume' }; return; }
       if (state.halt && state.halt.halted) { b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: {}, note: 'HALTED (' + (state.halt.reason || 'equity drawdown') + '): no new trading until a manual restart' }; return; }
       if (state.epochSwitch && state.epochSwitch.pending) { b.lastScan = { at: new Date(nowFn()).toISOString(), pairs: (pairs || []).length, candidatesByBook: {}, note: 'epoch switch pending: leftovers closing, no entries' }; return; }
       const sigs = signals(state, pairs, extraByBook, onExtraPass);
