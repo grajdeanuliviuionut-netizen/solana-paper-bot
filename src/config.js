@@ -94,13 +94,20 @@ module.exports = {
         // at +8% sell half (1:2 risk/reward), the other half runs with a 4% trailing stop from its peak and a floor at the
         // entry price (exit 'breakeven'); 240 min safety cap. Fresh Jupiter quotes every ~5 s via the exit slippage ladder.
         // v6.01 kept below (it had: price >= 1% above a rising MA50, full exit at +8%).
-        id: 'runner-hunter', name: 'Trend Following', version: 6.02,
-        entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 1, requireMaRising: true, risingLookbackCandles: 5, maCacheSec: 120 },
+        // t115u (Liviu 24 Nov): v6.03 = v6.02 with the stop trigger pulled in to -2.5% move (stop fills overshot ~1-2 pts,
+        // so realised moves land near -4%), entry liquidity floor $100k (thin pools gapped worst), half still at +8%.
+        id: 'runner-hunter', name: 'Trend Following', version: 6.03,
+        entry: { minLiquidityUsd: 100000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 1, requireMaRising: true, risingLookbackCandles: 5, maCacheSec: 120 },
+          maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
+          stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
+        exit: { stopLossPct: 2.5, partial: { atPct: 8, sellPct: 50 }, trailAfterPartial: true, trailPct: 4, breakevenAfterPartial: true, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
+          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } },
+        previousVersions: [
+          { version: 6.02, until: '2026-11-24T16:45', name: 'Trend Following', entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 1, requireMaRising: true, risingLookbackCandles: 5, maCacheSec: 120 },
           maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
           stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
         exit: { stopLossPct: 4, partial: { atPct: 8, sellPct: 50 }, trailAfterPartial: true, trailPct: 4, breakevenAfterPartial: true, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
-          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } },
-        previousVersions: [
+          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } } },
           { version: 6.01, until: '2026-11-22T20:49', name: 'Trend Following', entry: { minLiquidityUsd: 50000, trend: { maPeriod: 50, candleSec: 60, maxCandleAgeSec: 180, minAbovePct: 1, requireMaRising: true, risingLookbackCandles: 5, maCacheSec: 120 },
           maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
           stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
