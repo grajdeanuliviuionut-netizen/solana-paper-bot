@@ -6,3 +6,6 @@ const rh = config.books.list.find(b => b.id === 'runner-hunter');
 const v3 = rh && (rh.previousVersions || []).find(v => v.version === 3);
 if (v3) { rh.version = 3; rh.entry = v3.entry; rh.exit = v3.exit; rh.previousVersions = rh.previousVersions.filter(v => v.version < 3); }
 config.books.epoch = 'runner-v3';
+// t117u: this suite pins an older runner-hunter board, from before the social-spike book (covered by test/social.js).
+config.books.list = config.books.list.filter(b => b.id !== 'social-spike');
+if (Array.isArray(config.onlyStrategies)) config.onlyStrategies = config.onlyStrategies.filter(id => id !== 'social-spike');

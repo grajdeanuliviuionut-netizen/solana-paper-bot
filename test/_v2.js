@@ -8,3 +8,6 @@ const v2 = rh && (rh.previousVersions || []).find(v => v.version === 2);
 if (v2) { rh.version = 2; rh.entry = v2.entry; rh.exit = v2.exit; rh.previousVersions = rh.previousVersions.filter(v => v.version < 2); }
 config.books.epoch = 'runner-v2';
 config.manager = Object.assign({}, config.manager, { enabled: false });
+// t117u: this suite pins an older runner-hunter board, from before the social-spike book (covered by test/social.js).
+config.books.list = config.books.list.filter(b => b.id !== 'social-spike');
+if (Array.isArray(config.onlyStrategies)) config.onlyStrategies = config.onlyStrategies.filter(id => id !== 'social-spike');
