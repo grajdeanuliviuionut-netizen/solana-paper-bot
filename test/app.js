@@ -284,7 +284,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     assert.strictEqual(dj2.positionsByStrategy.length, pz.groups.length);
     const page = await get('/');
     assert.ok(!/night shift/i.test(page.body), 'no Night Shift branding (t90u: "Night hours" is the Boss Rules night skip)');
-    assert.ok(/id="hero"/.test(page.body) && /renderHero/.test(page.body) && /id="openPos"/.test(page.body) && /renderOpen/.test(page.body) && !/paused strateg/i.test(page.body) && !/renderPaused|id="paused"/.test(page.body) && /setInterval\(refresh, 5000\)/.test(page.body), 'Paper Terminal: runner-hunter hero + live open positions, no paused-strategy panel (t84u)');
+    assert.ok(/id="openPos"/.test(page.body) && /renderOpen/.test(page.body) && !/paused strateg/i.test(page.body) && !/renderPaused|id="paused"/.test(page.body) && /setInterval\(refresh, 5000\)/.test(page.body), 'dashboard: live open positions, no paused-strategy panel (t84u; hero removed by the Grok Alpha redesign)');
     assert.ok(/Dip and hold/.test(d.body), 'strategy name on close rows (classic dashboard)');
     // Paper Terminal dashboard: static page at '/', assets, equity history and the aggregate endpoint
     const home = await get('/');
@@ -316,7 +316,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     assert.ok(bj.strategies.length >= 9 && bj.strategies.find(x => x.id === 'aggressive-flow').status === 'PAUSED');
     assert.ok(bj.strategies.every(x => ['RUNNING', 'WATCHING', 'PAUSED', 'EMPTY'].includes(x.status) && 'trades' in x && 'netSol' in x && 'maxOpen' in x));
     assert.strictEqual(dj.bots.agents.length, 6);
-    assert.ok(/id="nucleus"/.test(home.body) && /renderNucleus/.test(home.body), 'agents nucleus on the page (t83u)');
+    // t83u agents nucleus was removed from '/' by the Grok Alpha redesign; the agents stay in /api/bots (checked above).
   } finally { server.close(); }
 });
 
