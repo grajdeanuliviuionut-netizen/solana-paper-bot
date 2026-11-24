@@ -528,7 +528,8 @@ function sendZenithBalance(payload){
     amount:payload.amount,
     currency:payload.currency,
     mode:payload.mode,
-    sampledAt:Date.now()
+    sampledAt:Date.now(),
+    pnl:Number.isFinite(payload.pnl)?payload.pnl:null
   },ZENITH_PARENT_ORIGIN);
 }
 
@@ -537,7 +538,10 @@ function sendZenithBalance(payload){
       D = d; lastOk = Date.now();
       [renderTop, renderOpen, renderSummary, renderFills].forEach(function (f) { try { f(); } catch (e) { console.error(e); } });
       var marked = (d.pnl && isNum(d.pnl.markedEquity)) ? d.pnl.markedEquity : (d.account && d.account.markEquity);
-      sendZenithBalance({bot:"grok",amount:marked,currency:"SOL",mode:"PAPER"});
+      // Paper account: realised today plus open unrealised, read-only.
+      var gains=[d.account?.realizedTodaySol,d.account?.unrealizedSol].filter(isNum);
+      sendZenithBalance({bot:"grok",amount:marked,currency:"SOL",mode:"PAPER",
+        pnl:gains.length?gains.reduce(function(sum,v){return sum+v;},0):null});
       clock();
     }).catch(function (e) { console.error(e); $('hDot').className = 'd bad'; $('hTxt').textContent = 'API error, retrying'; });
   }
