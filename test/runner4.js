@@ -166,26 +166,27 @@ test('guardrail: 3 losses in a row -> no scanning or entries for 1 h, exits keep
   assert.ok(await h.enter(row({ mint: 'N2', pairAddress: 'NP2', fetchedAt: h.now() - 5000 })), 'resumes');
 });
 
-test('halt: -5% within a rolling 24 h (any epoch) halts, persists, never auto-clears; manual clear restarts the window', async () => {
+test('halt (legacy mode \'halt\', t89u; live mode is size-cut since t118u): -5% within a rolling 24 h halts, persists, never auto-clears; manual clear restarts the window', async () => {
+  const HC = Object.assign({}, config.halt, { mode: 'halt' });
   const pts = [{ t: new Date(NOW - 30 * 3600000).toISOString(), markEquity: 4 }, { t: new Date(NOW - 20 * 3600000).toISOString(), markEquity: 3.0, epoch: 'old' },
     { t: new Date(NOW - 60000).toISOString(), markEquity: 2.86, epoch: 'new' }];
   const st = {};
   const d = H.drawdown(pts, NOW, { windowHours: 24 });
   assert.strictEqual(d.peak, 3); near(d.dropPct, 4.667, '', 1e-3);
-  assert.strictEqual(H.check(st, pts, NOW, config.halt).triggered, false);
+  assert.strictEqual(H.check(st, pts, NOW, HC).triggered, false);
   pts.push({ t: new Date(NOW).toISOString(), markEquity: 2.84 });
-  assert.strictEqual(H.check(st, pts, NOW, config.halt).triggered, true);
+  assert.strictEqual(H.check(st, pts, NOW, HC).triggered, true);
   assert.ok(H.isHalted(st) && /5\.33/.test(st.halt.reason) && st.halt.id);
   pts.push({ t: new Date(NOW + 60000).toISOString(), markEquity: 3.5 });
-  H.check(st, pts, NOW + 60000, config.halt); assert.ok(H.isHalted(st), 'recovery does not clear');
+  H.check(st, pts, NOW + 60000, HC); assert.ok(H.isHalted(st), 'recovery does not clear');
   const h = harness(); h.state.halt = st.halt;
   assert.strictEqual(await h.enter(), undefined); assert.match(h.state.books.lastScan.note, /HALTED/);
   assert.strictEqual(H.tokenOk('x', {}), null); assert.strictEqual(H.tokenOk('wrong-token-123456', { KILL_TOKEN: 'k'.repeat(20) }), false);
   assert.strictEqual(H.tokenOk('k'.repeat(20), { KILL_TOKEN: 'k'.repeat(20) }), true);
   H.clear(st, 'test', NOW + 120000);
   assert.ok(!H.isHalted(st));
-  assert.strictEqual(H.check(st, pts.concat([{ t: new Date(NOW + 130000).toISOString(), markEquity: 2.8 }]), NOW + 130000, config.halt).triggered, false, 'old peak before the restart ignored');
-  assert.strictEqual(H.check(st, [{ t: new Date(NOW + 125000).toISOString(), markEquity: 3 }, { t: new Date(NOW + 130000).toISOString(), markEquity: 2.8 }], NOW + 130000, config.halt).triggered, true);
+  assert.strictEqual(H.check(st, pts.concat([{ t: new Date(NOW + 130000).toISOString(), markEquity: 2.8 }]), NOW + 130000, HC).triggered, false, 'old peak before the restart ignored');
+  assert.strictEqual(H.check(st, [{ t: new Date(NOW + 125000).toISOString(), markEquity: 3 }, { t: new Date(NOW + 130000).toISOString(), markEquity: 2.8 }], NOW + 130000, HC).triggered, true);
 });
 
 test('priority fee: median of non-zero slots, cached, never blocks; fallback before the first answer; read-only method', async () => {

@@ -484,8 +484,10 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (SZ) {
           const eq = equityNow ? Number(equityNow()) : NaN;
           if (!(eq > 0)) { countFilter(state, book, 'sizingEquityUnknown'); reject(state, book, row, 'sizing: marked equity unknown'); continue; }
-          size = +(eq * SZ.pctOfEquity / 100).toFixed(6);
-          sizing = { pctOfEquity: SZ.pctOfEquity, equityUsedSol: +eq.toFixed(6), sizeSol: size, basis: 'marked equity (cash + Jupiter-marked open positions)' };
+          // t118u: while the 24 h drawdown size cut is active (state.sizeCut, src/halt.js) new entries use half size.
+          const cutM = state.sizeCut && state.sizeCut.active && state.sizeCut.mult > 0 && state.sizeCut.mult <= 1 ? state.sizeCut.mult : 1;
+          size = +(eq * SZ.pctOfEquity * cutM / 100).toFixed(6);
+          sizing = { pctOfEquity: SZ.pctOfEquity, sizeMultiplier: cutM, effectivePctOfEquity: +(SZ.pctOfEquity * cutM).toFixed(4), sizeCut: cutM < 1, equityUsedSol: +eq.toFixed(6), sizeSol: size, basis: 'marked equity (cash + Jupiter-marked open positions)' };
         }
         if (state.balance < size) { reject(state, book, row, 'insufficient balance'); continue; }
         tried++;
