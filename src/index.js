@@ -586,6 +586,14 @@ function haltCheck(current) {
   const now = Date.now();
   const pts = equityLog.read(now - H.windowHours * 3600000).concat(current ? [current] : []);
   const r = haltMod.check(state, pts, now, H);
+  if (r.sizeCut) {
+    // t118u: 24 h drawdown past the limit -> half size (trading continues); back under it -> normal size.
+    const msg = r.sizeCut === 'cut' ? 'SIZE CUT: equity -' + r.dropPct.toFixed(2) + '% within ' + H.windowHours + ' h (limit ' + H.dropPct + '%): new entries at ' + (haltMod.sizeMultiplier(state) * 100) + '% of normal size, trading continues'
+      : 'SIZE RESTORED: 24 h drawdown ' + r.dropPct.toFixed(2) + '% back under ' + H.dropPct + '%: normal size';
+    addActivity(msg);
+    state.decisions.unshift(logDecision(r.sizeCut === 'cut' ? 'SIZE-CUT' : 'SIZE-RESTORE', '-', msg));
+    saveState(state);
+  }
   if (r.triggered) {
     addActivity('HALT ' + state.halt.reason + ': all new trading stopped; open positions keep exiting; manual restart required');
     state.decisions.unshift(logDecision('HALT', '-', state.halt.reason));
@@ -595,9 +603,14 @@ function haltCheck(current) {
 }
 function haltView() {
   const H = config.halt || {};
-  return { enabled: !!H.enabled, limitPct: H.dropPct || null, windowHours: H.windowHours || null, halted: haltMod.isHalted(state), halt: state.halt || null, lastCheck: state.haltLastCheck || null,
+  const sc = haltMod.sizeCutView(state, H);
+  const sizeCutMode = sc.mode === 'size-cut';
+  return { enabled: !!H.enabled, mode: sc.mode, limitPct: H.dropPct || null, windowHours: H.windowHours || null, halted: haltMod.isHalted(state),
+    sizeCutActive: sc.sizeCutActive, sizeMultiplier: sc.sizeMultiplier, drawdownPct: sc.drawdownPct, sizeCut: sc,
+    rule: sizeCutMode ? '24 h drawdown >= ' + H.dropPct + '% -> new entries at ' + (sc.cutMultiplier * 100) + '% of normal size (trading continues); back under ' + H.dropPct + '% -> normal size. Never halts (t118u).' : 'hard halt (t89u)',
+    halt: state.halt || null, lastCheck: state.haltLastCheck || null,
     adminTokenConfigured: haltMod.tokenOk('', process.env) !== null,
-    howToClear: 'POST /api/admin/halt/clear with header x-admin-token: <ADMIN_TOKEN or KILL_TOKEN> (if set, >= 16 chars), or set env HALT_CLEAR_ID=<halt.id> and redeploy. Never auto-cleared.' };
+    howToClear: sizeCutMode ? 'nothing to clear: size-cut mode never halts (HALT_CLEAR_ID / admin clear are harmless no-ops)' : 'POST /api/admin/halt/clear with header x-admin-token: <ADMIN_TOKEN or KILL_TOKEN> (if set, >= 16 chars), or set env HALT_CLEAR_ID=<halt.id> and redeploy. Never auto-cleared.' };
 }
 // Manual restart after a halt (authenticated). Paper only: it only re-allows new paper entries.
 app.post('/api/admin/halt/clear', function (req, res) {
@@ -655,7 +668,7 @@ function bossRulesView() {
     nightHours: night,
     feed: { staleAfterSec: X.feedStaleSec || null, staleEvents: (bk.feed || {}).staleEvents || 0, openStale: open.filter(function (p) { return p.feed.stale; }).length, recent: ((bk.feed || {}).recent || []).slice(0, 10), rule: 'no stop-loss (or any exit) is decided without a fresh (<= 10 s) Jupiter sell quote; >= 60 s without one = stale, logged; the position waits for the feed' },
     halted: haltMod.isHalted(state),
-    sizing: E.sizing ? { pctOfEquity: E.sizing.pctOfEquity, markedEquitySol: +Number(eq).toFixed(6), nextSizeSol: +(Number(eq) * E.sizing.pctOfEquity / 100).toFixed(6) } : null,
+    sizing: E.sizing ? { pctOfEquity: E.sizing.pctOfEquity, sizeMultiplier: haltMod.sizeMultiplier(state), effectivePctOfEquity: +(E.sizing.pctOfEquity * haltMod.sizeMultiplier(state)).toFixed(4), markedEquitySol: +Number(eq).toFixed(6), nextSizeSol: +(Number(eq) * E.sizing.pctOfEquity * haltMod.sizeMultiplier(state) / 100).toFixed(6) } : null,
     takeProfit: X.takeProfit || (X.takeProfitPct != null ? { fixedPct: X.takeProfitPct } : null), timeLimitMinutes: X.maxHoldMinutes || null,
     strategy: RH && RH.entry && RH.entry.trend ? { name: RH.name, version: RH.version, minLiquidityUsd: RH.entry.minLiquidityUsd, maPeriod: RH.entry.trend.maPeriod, minAbovePct: RH.entry.trend.minAbovePct, requireMaRising: !!RH.entry.trend.requireMaRising, candle: '1m', stopLossPct: X.stopLossPct, takeProfitPct: X.takeProfitPct != null ? X.takeProfitPct : (X.partial ? X.partial.atPct : null), partial: X.partial || null, trailPct: X.trailPct || null, breakevenAfterPartial: !!X.breakevenAfterPartial, managerFrozen: !!(config.manager && config.manager.applyChanges === false), maxHoldMinutes: X.maxHoldMinutes, slipPctPerFill: (X.costModel || {}).flatSlipPct, priceBasis: X.priceBasis,
       maMethod: 'SMA of the last 50 one-minute closes: own ~45 s pool price history resampled to 1 min (last price at or before each minute end, carried forward) when it covers >= 50 min, else GeckoTerminal 1m OHLCV closes (>= 50 candles, newest <= 3 min old); no data -> no entry' } : null,
@@ -710,7 +723,8 @@ app.get('/api/books', function (req, res) {
 
 app.get('/api/health', function (req, res) {
   res.set('Cache-Control', 'no-store');
-  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null, exitLoop: exitLoopView(), stopFills: stopFillsView().summary, fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
+  let hv = null; try { const v = haltView(); hv = { mode: v.mode, halted: v.halted, sizeCutActive: v.sizeCutActive, sizeMultiplier: v.sizeMultiplier, drawdownPct: v.drawdownPct, limitPct: v.limitPct, windowHours: v.windowHours, since: v.sizeCut.since, rule: v.rule }; } catch (e) { hv = { error: String(e.message || e) }; }
+  res.json({ ok: true, build: BUILD, liveTrading: false, lastUpdate: state.lastUpdate, halt: hv, scoreboard: state.scoreboard || null, epochSwitch: state.epochSwitch || null, onlyStrategies: config.onlyStrategies || null, exitLoop: exitLoopView(), stopFills: stopFillsView().summary, fetchStats: fetchStats(), jupiterQuotes: jupiterStats(), mintAuthority: Object.assign({}, mintAuth.stats) });
 });
 
 function booksPayload() {
