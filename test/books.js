@@ -19,10 +19,12 @@ const row = o => Object.assign({ pairAddress: 'POOL1', mint: 'MINT1pump', symbol
 const ctx = { now: NOW, snaps: {} };
 
 test('config: 4 books, same 0.05 SOL size, 2 open each, name + version', () => {
-  assert.strictEqual(config.books.list.length, 4);
+  // t117u: the social-spike book (test/social.js) comes on top of the four PR11 books.
+  const four = config.books.list.filter(b => b.id !== 'social-spike');
+  assert.strictEqual(four.length, 4);
   assert.strictEqual(config.books.sizeSol, 0.05);
   assert.strictEqual(config.books.maxOpenPerBook, 2);
-  assert.deepStrictEqual(config.books.list.map(E.label), ['graduation-sniper v2', 'runner-hunter v1', 'volume-explosion v1', 'trending-pullback v1']);
+  assert.deepStrictEqual(four.map(E.label), ['graduation-sniper v2', 'runner-hunter v1', 'volume-explosion v1', 'trending-pullback v1']);
 });
 
 test('graduation sniper entry: pump origin, pool <= 15 min, m5 buys > sells, liquidity >= $30k', () => {

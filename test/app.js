@@ -260,7 +260,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     const arch = JSON.parse(fs.readFileSync(j.scoreboard.archiveFile, 'utf8'));
     assert.strictEqual(arch.trades.length, 9, 'old trades archived, not destroyed');
     assert.strictEqual(j.scoreboard.startBalance, 3.0399, 'same balance');
-    assert.strictEqual(j.books.list.length, 4);
+    assert.strictEqual(j.books.list.filter(b => b.strategyId !== 'social-spike').length, 4);   // t117u: social-spike (test/social.js) comes on top
     assert.ok(j.books.list.every(b => b.sizeSol === 0.05 && b.progress === '0/30'));
     for (const k of ['requests', 'rateLimited', 'retries', 'skipped', 'last429At', 'since', 'byHost', 'scan']) assert.ok(k in j.fetchStats, 'fetchStats.' + k);
     const d = await get('/classic');
@@ -303,7 +303,7 @@ test('boot smoke: index.js boots on the real config; tick unpauses dip-hold, ope
     assert.strictEqual(db.status, 200);
     const dj = JSON.parse(db.body);
     assert.strictEqual(dj.liveTrading, false);
-    assert.strictEqual(dj.books.length, 4);
+    assert.strictEqual(dj.books.filter(b => (b.strategyId || b.id) !== 'social-spike').length, 4);   // t117u
     for (const k of ['manager', 'scanner', 'rugCheck', 'strategist', 'executor', 'logger']) assert.ok(k in dj.agents, 'agent ' + k);
     for (const k of ['balance', 'equity', 'markEquity', 'realizedTodaySol', 'realizedSinceResetSol']) assert.ok(k in dj.account, 'account.' + k);
     assert.ok(Array.isArray(dj.openPositions) && Array.isArray(dj.recentTrades));

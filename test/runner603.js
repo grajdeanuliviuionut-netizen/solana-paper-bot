@@ -64,7 +64,7 @@ test('live config: v6.03, stop -2.5%, liquidity > $100k, half at +8%, 4% trail, 
   assert.strictEqual(x.trailPct, 4); assert.strictEqual(x.breakevenAfterPartial, true); assert.strictEqual(x.maxHoldMinutes, 240); assert.strictEqual(x.takeProfitPct, undefined);
   assert.deepStrictEqual(x.costModel, p.exit.costModel, 'cost model unchanged (2% slip per fill)');
   assert.strictEqual(config.manager.applyChanges, false);
-  assert.deepStrictEqual(config.onlyStrategies, ['runner-hunter']);
+  assert.deepStrictEqual(config.onlyStrategies.filter(id => id !== 'social-spike'), ['runner-hunter'], 'runner-hunter stays allowed (t117u adds social-spike, test/social.js)');
   assert.ok(improver.HARD_V6['exit.stopLossPct'].max <= 4);
 });
 
