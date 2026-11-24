@@ -22,7 +22,7 @@ const MIN = 60000;
 const num = v => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const label = b => b.id + ' v' + b.version;
 // v3+ runner books (filter counters, top-10 gate): the v3-v5 liquidity band or the v6 trend rule.
-const v3plus = e => !!(e && (e.maxLiquidityUsd != null || e.trend));
+const v3plus = e => !!(e && (e.maxLiquidityUsd != null || e.trend || e.social));   // t117u: + social-spike (rug/top-10 gates, filter counters)
 
 // ---------- entry rules (pure) ----------
 function isPumpOrigin(row) {
@@ -76,6 +76,14 @@ function trendFail(tr, price, s) {
 // Returns null (passes) or the first failed rule as a short reason.
 function entryFails(book, row, ctx) {
   const e = book.entry, now = ctx.now, pc = row.priceChange || {};
+  if (book.id === 'social-spike') {
+    // t117u: a fresh top-3 social-volume spike (>= +50%, src/books/social.js) and pool liquidity > $50k (DexScreener).
+    if (!(num(row.liquidityUsd) > e.minLiquidityUsd)) return 'liquidity: <= ' + e.minLiquidityUsd;
+    const s = row.social || (ctx.socialOf ? ctx.socialOf(row.mint) : null);
+    if (!s) return 'noSocialSpike: not in the fresh top ' + ((e.social && e.social.topN) || 3);
+    if (!(s.spikePct >= e.social.minSpikePct)) return 'socialSpike: < +' + e.social.minSpikePct + '%';
+    return null;
+  }
   if (book.id === 'runner-hunter' && e.trend) {
     // t93u v6 Trend Following: liquidity > $50k and price above its 50-period (1 min) SMA. The SMA comes from the
     // bot's own history here when it covers >= 50 min; otherwise from GeckoTerminal candles in runEntries (fail closed).
@@ -162,6 +170,10 @@ function signalFields(book, row, ctx) {
     const s = m15Mod.smaFromTicks(ctx.ticks && ctx.ticks[row.pairAddress], ctx.now, book.entry.trend);
     Object.assign(f, { priceUsd: row.priceUsd, ma: s ? s.ma : null, maPrev: s ? s.maPrev : null, maSlopePct: s ? s.maSlopePct : null, maPeriod: book.entry.trend.maPeriod, maSource: s ? s.source : null, maDistPct: s ? +((num(row.priceUsd) / s.ma - 1) * 100).toFixed(3) : null });
   }
+  if (book.id === 'social-spike') {
+    const s = row.social || (ctx.socialOf ? ctx.socialOf(row.mint) : null);
+    if (s) Object.assign(f, { priceUsd: row.priceUsd, socialSource: s.source, socialSourceLabel: s.sourceLabel, socialRealX: s.source === 'x-api', socialLast1h: s.last1h, socialBaselinePerHour: s.baselinePerHour, socialSpikePct: s.spikePct, socialUnit: s.unit, socialRank: s.rank, socialAt: new Date(s.at).toISOString(), gtTrendingRank: s.gtRank || null, dsBoost: s.boost || null });
+  }
   if (book.id === 'volume-explosion') Object.assign(f, { volumeM5: row.volumeM5, m5VolumeVsHourAvg: +num(m5VolumeVsHourAvg(row)).toFixed(2) });
   if (book.id === 'trending-pullback') Object.assign(f, { volumeH6: row.volumeH6, high24Est: high24Estimate(row, ctx.snaps && ctx.snaps[row.mint], ctx.now), dropFromHighPct: +num(dropFromHighPct(row, ctx.snaps && ctx.snaps[row.mint], ctx.now)).toFixed(2) });
   return f;
@@ -221,7 +233,7 @@ function bookStats(trades, open, target) {
 }
 
 // ---------- runtime ----------
-function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15, fees, sendPath, random, equityNow }) {
+function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15, fees, sendPath, random, equityNow, social }) {
   const send = sendPath || execMod.makeSendPath();
   const feeNow = (t, acct) => (fees ? fees.current(t, acct) : { microLamports: 0, sol: 0, fallback: true, lamports: 0 });
   const sleepFn = sleep || (ms => new Promise(r => setTimeout(r, ms)));
@@ -379,7 +391,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
   // go to the graduation sniper only). onExtraPass(book, row) is called for each extra row that passes.
   function signals(state, pairs, extraByBook, onExtraPass) {
     const b = ensure(state), t = nowFn(), out = [];
-    const ctx = { now: t, snaps: b.snaps, ticks: b.ticks };
+    const ctx = { now: t, snaps: b.snaps, ticks: b.ticks, socialOf: social && social.spikeFor ? social.spikeFor : null };   // t117u
     for (const book of C.list) {
       if (book.paused || !allowed(book.id)) continue;   // t83u/t85u: paused or not allowed -> no new entries (open positions still exit)
       // t90u Boss Rules: Night Hours Skip (02:00-06:00 UTC): no scanning or new entries for this book.
@@ -397,7 +409,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const seen = new Set((pairs || []).map(r => r && r.mint));
       const extraOnly = extra.filter(r => r && !seen.has(r.mint));
       for (const r of extra) if (r && !entryFails(book, r, ctx) && onExtraPass) onExtraPass(book, r);
-      const v3 = book.entry && (book.entry.maxLiquidityUsd != null || !!book.entry.trend);
+      const v3 = v3plus(book.entry);
       if (v3) filterStats(state, book).lastScan = { at: new Date(t).toISOString(), rows: (pairs || []).length, passedRules: 0, byFilter: {} };
       for (const row of (pairs || []).concat(extraOnly)) {
         if (!row || !row.mint) continue;

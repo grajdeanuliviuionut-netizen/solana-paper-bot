@@ -85,6 +85,85 @@ test('X mode (SOCIAL_X_BEARER_TOKEN set): real X counts drive the spike; token n
   await capped.so.refresh(); assert.strictEqual(capped.calls.x.length, 0, 'daily cap respected'); assert.deepStrictEqual(capped.so.snapshot().top, []);
 });
 
+// ---------- live config + engine ----------
+const config = require('../src/config');
+const E = require('../src/books/engine');
+const reentry = require('../src/reentry');
+const SB = () => config.books.list.find(b => b.id === 'social-spike');
+const RH = () => config.books.list.find(b => b.id === 'runner-hunter');
+test('live config: social-spike v1 active next to runner-hunter v6.03 (unchanged); stop -10%, TP +50%, liquidity > $50k, cap 2, 5% sizing, Boss Rules', () => {
+  const b = SB();
+  assert.ok(b && !b.paused); assert.strictEqual(b.version, 1);
+  assert.deepStrictEqual(config.onlyStrategies, ['runner-hunter', 'social-spike']);
+  assert.strictEqual(b.exit.stopLossPct, 10); assert.strictEqual(b.exit.takeProfitPct, 50); assert.strictEqual(b.exit.maxHoldMinutes, 240); assert.strictEqual(b.exit.priceBasis, 'entryQuote');
+  assert.strictEqual(b.exit.partial, undefined); assert.strictEqual(b.exit.trailPct, undefined);
+  assert.strictEqual(b.entry.minLiquidityUsd, 50000); assert.strictEqual(b.entry.social.minSpikePct, 50); assert.strictEqual(b.entry.social.topN, 3);
+  assert.strictEqual(config.books.maxOpenPerBook, 2); assert.strictEqual(b.entry.sizing.pctOfEquity, 5);
+  const r = RH();
+  assert.deepStrictEqual(b.entry.rugCheck, r.entry.rugCheck); assert.deepStrictEqual(b.entry.lossStreakPause, r.entry.lossStreakPause); assert.deepStrictEqual(b.entry.nightSkip, r.entry.nightSkip);
+  assert.strictEqual(b.entry.stopCooldownHours, 24); assert.strictEqual(b.entry.maxSlippageBps, 150); assert.strictEqual(b.entry.maxTop10Pct, 15);
+  assert.deepStrictEqual(b.exit.costModel, r.exit.costModel);
+  assert.strictEqual(r.version, 6.03); assert.strictEqual(r.exit.stopLossPct, 2.5); assert.strictEqual(r.entry.minLiquidityUsd, 100000); assert.deepStrictEqual(r.exit.partial, { atPct: 8, sellPct: 50 });
+  assert.strictEqual(config.halt.enabled, true); assert.strictEqual(config.halt.dropPct, 5);
+});
+test('entry rule: fresh top-3 spike AND liquidity > $50k (DexScreener row)', () => {
+  const b = SB();
+  const row = o => Object.assign({ mint: 'HOTmint', liquidityUsd: 120000, priceUsd: 0.01 }, o || {});
+  const sp = { spikePct: 120, source: 'proxy', at: NOW };
+  assert.strictEqual(E.entryFails(b, row(), { now: NOW, socialOf: () => sp }), null);
+  assert.ok(/^liquidity/.test(E.entryFails(b, row({ liquidityUsd: 50000 }), { now: NOW, socialOf: () => sp })));
+  assert.ok(/^noSocialSpike/.test(E.entryFails(b, row(), { now: NOW, socialOf: () => null })));
+  assert.ok(/^noSocialSpike/.test(E.entryFails(b, row(), { now: NOW })));
+  assert.ok(/^socialSpike/.test(E.entryFails(b, row(), { now: NOW, socialOf: () => ({ spikePct: 40 }) })));
+});
+
+const FEE = { microLamports: 3000, sol: 0.0000056, fallback: false, lamports: 5600 };
+function harness(spikes) {
+  let t = NOW; const h = { mult: 1.0, trades: [], equity: 4 };
+  const quotes = {
+    buyQuote: async (mint, sol) => ({ ok: true, at: t, inAmount: String(Math.round(sol * 1e9)), outAmount: String(Math.round(sol / 0.05 * 10000000000)), priceImpactPct: 0.5, route: 'Ray' }),
+    sellQuote: async (mint, raw) => ({ ok: true, at: t, inAmount: String(raw), outAmount: String(Math.floor(Number(raw) * 5e-3 * h.mult)), priceImpactPct: 0.4, route: 'Ray' })
+  };
+  const mintAuth = { check: async () => ({ pass: true, reason: 'mint+freeze revoked', mintAuthority: null, freezeAuthority: null, decimals: 6, program: 'spl-token', checkedAt: 'x', source: 'test' }) };
+  const top10 = { check: async () => ({ ok: true, top10Pct: 12, mintAuthority: null, freezeAuthority: null, source: 'rugcheck' }) };
+  const m15 = { gt: async () => null, smaGt: async () => null };
+  const social = { spikeFor: mint => spikes[mint] || null };
+  h.books = E.makeBooks({ config, quotes, mintAuth, reentry, top10, m15, fees: { current: () => FEE }, social, random: () => 0.5, equityNow: () => h.equity, saveTrade: tr => h.trades.push(tr), now: () => t, sleep: async ms => { t += ms; } });
+  h.state = { balance: 3, reentryCooldowns: {}, openPositions: [], scoreboard: { epoch: 'runner-v6', since: new Date(NOW - MIN).toISOString() } };
+  h.row = o => Object.assign({ pairAddress: 'P_HOT', mint: 'HOTmint', symbol: 'HOT', name: 'Hot', priceUsd: 0.0011, priceNative: 0.000005, liquidityUsd: 80000,
+    volumeH1: 1000, volumeM5: 100, volumeH6: 6000, volumeH24: 9000, priceChange: { m5: 0, h1: 0, h6: 0, h24: 0 }, txns: { buys: 10, sells: 10 }, txnsM5: { buys: 1, sells: 1 },
+    pairCreatedAt: NOW - 30 * HOUR, dexId: 'raydium', fetchedAt: t - 5000, ageDays: 1 }, o || {});
+  h.enter = async r => { await h.books.runEntries(h.state, [r || h.row()], async () => ({ ok: true })); return h.state.books.open.find(p => p.book === 'social-spike'); };
+  h.pass = async (mult, ms) => { h.mult = mult; t += (ms == null ? 5000 : ms); await h.books.runExits(h.state); };
+  return h;
+}
+test('engine: social-spike opens at 5% of equity with the spike on the trade; -10% move stops, +50% takes profit', async () => {
+  const sp = { HOTmint: { mint: 'HOTmint', symbol: 'HOT', spikePct: 180, last1h: 900, baselinePerHour: 320, unit: 'txns/h', source: 'proxy', sourceLabel: S.PROXY_LABEL, rank: 1, at: NOW } };
+  let h = harness(sp);
+  const p = await h.enter();
+  assert.ok(p, JSON.stringify(h.state.books.rejects.recent.slice(0, 3)));
+  assert.strictEqual(p.sizeSol, 0.2, '5% of 4 SOL'); assert.strictEqual(p.exit.stopLossPct, 10); assert.strictEqual(p.exit.takeProfitPct, 50);
+  assert.strictEqual(p.entrySignal.socialSpikePct, 180); assert.strictEqual(p.entrySignal.socialSource, 'proxy'); assert.strictEqual(p.entrySignal.socialRealX, false);
+  assert.ok(!h.state.books.open.some(x => x.book === 'runner-hunter'), 'runner-hunter rules unaffected (no MA data -> no runner entry)');
+  await h.pass(0.91); assert.strictEqual(h.trades.length, 0, '-9%: held');
+  await h.pass(0.899); assert.strictEqual(h.trades.length, 1); assert.strictEqual(h.trades[0].exitReason, 'sl'); assert.strictEqual(h.trades[0].book, 'social-spike');
+  h = harness(sp); await h.enter(); await h.pass(1.49); assert.strictEqual(h.trades.length, 0, '+49%: held');
+  await h.pass(1.501); assert.strictEqual(h.trades[0].exitReason, 'tp');
+  h = harness(sp); await h.enter(); await h.pass(1.0, 240 * MIN + 1000); assert.strictEqual(h.trades[0].exitReason, 'time');
+});
+test('engine: no spike / thin pool / halt / 2-open cap block social-spike entries', async () => {
+  let h = harness({});
+  assert.strictEqual(await h.enter(), undefined, 'no spike -> no entry');
+  const sp = mint => ({ mint, spikePct: 90, source: 'proxy', at: NOW });
+  h = harness({ HOTmint: sp('HOTmint') });
+  assert.strictEqual(await h.enter(h.row({ liquidityUsd: 49000 })), undefined, 'liquidity <= $50k');
+  h = harness({ HOTmint: sp('HOTmint') }); h.state.halt = { halted: true, reason: 'test' };
+  assert.strictEqual(await h.enter(), undefined, 'halt blocks');
+  h = harness({ A: sp('A'), B: sp('B'), C: sp('C') });
+  await h.books.runEntries(h.state, ['A', 'B', 'C'].map(m => h.row({ mint: m, pairAddress: 'P' + m, symbol: m })), async () => ({ ok: true }));
+  assert.strictEqual(h.state.books.open.filter(p => p.book === 'social-spike').length, 2, 'max 2 open');
+});
+
 (async () => {
   for (const [n, f] of tests) {
     try { await f(); passed++; console.log('ok  ', n); } catch (e) { console.log('FAIL', n, '\n    ', String(e.stack || e).split('\n').slice(0, 6).join('\n     ')); }

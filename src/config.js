@@ -20,7 +20,7 @@ module.exports = {
   // t85u (Liviu 22 Nov 09:30, explicit): truly one strategy. Only these ids may open (books AND legacy), on top
   // of the paused flags. Leftover positions of every other strategy are closed at a Jupiter sell quote before
   // the runner-v2 board starts (books.epochCloseout).
-  onlyStrategies: ['runner-hunter'],
+  onlyStrategies: ['runner-hunter', 'social-spike'],   // t117u (Liviu 24 Nov): + the social-spike paper book, runner-hunter unchanged
   // t86u (Liviu 22 Nov 12:12): the Manager reviews every 10 closed runner-hunter trades, applies ONE bounded
   // change (src/improver.js BOUNDS/RULES) as a new version, logs what and why, and reports every 30 trades.
   // Paper only: it never touches size, wallets, keys or LIVE_TRADING.
@@ -138,6 +138,22 @@ module.exports = {
           { version: 1, until: '2026-11-22', entry: { minVolumeToLiquidityH1: 0.10, minLiquidityUsd: 15000, minH1: 0, minM5: 0 },
             exit: { stopLossPct: 12, partial: { atPct: 10, sellPct: 20 }, trailAfterPartial: true, trailPct: 15, maxHoldMinutes: 240 } }
         ]
+      },
+      {
+        // t117u (Liviu 24 Nov, aggressive): buy a top-3 Solana memecoin whose social volume jumped >= +50% (last 60 min vs
+        // the mean hour of the 5 h before; src/books/social.js) when its pool liquidity is > $50k (DexScreener). Real X
+        // mention counts only when env SOCIAL_X_BEARER_TOKEN is set (X API pay-per-use, set by Liviu); without it the
+        // scanner uses a labelled proxy (DexScreener txns spike within GeckoTerminal trending + DexScreener boosts).
+        // Exits on the price move since entry (Jupiter sell quotes ~5 s): hard stop -10%, take profit +50% (full),
+        // 240 min safety cap. Kept from runner-hunter: rug gates + top-10 <= 15%, 150 bps entry slippage abort, 24 h
+        // no re-buy after a stop, 2 losses -> 30 min pause, no entries 02:00-06:00 UTC, the 5%/24 h halt, 5% sizing,
+        // max 2 open (books.maxOpenPerBook), 2% paper slip per fill. Off with env SOCIAL_SPIKE_ENABLED=0.
+        id: 'social-spike', name: 'Social spike', version: 1, paused: /^(0|false|off|no)$/i.test(String(process.env.SOCIAL_SPIKE_ENABLED || '').trim()),
+        entry: { minLiquidityUsd: 50000, social: { minSpikePct: 50, topN: 3, baselineHours: 5, windowMin: 60, minMentions1h: 20, minTxns1h: 300, refreshMin: 5, maxAgeMin: 12 },
+          maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
+          stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
+        exit: { stopLossPct: 10, takeProfitPct: 50, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
+          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } }
       },
       {
         id: 'volume-explosion', name: 'Volume explosion', version: 1, paused: true,   // t83u
