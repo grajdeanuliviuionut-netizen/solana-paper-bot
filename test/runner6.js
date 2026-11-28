@@ -106,7 +106,9 @@ test('entry rejects: below MA (GT), no MA data (fail closed), rug authority, top
   h = harness({ sma: null });
   assert.strictEqual(await h.enter(), undefined); assert.strictEqual(h.f().maNoData, 1);
   h = harness({ sma: { error: '429' } });
-  assert.strictEqual(await h.enter(), undefined); assert.strictEqual(h.f().maUnavailable, 1);
+  assert.strictEqual(await h.enter(), undefined); assert.strictEqual(h.f().maDeferred, 1);
+  assert.ok(!h.f().maUnavailable, 'a 429 is deferred, not a final maUnavailable reject');
+  assert.ok(!((h.state.books.rejects.byReason || {})['maUnavailable: GeckoTerminal 429 (fail closed, retried)']));
   h.sma = { ma: 0.001, maPrev: 0.00099, period: 50, candles: 50, source: 'geckoterminal-ohlcv-1m', newestAgeSec: 20 }; h.adv(45000);
   assert.ok(await h.enter(row({ fetchedAt: h.now() - 5000 })), 'a GT error is not cached: retried next scan');
   h = harness({ top10: { ok: true, top10Pct: 10, mintAuthority: 'Auth111', freezeAuthority: null, source: 'rugcheck' } });

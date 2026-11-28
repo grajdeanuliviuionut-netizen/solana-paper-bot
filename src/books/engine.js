@@ -384,8 +384,15 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       while (s.length && t - s[0][0] > 24 * 3600000) s.shift();
     }
     for (const m of Object.keys(b.snaps)) if (!b.snaps[m].length || t - b.snaps[m][b.snaps[m].length - 1][0] > 24 * 3600000) delete b.snaps[m];
-    // t86u: ~45 s pool price ticks (last 20 min) for m15, pools with liquidity >= $50k.
+    // t86u / trend-gt-backoff: ~45 s pool price ticks (last KEEP_MIN=60 min) for m15 and the 50-MA,
+    // pools with liquidity >= $50k. The top N by liquidity stay on a watchlist so a brief drop off
+    // the scan does not wipe the series (prune is 60 min, not 20).
     for (const r of pairs || []) if (r && num(r.liquidityUsd) >= 50000) m15Mod.recordTick(b.ticks, r, t);
+    const ranked = (pairs || []).filter(r => r && r.pairAddress && num(r.liquidityUsd) >= 50000 && num(r.priceUsd) > 0)
+      .sort((a, b) => num(b.liquidityUsd) - num(a.liquidityUsd)).slice(0, 30);
+    const watch = b.tickWatch || (b.tickWatch = {});
+    for (const r of ranked) watch[r.pairAddress] = { at: t, mint: r.mint, symbol: r.symbol, liquidityUsd: num(r.liquidityUsd) };
+    for (const k of Object.keys(watch)) if (t - watch[k].at > 60 * MIN) delete watch[k];
     m15Mod.pruneTicks(b.ticks, t);
   }
 
@@ -417,6 +424,10 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (!row || !row.mint) continue;
         const why = entryFails(book, row, ctx);
         if (v3) { const f = filterStats(state, book); f.evaluated++; if (why) countFilter(state, book, why); else { f.passedRules++; f.lastScan.passedRules++; const pm = f.passMints || (f.passMints = {}); if (!pm[row.mint]) pm[row.mint] = { first: t, symbol: row.symbol }; } }
+        // Count own-history SMA use once per row per scan (pass or cheap-path trend reject). This is
+        // what trendStats.gtSma.ownHistory should have been tracking; it was never incremented.
+        if (book.id === 'runner-hunter' && book.entry && book.entry.trend && m15 && m15.stats
+          && m15Mod.smaFromTicks(ctx.ticks && ctx.ticks[row.pairAddress], t, book.entry.trend)) m15.stats.ownHistory++;
         if (book.id === 'graduation-sniper' && b.gradSniper && (!why || /^pool younger/.test(why))) {
           const g = b.gradSniper;
           if (!g.candidateMints.includes(row.mint)) { g.candidateMints.push(row.mint); if (g.candidateMints.length > 300) g.candidateMints.shift(); g.candidates++; }
@@ -475,8 +486,33 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         const cool = reentry.blocked(state, { mint: row.mint, pairAddress: row.pairAddress }, t);
         if (cool) { reject(state, book, row, 're-entry cooldown'); continue; }
         if (row.stale || !row.fetchedAt || t - row.fetchedAt > C.maxPriceAgeSec * 1000) { reject(state, book, row, 'stale scan row (> ' + C.maxPriceAgeSec + 's)'); continue; }
-        // t93u v6: 50 MA from GeckoTerminal 1m candles when the own history is shorter than 50 min (fail closed).
-        // Results are cached per pool for maCacheSec so the GT budget rotates through the candidates.
+        // Cheap gates (rug, top-10) run before any GeckoTerminal MA lookup so a 429 budget is not spent
+        // on coins that would fail anyway. Liquidity and the 24 h stop cooldown already ran above.
+        const rug = await mintAuth.check(row.mint);
+        const rugCheck = { pass: rug.pass, reason: rug.reason, mintAuthority: rug.mintAuthority === undefined ? null : rug.mintAuthority, freezeAuthority: rug.freezeAuthority === undefined ? null : rug.freezeAuthority, program: rug.program || null, decimals: rug.decimals, checkedAt: rug.checkedAt, source: rug.source };
+        if (RC) {
+          rugState(state).checks++;
+          if (!rug.pass && /^missing-data/.test(String(rug.reason))) { rugState(state).unavailable++; countFilter(state, book, 'rugUnavailable'); reject(state, book, row, 'Rug Check unavailable: ' + rug.reason + ' (fail closed, not blacklisted)'); continue; }
+          if (!rug.pass) { rugFail(state, book, row, rug.reason); continue; }
+        }
+        if (!rug.pass) { reject(state, book, row, 'rug-check: ' + rug.reason); continue; }
+        const E = book.entry || {};
+        // t86u v3: top-10 holders (Solana RPC largest accounts, pool/AMM/burn excluded), fail closed.
+        if (E.maxTop10Pct != null && v3plus(E)) {
+          const tt = top10 ? await top10.check(row.mint, row.pairAddress, nowFn()) : { ok: false, reason: 'top10: no checker configured' };
+          if (!tt.ok && RC) rugState(state).unavailable++;
+          if (!tt.ok) { countFilter(state, book, 'top10Unavailable'); reject(state, book, row, 'top10: unavailable (' + (tt.reason || 'error') + ')'); continue; }
+          Object.assign(fields, { top10Pct: tt.top10Pct, top10MaxHolderPct: tt.maxHolderPct, top10ExcludedPct: tt.excludedPct, top10Source: tt.source || null });
+          if (RC && tt.mintAuthority && tt.mintAuthority !== 'unknown') { rugFail(state, book, row, 'mint-authority-not-revoked (RugCheck)'); continue; }
+          if (RC && tt.freezeAuthority && tt.freezeAuthority !== 'unknown') { rugFail(state, book, row, 'freeze-authority-not-revoked (RugCheck)'); continue; }
+          if (RC && tt.rugged) { rugFail(state, book, row, 'RugCheck marks token rugged'); continue; }
+          if (RC && tt.top10Pct > RC.maxTop10Pct) { rugFail(state, book, row, 'top10 > ' + RC.maxTop10Pct + '%', +tt.top10Pct.toFixed(2)); continue; }
+          if (RC) { rugState(state).passed++; const fs = filterStats(state, book); const rp = fs.rugPassMints || (fs.rugPassMints = {}); if (!rp[row.mint]) rp[row.mint] = { at: t, symbol: row.symbol, top10Pct: tt.top10Pct }; }
+          if (tt.top10Pct > E.maxTop10Pct) { countFilter(state, book, 'top10'); reject(state, book, row, 'top10: ' + tt.top10Pct.toFixed(1) + '% > ' + E.maxTop10Pct + '%'); continue; }
+        }
+        // t93u v6 / trend-gt-backoff: 50 MA from GeckoTerminal 1m candles when the own history is shorter
+        // than 50 min (fail closed). OHLCV is cached 3 min; a 429/cooldown/timeout defers to the next
+        // scan (maDeferred) and is not a final reject. A successful fetch is merged into own ticks.
         const TR = book.entry && book.entry.trend;
         if (TR && fields.ma == null) {
           const mc = b.maCache || (b.maCache = {});
@@ -485,11 +521,31 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
             if (gtBudget <= 0) { countFilter(state, book, 'maPending'); continue; }
             gtBudget--;
             const sm = m15 && m15.smaGt ? await m15.smaGt(row.pairAddress, nowFn(), TR) : null;
-            if (sm && sm.error) { countFilter(state, book, 'maUnavailable'); reject(state, book, row, 'maUnavailable: GeckoTerminal ' + String(sm.error).slice(0, 60) + ' (fail closed, retried)'); continue; }
+            if (sm && sm.error) {
+              const defer = sm.deferred !== false;
+              countFilter(state, book, defer ? 'maDeferred' : 'maUnavailable');
+              if (!defer) reject(state, book, row, 'maUnavailable: GeckoTerminal ' + String(sm.error).slice(0, 60) + ' (fail closed, retried)');
+              continue;
+            }
             ent = mc[row.pairAddress] = { at: t, r: sm };
             const ks = Object.keys(mc); if (ks.length > 600) delete mc[ks[0]];
+            if (sm && m15 && m15.lastOhlcv) {
+              const added = m15Mod.mergeOhlcvTicks(b.ticks, row.pairAddress, m15.lastOhlcv(row.pairAddress), nowFn());
+              if (added && m15.stats) m15.stats.seeded = (m15.stats.seeded || 0) + added;
+            }
           }
-          if (!ent.r) { countFilter(state, book, 'maNoData'); reject(state, book, row, 'maNoData: no 50-candle 1m history (own + GeckoTerminal)'); continue; }
+          if (!ent.r) {
+            const age = poolAgeMin(row, t);
+            const need = TR.maPeriod || 50;
+            if (age != null && age < need) {
+              countFilter(state, book, 'maTooYoung');
+              reject(state, book, row, 'maTooYoung: pool age ' + Math.round(age) + 'm < ' + need + 'm (need ' + need + ' 1m candles)');
+            } else {
+              countFilter(state, book, 'maNoData');
+              reject(state, book, row, 'maNoData: no 50-candle 1m history (own + GeckoTerminal)' + (age != null ? '; pool age ' + Math.round(age) + 'm' : ''));
+            }
+            continue;
+          }
           Object.assign(fields, { ma: ent.r.ma, maPrev: ent.r.maPrev == null ? null : ent.r.maPrev, maSlopePct: ent.r.maSlopePct == null ? null : ent.r.maSlopePct, maSource: ent.r.source, maDistPct: +((num(row.priceUsd) / ent.r.ma - 1) * 100).toFixed(3), maNewestCandleAgeSec: ent.r.newestAgeSec, maSpanMin: ent.r.spanMin || TR.maPeriod });
           const tw = trendFail(TR, num(row.priceUsd), ent.r);
           if (tw) { countFilter(state, book, tw); reject(state, book, row, tw + ' (GeckoTerminal)'); continue; }
@@ -528,28 +584,6 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
           if (!ph) { countFilter(state, book, 'breakoutNoData'); reject(state, book, row, 'breakout: no prior-high data (own history + GeckoTerminal)'); continue; }
           Object.assign(fields, { priorHigh: ph.priorHigh, priorHighSource: ph.source, priorHighWindowMin: [ph.fromMin, ph.toMin], breakPct: +((num(row.priceUsd) / ph.priorHigh - 1) * 100).toFixed(3) });
           if (!(num(row.priceUsd) > ph.priorHigh * (1 + (BO.minBreakPct || 0) / 100))) { countFilter(state, book, 'breakout'); reject(state, book, row, 'breakout: not above the prior high (GeckoTerminal)'); continue; }
-        }
-        const rug = await mintAuth.check(row.mint);
-        const rugCheck = { pass: rug.pass, reason: rug.reason, mintAuthority: rug.mintAuthority === undefined ? null : rug.mintAuthority, freezeAuthority: rug.freezeAuthority === undefined ? null : rug.freezeAuthority, program: rug.program || null, decimals: rug.decimals, checkedAt: rug.checkedAt, source: rug.source };
-        if (RC) {
-          rugState(state).checks++;
-          if (!rug.pass && /^missing-data/.test(String(rug.reason))) { rugState(state).unavailable++; countFilter(state, book, 'rugUnavailable'); reject(state, book, row, 'Rug Check unavailable: ' + rug.reason + ' (fail closed, not blacklisted)'); continue; }
-          if (!rug.pass) { rugFail(state, book, row, rug.reason); continue; }
-        }
-        if (!rug.pass) { reject(state, book, row, 'rug-check: ' + rug.reason); continue; }
-        const E = book.entry || {};
-        // t86u v3: top-10 holders (Solana RPC largest accounts, pool/AMM/burn excluded), fail closed.
-        if (E.maxTop10Pct != null && v3plus(E)) {
-          const tt = top10 ? await top10.check(row.mint, row.pairAddress, nowFn()) : { ok: false, reason: 'top10: no checker configured' };
-          if (!tt.ok && RC) rugState(state).unavailable++;
-          if (!tt.ok) { countFilter(state, book, 'top10Unavailable'); reject(state, book, row, 'top10: unavailable (' + (tt.reason || 'error') + ')'); continue; }
-          Object.assign(fields, { top10Pct: tt.top10Pct, top10MaxHolderPct: tt.maxHolderPct, top10ExcludedPct: tt.excludedPct, top10Source: tt.source || null });
-          if (RC && tt.mintAuthority && tt.mintAuthority !== 'unknown') { rugFail(state, book, row, 'mint-authority-not-revoked (RugCheck)'); continue; }
-          if (RC && tt.freezeAuthority && tt.freezeAuthority !== 'unknown') { rugFail(state, book, row, 'freeze-authority-not-revoked (RugCheck)'); continue; }
-          if (RC && tt.rugged) { rugFail(state, book, row, 'RugCheck marks token rugged'); continue; }
-          if (RC && tt.top10Pct > RC.maxTop10Pct) { rugFail(state, book, row, 'top10 > ' + RC.maxTop10Pct + '%', +tt.top10Pct.toFixed(2)); continue; }
-          if (RC) { rugState(state).passed++; const fs = filterStats(state, book); const rp = fs.rugPassMints || (fs.rugPassMints = {}); if (!rp[row.mint]) rp[row.mint] = { at: t, symbol: row.symbol, top10Pct: tt.top10Pct }; }
-          if (tt.top10Pct > E.maxTop10Pct) { countFilter(state, book, 'top10'); reject(state, book, row, 'top10: ' + tt.top10Pct.toFixed(1) + '% > ' + E.maxTop10Pct + '%'); continue; }
         }
         let holder = null;
         if (E.lpLockedMinPct != null) {
