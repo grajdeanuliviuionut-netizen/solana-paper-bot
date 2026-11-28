@@ -15,6 +15,7 @@ const stopFills = require('../stopFills');
 const { heldMint, REASON: REASON_SAME_MINT } = require('./sameMint');
 const m15Mod = require('./m15');
 const execMod = require('./executor');
+const rdMod = require('./routeDeath');   // social-route-death-exit: instant exit when the sell route / pool dies
 // t89u: stop-loss style exits (the -6% stop and the breakeven stop at entry) for penalties, cooldowns and logs.
 const isStopExit = r => stopFills.isStop(r) || r === 'breakeven';
 
@@ -235,7 +236,7 @@ function bookStats(trades, open, target) {
 }
 
 // ---------- runtime ----------
-function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15, fees, sendPath, random, equityNow, social }) {
+function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clock, holderCheck, sleep, top10, m15, fees, sendPath, random, equityNow, social, liquidityFeed }) {
   const send = sendPath || execMod.makeSendPath();
   const feeNow = (t, acct) => (fees ? fees.current(t, acct) : { microLamports: 0, sol: 0, fallback: true, lamports: 0 });
   const sleepFn = sleep || (ms => new Promise(r => setTimeout(r, ms)));
@@ -703,7 +704,7 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         feeSol: +(num(ec.feeSol) + sum('feeSol')).toFixed(9), priorityFeeSol: +(num(ec.priorityFeeSol) + sum('priorityFeeSol')).toFixed(9), slippageExceeded: pos.legs.some(l => l.slippageExceeded) };
       trade.quoteFillPnlSol = +(trade.costs.quoteFillSol - pos.sizeSol).toFixed(9);
     }
-    if (LE.stopCooldownHours && isStopExit(reason)) {
+    if (LE.stopCooldownHours && (isStopExit(reason) || reason === 'route-dying-exit')) {
       // t86u: no re-buy of a coin for 24 h after it stops out (mint and pool), persisted in state.
       const m = state.stopCooldowns || (state.stopCooldowns = {});
       const until = new Date(t + LE.stopCooldownHours * 3600000).toISOString();
@@ -763,6 +764,35 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
     pos.costBasisRemainingSol = +(pos.sizeSol * pos.remainingFrac).toFixed(9);
     return leg;
   }
+
+  // social-route-death-exit: close the whole remainder on the first sign that the route / pool is dying.
+  // qNow = the dying fresh quote (impact / collapse / liquidity) or null (no route). Default books what is executable
+  // (qNow, else a total loss); creditLastGoodQuote (what-if, off by default) credits the last good quote when fresh enough.
+  function routeDeathExit(state, pos, RD, det, qNow, t) {
+    let q = qNow || null, cr = { ok: false, why: 'credit-off' };
+    if (RD.creditLastGoodQuote) {
+      cr = rdMod.credit({ cfg: RD, lastGood: pos.lastGood, tokensRemainingRaw: pos.tokensRemainingRaw, now: t });
+      if (cr.ok) q = cr.quote;
+    }
+    const lg = pos.lastGood || null;
+    const info = { kind: det.kind, detail: det.detail, detectedAt: new Date(t).toISOString(),
+      lastGoodAt: lg ? new Date(lg.at).toISOString() : null, lastGoodPct: lg ? lg.pct : null, lastGoodAgeSec: lg ? +((t - lg.at) / 1000).toFixed(1) : null,
+      noRouteCount: pos.noRouteCount || 0, dyingQuote: qNow ? { outAmount: qNow.outAmount, priceImpactPct: qNow.priceImpactPct } : null,
+      credit: cr.ok ? 'lastGoodQuote' : 'none', creditRefused: RD.creditLastGoodQuote && !cr.ok ? cr.why : undefined,
+      note: 'tagged separately: not a stop fill, excluded from stopFills overshoot stats' };
+    const leg = bookLeg(state, pos, 'route-dying-exit', pos.tokensRemainingRaw, q, t);
+    leg.routeDeath = info; pos.routeDeath = info;
+    const rb = ensure(state).routeDeath || (ensure(state).routeDeath = { exits: 0, byKind: {}, credited: 0, creditedSol: 0, recent: [] });
+    rb.exits++; rb.byKind[det.kind] = (rb.byKind[det.kind] || 0) + 1;
+    if (cr.ok) { rb.credited++; rb.creditedSol = +(rb.creditedSol + Math.max(0, num(leg.solOut))).toFixed(9); }
+    rb.recent = [{ at: info.detectedAt, symbol: pos.symbol, kind: det.kind, detail: det.detail, lastGoodAgeSec: info.lastGoodAgeSec, lastGoodPct: info.lastGoodPct, credit: info.credit, solOut: leg.solOut }].concat(rb.recent).slice(0, 20);
+    if (log) log('ROUTE-DEATH', pos.symbol, label({ id: pos.book, version: pos.bookVersion }) + ' ' + det.kind + ': ' + det.detail + ' -> full exit (credit ' + info.credit + ')');
+    return closeTrade(state, pos, 'route-dying-exit', t);
+  }
+  const rdCfgOf = pos => {
+    const live = (C.list || []).find(x => x.id === pos.book);
+    return rdMod.cfgFrom((live && live.exit && live.exit.routeDeath) ? live.exit : pos.exit);
+  };
 
   // One exit pass: re-quote every open book position (Jupiter sell quote for the tokens held) and act.
   // One exit pass over the open book positions (no lock: callers hold it). PR14 (Liviu t72u): exit
@@ -825,6 +855,8 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
         if (q.noRoute) {
           pos.noRouteCount = (pos.noRouteCount || 0) + 1;
           if (!pos.noRouteSince) pos.noRouteSince = new Date(t).toISOString();
+          const RDn = rdCfgOf(pos);
+          if (RDn) { const det = rdMod.detect({ cfg: RDn, q, noRouteCount: pos.noRouteCount }); if (det) { routeDeathExit(state, pos, RDn, det, null, t); changed = true; continue; } }
           if (pos.noRouteCount >= (C.noRouteConsecutive || 5) && t - Date.parse(pos.noRouteSince) >= C.noRouteTotalLossMin * MIN) { bookLeg(state, pos, 'no-route-total-loss', pos.tokensRemainingRaw, null, t); closeTrade(state, pos, 'no-route-total-loss', t); changed = true; }
         } else if (!FS && minsOpen >= ex.maxHoldMinutes + C.noQuoteAfterMaxHoldMin) { bookLeg(state, pos, 'no-quote-total-loss', pos.tokensRemainingRaw, null, t); closeTrade(state, pos, 'no-quote-total-loss', t); changed = true; }
         continue;
@@ -872,6 +904,17 @@ function makeBooks({ config, quotes, mintAuth, reentry, log, saveTrade, now: clo
       const price = tokensUi > 0 ? Number(q.outAmount) / 1e9 / tokensUi : null;
       const prevCheck = pos.lastCheck || null;
       if (hooks && hooks.onCheck) hooks.onCheck(pos, prevCheck, t);
+      const RD = rdCfgOf(pos);
+      if (RD) {
+        const liq = liquidityFeed ? liquidityFeed(pos.mint, t) : null;
+        const det = rdMod.detect({ cfg: RD, q, price, prev: prevCheck, noRouteCount: 0, liq, entryLiq: pos.entrySignal && pos.entrySignal.liquidityUsd });
+        rdMod.trailPush(pos, { at: new Date(t).toISOString(), pct: +pct.toFixed(3), price, impact: q.priceImpactPct, outAmount: q.outAmount, dying: det ? det.kind : undefined }, RD.trailLen);
+        if (det) {
+          pos.lastCheck = { at: new Date(t).toISOString(), pct: +pct.toFixed(3), price, quoteAgeSec: +((t - q.at) / 1000).toFixed(2), priceImpactPct: q.priceImpactPct };
+          routeDeathExit(state, pos, RD, det, q, t); changed = true; continue;
+        }
+        pos.lastGood = { at: q.at, inAmount: q.inAmount, outAmount: q.outAmount, priceImpactPct: q.priceImpactPct, route: q.route, tokensRemainingRaw: pos.tokensRemainingRaw, pct: +pct.toFixed(3), price };
+      }
       pos.lastCheck = { at: new Date(t).toISOString(), pct: +pct.toFixed(3), price, quoteAgeSec: +((t - q.at) / 1000).toFixed(2), priceImpactPct: q.priceImpactPct };
       pos.markPct = +pct.toFixed(3);
       pos.peakPct = Math.max(num(pos.peakPct), pos.markPct);

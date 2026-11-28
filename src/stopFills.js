@@ -5,6 +5,10 @@
 // cost is charged separately inside pnlSol; netPnlPct is also recorded).
 const STOP_REASONS = new Set(['sl', 'hard-stop']);
 const isStop = r => STOP_REASONS.has(r);
+// social-route-death-exit: a "stop" that filled on a dead pool (sell priceImpact ~100% / fill ~-100%) is a route death,
+// not a fill-engine overshoot. It is tagged (deathLike) and reported separately, not mixed into the overshoot stats.
+const DEATH_IMPACT_PCT = 50, DEATH_FILL_PCT = -90;
+const isDeathLike = r => !!r && (r.deathLike === true || Number(r.priceImpactPct) >= DEATH_IMPACT_PCT || Number(r.actualFillPct) <= DEATH_FILL_PCT);
 const r3 = v => (v == null || !Number.isFinite(Number(v)) ? null : +Number(v).toFixed(3));
 
 function build({ pos, strategyId, strategyVersion, stopLevelPct, entryPriceSolPerToken, prevCheck, fill, netPnlPct, liquidityUsd, now }) {
@@ -20,7 +24,8 @@ function build({ pos, strategyId, strategyVersion, stopLevelPct, entryPriceSolPe
     overshootPct: r3(fill.pct - stop),
     quoteAgeSec: r3(fill.quoteAgeSec), priceImpactPct: r3(fill.priceImpactPct), liquidityUsd: liquidityUsd == null ? null : Math.round(liquidityUsd),
     sinceLastCheckSec: prevCheck ? r3((now - Date.parse(prevCheck.at)) / 1000) : null,
-    gapBetweenChecksPct: prevCheck ? r3(fill.pct - prevCheck.pct) : null
+    gapBetweenChecksPct: prevCheck ? r3(fill.pct - prevCheck.pct) : null,
+    deathLike: Number(fill.priceImpactPct) >= DEATH_IMPACT_PCT || Number(fill.pct) <= DEATH_FILL_PCT
   };
 }
 function record(state, row) {
@@ -34,11 +39,14 @@ function stats(rows) {
   return { count: o.length, avgOvershootPct: r3(o.reduce((a, b) => a + b, 0) / o.length), medianOvershootPct: r3(mid), maxOvershootPct: r3(o[0]) };
 }
 function summary(state, since) {
-  const rows = (state.stopFills || []).filter(r => !since || r.at >= since);
-  const byStrategy = {};
-  for (const r of rows) (byStrategy[r.strategyId] || (byStrategy[r.strategyId] = [])).push(r);
+  const all = (state.stopFills || []).filter(r => !since || r.at >= since);
+  const rows = all.filter(r => !isDeathLike(r)), dead = all.filter(isDeathLike);
+  const group = list => { const g = {}; for (const r of list) (g[r.strategyId] || (g[r.strategyId] = [])).push(r); return g; };
   const per = {};
-  for (const [k, v] of Object.entries(byStrategy)) per[k] = stats(v);
-  return Object.assign({ note: 'overshootPct = actual gross fill % - stop level % (negative = filled worse than the stop); maxOvershootPct = the worst', since: since || null }, stats(rows), { byStrategy: per });
+  for (const [k, v] of Object.entries(group(rows))) per[k] = stats(v);
+  const deadPer = {};
+  for (const [k, v] of Object.entries(group(dead))) deadPer[k] = { count: v.length, avgFillPct: r3(v.reduce((a, r) => a + Number(r.actualFillPct || 0), 0) / v.length), symbols: v.map(r => r.symbol) };
+  return Object.assign({ note: 'overshootPct = actual gross fill % - stop level % (negative = filled worse than the stop); maxOvershootPct = the worst. Death-like fills (sell priceImpact >= ' + DEATH_IMPACT_PCT + '% or fill <= ' + DEATH_FILL_PCT + '%: the pool died between two checks) are NOT in these stats: see routeDeath', since: since || null }, stats(rows),
+    { countAll: all.length, byStrategy: per, routeDeath: { count: dead.length, note: 'stop exits that filled on a dead pool (~-100%); not a fill-engine overshoot', byStrategy: deadPer } });
 }
-module.exports = { isStop, build, record, summary, stats, STOP_REASONS };
+module.exports = { isStop, isDeathLike, build, record, summary, stats, STOP_REASONS, DEATH_IMPACT_PCT, DEATH_FILL_PCT };

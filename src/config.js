@@ -156,7 +156,10 @@ module.exports = {
           maxTop10Pct: 15, maxSlippageBps: 150, rugCheck: { minLiquidityUsd: 30000, mintRevoked: true, freezeRevoked: true, maxTop10Pct: 15, blacklist: 'epoch' },
           stopCooldownHours: 24, lossStreakPause: { losses: 2, minutes: 30, pauseScanning: true }, nightSkip: { startHourUtc: 2, endHourUtc: 6 }, sizing: { pctOfEquity: 5 } },
         exit: { stopLossPct: 10, partial: { atPct: 25, sellPct: 50 }, trailAfterPartial: true, trailPct: 10, takeProfitPct: 50, maxHoldMinutes: 240, priceBasis: 'entryQuote', feedStaleSec: 60,
-          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 } }
+          costModel: { flatSlipPct: 2, simSlipMinPct: 2, simSlipMaxPct: 2, stopPenaltyPct: 0, feePctPerSide: 0, priorityFee: true, cuLimit: 200000 },
+          // social-route-death-exit: first no-route x2 / impact > 20% / one-check price collapse >= 50% / (optional feed) liquidity < $30k or -50% -> full exit,
+          // reason 'route-dying-exit' (not a stop fill). creditLastGoodQuote is a what-if and stays OFF: with no route a real bot could not sell.
+          routeDeath: { enabled: true, noRouteConsecutive: 2, maxPriceImpactPct: 20, collapseDropPct: 50, minLiquidityUsd: 30000, liquidityDropPct: 50, creditLastGoodQuote: false, creditMaxQuoteAgeSec: 10 } }
       },
       {
         id: 'volume-explosion', name: 'Volume explosion', version: 1, paused: true,   // t83u
