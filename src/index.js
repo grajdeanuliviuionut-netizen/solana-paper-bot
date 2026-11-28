@@ -45,7 +45,7 @@ const booksLimiter = new Limiter({
     rpc: { minGapMs: 400, maxRetries: 1, cooldownMs: 30000 },
     top10rpc: { minGapMs: 1200, maxRetries: 0, cooldownMs: 60000 }, // t86u runner v3 top-10 holders (getTokenSupply/LargestAccounts/MultipleAccounts)
     feerpc: { minGapMs: 2000, maxRetries: 0, cooldownMs: 60000 },    // t89u getRecentPrioritizationFees (read-only), cached 45 s
-    gecko: { minGapMs: 2500, maxRetries: 0, cooldownMs: 600000 },     // t86u runner v3 m15 fallback: GeckoTerminal 1m OHLCV, no retries, 10 min pause on 429
+    gecko: { minGapMs: 2000, maxRetries: 1, cooldownMs: 60000 },      // trend-gt-backoff: ~30 req/min, 1 jittered retry, 60 s pause after a surviving 429 (was 2.5 s / 0 retries / 10 min)
     rugcheck: { minGapMs: 3000, maxRetries: 0, cooldownMs: 600000 },  // grad sniper v2: free RugCheck report, no retries, 10 min pause on 429
     geckosocial: { minGapMs: 2500, maxRetries: 0, cooldownMs: 600000 } // t117u social-spike: GeckoTerminal trending (1 call / 5 min), own bucket so a 429 never pauses the runner's MA lookups
   },
@@ -687,7 +687,7 @@ function bossRulesView() {
       markPct: p.markPct, movePct: p.movePct == null ? null : p.movePct, peakMovePct: p.peakMovePct == null ? null : p.peakMovePct, partialDone: !!p.partialDone, halfTrail: !!(p.exit && p.exit.partial), realizedSol: +(p.legs || []).reduce((a, l) => a + (l.pnlSol || 0), 0).toFixed(6), exitMigrated: p.exitMigrated || null, trend: p.trend || null, heldMin: +((now - Date.parse(p.entryTime)) / 60000).toFixed(1), sizeSol: p.sizeSol, sizing: p.sizing || null };
   });
   const bf = ((bk.entryFilters || {})['runner-hunter'] || {}).byFilter || {};
-  const keys = ['liquidity', 'belowMA', 'maNoData', 'maPending', 'maUnavailable', 'volSpike', 'breakout', 'breakoutNoData', 'breakoutPending', 'nightHoursSkip', 'lossStreakPause', 'm5', 'm15', 'm15NoData', 'liquidityMin', 'liquidityMax', 'vol24Liq', 'h1Max', 'top10', 'top10Unavailable', 'slippageAbort', 'rugBlacklisted', 'sizingEquityUnknown'];
+  const keys = ['liquidity', 'belowMA', 'maNoData', 'maTooYoung', 'maPending', 'maDeferred', 'maUnavailable', 'volSpike', 'breakout', 'breakoutNoData', 'breakoutPending', 'nightHoursSkip', 'lossStreakPause', 'm5', 'm15', 'm15NoData', 'liquidityMin', 'liquidityMax', 'vol24Liq', 'h1Max', 'top10', 'top10Unavailable', 'slippageAbort', 'rugBlacklisted', 'sizingEquityUnknown'];
   const rejects = {}; keys.forEach(function (k) { if (bf[k]) rejects[k] = bf[k]; });
   Object.keys(bf).forEach(function (k) { if (/^rug:/.test(k)) rejects[k] = bf[k]; });
   return {
@@ -698,8 +698,8 @@ function bossRulesView() {
     sizing: E.sizing ? { pctOfEquity: E.sizing.pctOfEquity, sizeMultiplier: haltMod.sizeMultiplier(state), effectivePctOfEquity: +(E.sizing.pctOfEquity * haltMod.sizeMultiplier(state)).toFixed(4), markedEquitySol: +Number(eq).toFixed(6), nextSizeSol: +(Number(eq) * E.sizing.pctOfEquity * haltMod.sizeMultiplier(state) / 100).toFixed(6) } : null,
     takeProfit: X.takeProfit || (X.takeProfitPct != null ? { fixedPct: X.takeProfitPct } : null), timeLimitMinutes: X.maxHoldMinutes || null,
     strategy: RH && RH.entry && RH.entry.trend ? { name: RH.name, version: RH.version, minLiquidityUsd: RH.entry.minLiquidityUsd, maPeriod: RH.entry.trend.maPeriod, minAbovePct: RH.entry.trend.minAbovePct, requireMaRising: !!RH.entry.trend.requireMaRising, candle: '1m', stopLossPct: X.stopLossPct, takeProfitPct: X.takeProfitPct != null ? X.takeProfitPct : (X.partial ? X.partial.atPct : null), partial: X.partial || null, trailPct: X.trailPct || null, breakevenAfterPartial: !!X.breakevenAfterPartial, managerFrozen: !!(config.manager && config.manager.applyChanges === false), maxHoldMinutes: X.maxHoldMinutes, slipPctPerFill: (X.costModel || {}).flatSlipPct, priceBasis: X.priceBasis,
-      maMethod: 'SMA of the last 50 one-minute closes: own ~45 s pool price history resampled to 1 min (last price at or before each minute end, carried forward) when it covers >= 50 min, else GeckoTerminal 1m OHLCV closes (>= 50 candles, newest <= 3 min old); no data -> no entry' } : null,
-    trendStats: RH && RH.entry && RH.entry.trend ? { gtSma: m15.stats } : null,
+      maMethod: 'SMA of the last 50 one-minute closes: own ~45 s pool price history resampled to 1 min (last price at or before each minute end, carried forward only across gaps <= 3 min) when it covers >= 50 min, else GeckoTerminal 1m OHLCV closes (>= 50 candles, newest <= 3 min old, cached 3 min); a successful GT window is merged into own ticks; no data -> no entry' } : null,
+    trendStats: RH && RH.entry && RH.entry.trend ? { gtSma: m15.stats, tickCoverage: require('./books/m15').coverageStats(bk.ticks || {}, now, (RH.entry.trend && RH.entry.trend.maPeriod) || 50) } : null,
     positions: open, breakoutRejects: rejects, breakout: E.breakout || null,
     entryReview: (function () {
       const ef = (bk.entryFilters || {})['runner-hunter'] || {};

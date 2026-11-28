@@ -4,7 +4,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "test": "node test/app.js && node -r ./test/_active.js test/pool.js && node -r ./test/_active.js test/live.js && node -r ./test/_active.js test/books.js && node -r ./test/_active.js test/newpools.js && node -r ./test/_active.js test/exits.js && node -r ./test/_active.js test/grad.js && node -r ./test/_active.js test/bots.js && node -r ./test/_active.js test/samemint.js && node -r ./test/_v2.js test/pause.js && node test/pnl.js && node -r ./test/_v2.js test/runner2.js && node -r ./test/_v3.js test/runner3.js && node -r ./test/_v4.js test/runner4.js && node -r ./test/_v5.js test/runner5.js && node -r ./test/_v601.js test/runner6.js && node -r ./test/_v602.js test/runner602.js && node test/runner603.js && node test/sizecut.js && node test/hydra.js && node test/social.js",
+    "test": "node test/app.js && node -r ./test/_active.js test/pool.js && node -r ./test/_active.js test/live.js && node -r ./test/_active.js test/books.js && node -r ./test/_active.js test/newpools.js && node -r ./test/_active.js test/exits.js && node -r ./test/_active.js test/grad.js && node -r ./test/_active.js test/bots.js && node -r ./test/_active.js test/samemint.js && node -r ./test/_v2.js test/pause.js && node test/pnl.js && node -r ./test/_v2.js test/runner2.js && node -r ./test/_v3.js test/runner3.js && node -r ./test/_v4.js test/runner4.js && node -r ./test/_v5.js test/runner5.js && node -r ./test/_v601.js test/runner6.js && node -r ./test/_v602.js test/runner602.js && node test/runner603.js && node test/trend-gt-backoff.js && node test/sizecut.js && node test/hydra.js && node test/social.js",
     "test:legacy": "node test/run.js"
   },
   "dependencies": {
